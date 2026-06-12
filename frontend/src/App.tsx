@@ -18,7 +18,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback'>('dashboard')
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
-  const [playbackSegments, setPlaybackSegments] = useState<RecordingSegment[]>([])
   const [liveUrl, setLiveUrl] = useState<string>('')
   const [statusText, setStatusText] = useState('Ready')
   const [loading, setLoading] = useState(false)
@@ -51,12 +50,6 @@ export default function App() {
     if (!selected?.stream_id) return
     fetchRecordings(selected.stream_id).then(setRecordings).catch(() => setRecordings([]))
   }, [selected?.stream_id])
-
-  useEffect(() => {
-    if (activeTab === 'playback' && selected?.stream_id) {
-      handlePlayback().catch(() => {})
-    }
-  }, [activeTab, selected?.stream_id])
 
   const liveCount = useMemo(() => cameras.filter((c) => c.active).length, [cameras])
 
@@ -137,20 +130,6 @@ export default function App() {
     }
 
     setStatusText("All streams stopped")
-  }
-
-  async function handlePlayback() {
-    if (!selected) return
-    const end = Math.floor(Date.now() / 1000)
-    const start = end - 24 * 3600
-    setStatusText(`Loading playback for ${selected.name}`)
-    try {
-      const segs = await fetchPlayback(selected.stream_id, start, end)
-      setPlaybackSegments(segs)
-      setStatusText(`Playback loaded: ${segs.length} segments`)
-    } catch (e) {
-      setStatusText(e instanceof Error ? e.message : 'Playback load failed')
-    }
   }
 
   return (
@@ -294,8 +273,7 @@ export default function App() {
                 recordings={recordings}
                 onStartLive={handleStartLive}
                 onStopLive={handleStopLive}
-                onOpenPlayback={async () => {
-                  await handlePlayback()
+                onOpenPlayback={() => {
                   setActiveTab('playback')
                 }}
               />
@@ -304,7 +282,7 @@ export default function App() {
 
           {activeTab === 'playback' && (
             <div className="streamArea">
-              <Playback streamId={selected?.stream_id} segments={playbackSegments} />
+              <Playback streamId={selected?.stream_id} cameraName={selected?.name} />
             </div>
           )}
         </div>
