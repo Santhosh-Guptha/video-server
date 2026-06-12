@@ -54,6 +54,13 @@ def normalize_camera(raw: dict) -> dict:
 @app.on_event("startup")
 async def startup():
 
+    # Ensure parent directory for database exists if using SQLite
+    if "sqlite" in settings.database_url:
+        parts = settings.database_url.split(":///")
+        if len(parts) > 1:
+            db_path = parts[1].split("?")[0]
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
     async with engine.begin() as conn:
         await conn.run_sync(
             Base.metadata.create_all
