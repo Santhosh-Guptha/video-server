@@ -195,7 +195,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
     await session.commit()
     return SyncResponse(total=len(raw_cameras), created_or_updated=updated_count, source=settings.upstream_camera_api_url)
 
-@app.get("/api/cameras", response_model=List[CameraOut])
+@app.get("/api/cameras", response_model=list[CameraOut])
 async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], sync: bool = Query(default=True)):
     if sync:
         try:
@@ -316,7 +316,7 @@ async def hls_segment(stream_id: str, filename: str):
 # ----------------------------------------------------
 # Playback API Endpoints
 # ----------------------------------------------------
-@app.get("/api/playback/{stream_id}", response_model=List[RecordingSegmentOut])
+@app.get("/api/playback/{stream_id}", response_model=list[RecordingSegmentOut])
 async def playback(stream_id: str, start_ts: float, end_ts: float, session: Annotated[AsyncSession, Depends(get_session)]):
     res = await session.execute(
         select(RecordingSegment)
