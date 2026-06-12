@@ -115,15 +115,19 @@ async def camera_scheduler_loop():
 
 async def camera_gap_recovery_loop():
     """
-    Scans the database for recording gaps (e.g. missing 60s segments) in the last 2 hours.
-    Downloads the missing chunks from the camera's playback RTSP URL if supported.
+    Scans the database for recording gaps (e.g. missing 60s segments) in the last 24 hours.
+    Downloads the missing chunks from the camera's playback RTSP URL concurrently.
     """
     print("[recovery] Starting recording gap recovery loop...")
+    semaphore = asyncio.Semaphore(3) # Limit to 3 concurrent downloads to prevent CPU/network overload
+
     while True:
         try:
             # Let the system stabilize first or sleep
             await asyncio.sleep(settings.recovery_interval_seconds)
 
+            # 1. Gather all gaps to recover using a short-lived DB session
+            gaps_to_recover = []
             async for session in get_session():
                 # Get all active cameras
                 res = await session.execute(
@@ -162,100 +166,115 @@ async def camera_gap_recovery_loop():
 
                         # If gap is larger than 1.2 * segment_time_seconds, attempt recovery
                         if gap_duration >= (1.2 * settings.segment_time_seconds):
-                            gap_key = (stream_id, int(gap_start))
-                            if gap_key in attempted_gaps:
-                                continue
-
-                            # Mark gap as attempted so we don't retry repeatedly
-                            attempted_gaps.add(gap_key)
-
-                            print(f"[recovery] Detected gap of {int(gap_duration)}s for camera '{stream_id}' "
-                                  f"from {datetime.fromtimestamp(gap_start)} to {datetime.fromtimestamp(gap_end)}")
-
-                            # We download segment-by-segment to match configured segment time
                             temp_start = gap_start
                             while temp_start + settings.segment_time_seconds <= gap_end:
-                                temp_end = temp_start + settings.segment_time_seconds
-                                
-                                # Format dates for RTSP query interpolation
-                                dt_start = datetime.fromtimestamp(temp_start)
-                                dt_end = datetime.fromtimestamp(temp_end)
+                                gap_key = (stream_id, int(temp_start))
+                                if gap_key not in attempted_gaps:
+                                    attempted_gaps.add(gap_key)
+                                    gaps_to_recover.append({
+                                        "stream_id": stream_id,
+                                        "rtsp_url": rtsp_url,
+                                        "raw_json": camera.raw_json,
+                                        "start_ts": temp_start,
+                                        "end_ts": temp_start + settings.segment_time_seconds
+                                    })
+                                temp_start += settings.segment_time_seconds
 
-                                start_iso = dt_start.strftime("%Y%m%dT%H%M%SZ")
-                                end_iso = dt_end.strftime("%Y%m%dT%H%M%SZ")
-                                start_time_local = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
-                                end_time_local = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
+            if not gaps_to_recover:
+                continue
 
-                                # Construct playback URL
-                                raw = json.loads(camera.raw_json)
-                                username = raw.get("username")
-                                password = raw.get("password")
-                                base_rtsp = camera.rtsp_url.strip()
-                                if not base_rtsp.startswith(("rtsp://", "rtsps://")):
-                                    base_rtsp = f"rtsp://{base_rtsp}"
-                                if username and password:
-                                    protocol, rest = base_rtsp.split("://", 1)
-                                    encoded_username = quote(str(username), safe="")
-                                    encoded_password = quote(str(password), safe="")
-                                    base_rtsp = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+            print(f"[recovery] Found {len(gaps_to_recover)} missing segments to recover across all active cameras.")
 
-                                recovery_url = settings.recovery_rtsp_template.format(
-                                    rtsp_url=base_rtsp,
-                                    start_iso=start_iso,
-                                    end_iso=end_iso,
-                                    start_time_local=start_time_local,
-                                    end_time_local=end_time_local
-                                )
+            # 2. Define download task helper
+            async def download_task(task):
+                stream_id = task["stream_id"]
+                temp_start = task["start_ts"]
+                temp_end = task["end_ts"]
+                raw_json = task["raw_json"]
+                base_rtsp = task["rtsp_url"]
 
-                                # Prepare output file: name format must allow indexer to extract the correct start timestamp
-                                day_str = dt_start.strftime("%Y-%m-%d")
-                                stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
-                                stream_record_dir.mkdir(parents=True, exist_ok=True)
-                                filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
-                                output_path = stream_record_dir / filename
+                dt_start = datetime.fromtimestamp(temp_start)
+                dt_end = datetime.fromtimestamp(temp_end)
 
-                                print(f"[recovery] Attempting to download missing clip: {filename} using {base_rtsp}")
+                start_iso = dt_start.strftime("%Y%m%dT%H%M%SZ")
+                end_iso = dt_end.strftime("%Y%m%dT%H%M%SZ")
+                start_time_local = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
+                end_time_local = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
 
-                                # Run ffmpeg to pull playback segment
-                                cmd = [
-                                    settings.ffmpeg_path,
-                                    "-hide_banner",
-                                    "-loglevel", "warning",
-                                    "-rtsp_transport", "tcp",
-                                    "-i", recovery_url,
-                                    "-t", str(settings.segment_time_seconds),
-                                    "-c", "copy",
-                                    str(output_path)
-                                ]
+                try:
+                    raw = json.loads(raw_json)
+                except Exception:
+                    raw = {}
+                username = raw.get("username")
+                password = raw.get("password")
+                
+                if not base_rtsp.startswith(("rtsp://", "rtsps://")):
+                    base_rtsp = f"rtsp://{base_rtsp}"
+                if username and password:
+                    try:
+                        protocol, rest = base_rtsp.split("://", 1)
+                        encoded_username = quote(str(username), safe="")
+                        encoded_password = quote(str(password), safe="")
+                        base_rtsp = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+                    except Exception:
+                        pass
 
-                                try:
-                                    proc = await asyncio.create_subprocess_exec(
-                                        *cmd,
-                                        stdout=asyncio.subprocess.PIPE,
-                                        stderr=asyncio.subprocess.PIPE
-                                    )
-                                    # Wait for download to finish (giving it 2x segment time limit)
-                                    await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
-                                    if proc.returncode == 0:
-                                        print(f"[recovery] Successfully recovered gap segment: {filename}")
-                                    else:
-                                        print(f"[recovery] FFmpeg failed with exit code {proc.returncode} for clip: {filename}")
-                                        if output_path.exists():
-                                            output_path.unlink()
-                                except asyncio.TimeoutError:
-                                    print(f"[recovery] Timeout downloading gap clip: {filename}")
-                                    try:
-                                        proc.kill()
-                                    except Exception:
-                                        pass
-                                    if output_path.exists():
-                                        output_path.unlink()
-                                except Exception as e:
-                                    print(f"[recovery] Error running FFmpeg for recovery: {e}")
-                                    if output_path.exists():
-                                        output_path.unlink()
+                recovery_url = settings.recovery_rtsp_template.format(
+                    rtsp_url=base_rtsp,
+                    start_iso=start_iso,
+                    end_iso=end_iso,
+                    start_time_local=start_time_local,
+                    end_time_local=end_time_local
+                )
 
-                                temp_start = temp_end
+                day_str = dt_start.strftime("%Y-%m-%d")
+                stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
+                stream_record_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
+                output_path = stream_record_dir / filename
+
+                async with semaphore:
+                    print(f"[recovery] [{stream_id}] Downloading gap segment: {filename}...")
+                    cmd = [
+                        settings.ffmpeg_path,
+                        "-hide_banner",
+                        "-loglevel", "warning",
+                        "-rtsp_transport", "tcp",
+                        "-i", recovery_url,
+                        "-t", str(settings.segment_time_seconds),
+                        "-c", "copy",
+                        str(output_path)
+                    ]
+
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        # Wait for download to finish (giving it 2x segment time limit)
+                        await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
+                        if proc.returncode == 0:
+                            print(f"[recovery] [{stream_id}] Successfully recovered gap segment: {filename}")
+                        else:
+                            print(f"[recovery] [{stream_id}] FFmpeg failed with exit code {proc.returncode} for clip: {filename}")
+                            if output_path.exists():
+                                output_path.unlink()
+                    except asyncio.TimeoutError:
+                        print(f"[recovery] [{stream_id}] Timeout downloading gap clip: {filename}")
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        if output_path.exists():
+                            output_path.unlink()
+                    except Exception as e:
+                        print(f"[recovery] [{stream_id}] Error running FFmpeg for recovery: {e}")
+                        if output_path.exists():
+                            output_path.unlink()
+
+            # 3. Run all download tasks concurrently with semaphore limit
+            await asyncio.gather(*(download_task(task) for task in gaps_to_recover))
 
         except Exception as e:
             print(f"[recovery] Error in gap recovery loop: {e}")
