@@ -15,6 +15,12 @@ export function Playback({ streamId, cameraName }: Props) {
   const [hasSearched, setHasSearched] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
 
+  const [segments, setSegments] = useState<any[]>([])
+  const [currentAbsoluteTs, setCurrentAbsoluteTs] = useState<number>(0)
+  const [rangeStartTs, setRangeStartTs] = useState<number>(0)
+  const [isDragging, setIsDragging] = useState(false)
+  const timelineRef = useRef<HTMLDivElement | null>(null)
+
   // Fetch available dates when camera changes
   useEffect(() => {
     if (!streamId) {
@@ -22,6 +28,7 @@ export function Playback({ streamId, cameraName }: Props) {
       setSelectedDate('')
       setStreamUrl('')
       setHasSearched(false)
+      setSegments([])
       return
     }
 
@@ -33,7 +40,6 @@ export function Playback({ streamId, cameraName }: Props) {
           const dates: string[] = await res.json()
           setAvailableDates(dates)
           if (dates.length > 0) {
-            // Default to latest date
             setSelectedDate(dates[dates.length - 1])
           } else {
             setSelectedDate('')
@@ -49,26 +55,124 @@ export function Playback({ streamId, cameraName }: Props) {
     loadAvailableDates()
     setStreamUrl('')
     setHasSearched(false)
+    setSegments([])
   }, [streamId])
 
-  // Load the continuous MP4 stream
+  async function loadPlaybackData(targetStartTs: number) {
+    if (!streamId) return
+    setLoading(true)
+    try {
+      const endTs = targetStartTs + 3600
+      const response = await fetch(`/api/playback/${encodeURIComponent(streamId)}?start_ts=${targetStartTs}&end_ts=${endTs}`)
+      if (response.ok) {
+        const segs = await response.json()
+        setSegments(segs)
+        setRangeStartTs(targetStartTs)
+        setCurrentAbsoluteTs(targetStartTs)
+
+        if (segs.length > 0) {
+          const actualStartTs = Math.max(targetStartTs, segs[0].start_ts)
+          const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${actualStartTs}&end_ts=${endTs}`
+          setStreamUrl(url)
+          setHasSearched(true)
+          setTimeout(() => {
+            if (videoRef.current) {
+              videoRef.current.load()
+            }
+          }, 50)
+        } else {
+          setStreamUrl('')
+          setHasSearched(true)
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load playback segments:', e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   function handleLoadStream() {
     if (!streamId || !selectedDate || !selectedTime) return
-
-    // Construct timestamp from date + time
     const localDateTimeStr = `${selectedDate}T${selectedTime}`
     const startTs = Math.floor(new Date(localDateTimeStr).getTime() / 1000)
-    // Stream up to 24 hours of recording in one contiguous session
-    const endTs = startTs + 24 * 3600
+    loadPlaybackData(startTs)
+  }
 
-    const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${startTs}&end_ts=${endTs}`
+  const handleTimeUpdate = () => {
+    const video = videoRef.current
+    if (!video || segments.length === 0 || isDragging) return
+    const absTs = getAbsoluteTsFromVideoTime(video.currentTime, segments, rangeStartTs)
+    setCurrentAbsoluteTs(absTs)
+  }
+
+  const seekToTimestamp = (targetTs: number) => {
+    if (!streamId) return
+    const endTs = rangeStartTs + 3600
+    const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${targetTs}&end_ts=${endTs}`
     setStreamUrl(url)
-    setHasSearched(true)
+    setTimeout(() => {
+      if (videoRef.current) {
+        videoRef.current.load()
+      }
+    }, 50)
+  }
 
-    // Force load the new source in video player
-    if (videoRef.current) {
-      videoRef.current.load()
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    setIsDragging(true)
+    handleSeekFromEvent(e)
+  }
+
+  const handleSeekFromEvent = (e: React.MouseEvent<HTMLDivElement> | MouseEvent) => {
+    const timeline = timelineRef.current
+    if (!timeline) return
+    const rect = timeline.getBoundingClientRect()
+    const clientX = 'clientX' in e ? e.clientX : (e as MouseEvent).clientX
+    const clickX = Math.max(0, Math.min(clientX - rect.left, rect.width))
+    const percentage = clickX / rect.width
+    const clickedTs = rangeStartTs + percentage * 3600
+    setCurrentAbsoluteTs(clickedTs)
+  }
+
+  useEffect(() => {
+    if (!isDragging) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      handleSeekFromEvent(e)
     }
+
+    const handleMouseUp = () => {
+      setIsDragging(false)
+      seekToTimestamp(currentAbsoluteTs)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDragging, currentAbsoluteTs])
+
+  function formatTimeLabel(ts: number) {
+    if (!ts) return ''
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  }
+
+  function getAbsoluteTsFromVideoTime(videoTime: number, segs: any[], startTs: number): number {
+    let remaining = videoTime
+    for (const seg of segs) {
+      const duration = seg.end_ts - seg.start_ts
+      if (remaining <= duration) {
+        return seg.start_ts + remaining
+      }
+      remaining -= duration
+    }
+    if (segs.length > 0) {
+      return segs[segs.length - 1].end_ts
+    }
+    return startTs + videoTime
   }
 
   return (
@@ -108,7 +212,6 @@ export function Playback({ streamId, cameraName }: Props) {
                     }}
                   >
                     {availableDates.map((d) => {
-                      // Format YYYY-MM-DD nicely
                       const dateObj = new Date(d)
                       const formatted = dateObj.toLocaleDateString(undefined, {
                         month: 'short',
@@ -177,13 +280,14 @@ export function Playback({ streamId, cameraName }: Props) {
                   </div>
                 </div>
 
-                <div className="playerViewport" style={{ position: 'relative', overflow: 'hidden', borderRadius: '20px' }}>
+                <div className="playerViewport" style={{ position: 'relative', overflow: 'hidden', borderRadius: '20px', marginBottom: '14px' }}>
                   <video
                     ref={videoRef}
                     className="videoEl"
                     controls
                     autoPlay
                     playsInline
+                    onTimeUpdate={handleTimeUpdate}
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   >
                     <source src={streamUrl} type="video/mp4" />
@@ -191,9 +295,75 @@ export function Playback({ streamId, cameraName }: Props) {
                   </video>
                 </div>
 
+                {/* Timeline scrubber bar */}
+                <div style={{ padding: '8px 4px 14px' }}>
+                  <div className="timelineTitle" style={{ fontSize: '0.82rem', fontWeight: 600, color: '#94a3b8', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Linear Scrubber Timeline (1 Hour)</span>
+                    <span style={{ color: '#60a5fa' }}>Current: {formatTimeLabel(currentAbsoluteTs)}</span>
+                  </div>
+                  
+                  <div
+                    ref={timelineRef}
+                    className="timelineBar"
+                    onMouseDown={handleMouseDown}
+                    style={{
+                      height: '24px',
+                      background: '#1e293b',
+                      borderRadius: '8px',
+                      position: 'relative',
+                      cursor: 'ew-resize',
+                      border: '1px solid rgba(148, 163, 184, 0.12)',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    {/* Render recording segments */}
+                    {segments.map((seg, idx) => {
+                      const leftPercent = ((seg.start_ts - rangeStartTs) / 3600) * 100
+                      const widthPercent = ((seg.end_ts - seg.start_ts) / 3600) * 100
+                      return (
+                        <div
+                          key={idx}
+                          className="timelineSegment"
+                          style={{
+                            position: 'absolute',
+                            left: `${Math.max(0, Math.min(100, leftPercent))}%`,
+                            width: `${Math.max(0, Math.min(100, widthPercent))}%`,
+                            height: '100%',
+                            background: 'linear-gradient(180deg, #10b981, #059669)',
+                            opacity: 0.85
+                          }}
+                        />
+                      )
+                    })}
+
+                    {/* Playhead marker */}
+                    <div
+                      className="timelinePlayhead"
+                      style={{
+                        position: 'absolute',
+                        left: `${Math.max(0, Math.min(100, ((currentAbsoluteTs - rangeStartTs) / 3600) * 100))}%`,
+                        width: '3px',
+                        height: '100%',
+                        background: '#ef4444',
+                        boxShadow: '0 0 8px #ef4444',
+                        top: 0,
+                        pointerEvents: 'none',
+                        zIndex: 5
+                      }}
+                    />
+                  </div>
+
+                  {/* Timeline labels */}
+                  <div className="timelineLabels" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                    <span>{formatTimeLabel(rangeStartTs)}</span>
+                    <span>{formatTimeLabel(rangeStartTs + 1800)}</span>
+                    <span>{formatTimeLabel(rangeStartTs + 3600)}</span>
+                  </div>
+                </div>
+
                 <div className="playerFooter" style={{ marginTop: '12px' }}>
                   <AlertCircle size={14} />
-                  <span>The timeline above represents all segments stitched together. You can freely seek or scrub through the video timeline.</span>
+                  <span>The timeline above highlights available recorded segments in green. Drag or click the timeline to seek instantly.</span>
                 </div>
               </div>
             </div>
