@@ -40,7 +40,7 @@ async def index_recordings(session, recording_dir):
                 print(f"[indexer] Removing orphaned database segment for missing file: {seg.file_path}")
                 await session.delete(seg)
 
-        for mp4 in stream_dir.glob("*.mp4"):
+        for mp4 in stream_dir.rglob("*.mp4"):
 
             existing = await session.execute(
                 select(RecordingSegment).where(

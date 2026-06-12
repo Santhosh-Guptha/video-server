@@ -85,8 +85,15 @@ class MediaManager:
         # Outputs
         # --------------------------------------------------
 
+        from datetime import datetime, timedelta
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        (stream_record_dir / today_str).mkdir(parents=True, exist_ok=True)
+        (stream_record_dir / tomorrow_str).mkdir(parents=True, exist_ok=True)
+
         segment_path = str(
             stream_record_dir /
+            "%Y-%m-%d" /
             "%Y%m%d_%H%M%S_%03d.mp4"
         )
 

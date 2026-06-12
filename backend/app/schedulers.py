@@ -43,6 +43,14 @@ async def camera_scheduler_loop():
                     )
 
                     if not is_running:
+                        # Pre-create day-wise folders for today and tomorrow to avoid FFmpeg write errors
+                        from datetime import timedelta
+                        today_str = datetime.now().strftime("%Y-%m-%d")
+                        tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                        stream_record_dir = Path(settings.recording_dir) / stream_id
+                        (stream_record_dir / today_str).mkdir(parents=True, exist_ok=True)
+                        (stream_record_dir / tomorrow_str).mkdir(parents=True, exist_ok=True)
+
                         print(f"[scheduler] Stream '{stream_id}' is not running. Starting background recorder...")
                         try:
                             raw = json.loads(camera.raw_json)
@@ -108,13 +116,13 @@ async def camera_gap_recovery_loop():
                     if not rtsp_url:
                         continue
 
-                    # Query segments in the last 2 hours
+                    # Query segments in the last 24 hours
                     now = time.time()
-                    two_hours_ago = now - (2 * 3600)
+                    twenty_four_hours_ago = now - (24 * 3600)
                     seg_res = await session.execute(
                         select(RecordingSegment)
                         .where(RecordingSegment.stream_id == stream_id)
-                        .where(RecordingSegment.start_ts >= two_hours_ago)
+                        .where(RecordingSegment.start_ts >= twenty_four_hours_ago)
                         .order_by(RecordingSegment.start_ts.asc())
                     )
                     segments = list(seg_res.scalars().all())
@@ -179,7 +187,8 @@ async def camera_gap_recovery_loop():
                                 )
 
                                 # Prepare output file: name format must allow indexer to extract the correct start timestamp
-                                stream_record_dir = Path(settings.recording_dir) / stream_id
+                                day_str = dt_start.strftime("%Y-%m-%d")
+                                stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
                                 stream_record_dir.mkdir(parents=True, exist_ok=True)
                                 filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
                                 output_path = stream_record_dir / filename
@@ -291,6 +300,17 @@ async def camera_archive_cleanup_loop():
 
                         await session.commit()
                         print(f"[cleanup] Successfully deleted {deleted_count} files and database records for '{camera.stream_id}'")
+
+                        # 3. Clean up empty date subdirectories
+                        try:
+                            cam_rec_dir = Path(settings.recording_dir) / camera.stream_id
+                            if cam_rec_dir.exists():
+                                for sub in cam_rec_dir.iterdir():
+                                    if sub.is_dir() and not any(sub.iterdir()):
+                                        sub.rmdir()
+                                        print(f"[cleanup] Removed empty directory: {sub}")
+                        except Exception as ex:
+                            print(f"[cleanup] Failed to clean up empty subdirectories: {ex}")
 
         except Exception as e:
             print(f"[cleanup] Error in archive cleanup loop: {e}")
