@@ -59,14 +59,13 @@ class Camera(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
         default=uuid.uuid4
     )
     source_camera_id: Mapped[int] = mapped_column(Integer, unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     streams: Mapped[list["CameraStream"]] = relationship("CameraStream", back_populates="camera", cascade="all, delete-orphan")
@@ -77,7 +76,6 @@ class CameraStream(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
         default=uuid.uuid4
     )
     camera_id: Mapped[uuid.UUID] = mapped_column(GUID, ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
@@ -90,8 +88,8 @@ class CameraStream(Base):
     stream_url: Mapped[str] = mapped_column(Text, nullable=False) # Source RTSP or PUSH publisher url
     status: Mapped[StreamState] = mapped_column(Enum(StreamState, name="stream_state_enum"), default=StreamState.REGISTERED, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     camera: Mapped[Camera] = relationship("Camera", back_populates="streams")
@@ -105,7 +103,7 @@ class RecordingSegment(Base):
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     start_ts: Mapped[float] = mapped_column(Float, index=True, nullable=False) # Epoch time (seconds)
     end_ts: Mapped[float] = mapped_column(Float, index=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
 
     # Relationships
     stream: Mapped[CameraStream] = relationship("CameraStream", back_populates="segments")

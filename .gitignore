@@ -128,6 +128,7 @@ frontend/build/
 # Application specific data
 backend/data/
 backend/venv/
+backend/venv_win/
 .idea/
 .vscode/
 *.suo
