@@ -52,6 +52,12 @@ export default function App() {
     fetchRecordings(selected.stream_id).then(setRecordings).catch(() => setRecordings([]))
   }, [selected?.stream_id])
 
+  useEffect(() => {
+    if (activeTab === 'playback' && selected?.stream_id) {
+      handlePlayback().catch(() => {})
+    }
+  }, [activeTab, selected?.stream_id])
+
   const liveCount = useMemo(() => cameras.filter((c) => c.active).length, [cameras])
 
   async function handleSync() {

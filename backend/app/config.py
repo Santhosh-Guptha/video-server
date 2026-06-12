@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     recording_dir: str = "./data/recordings"
     hls_dir: str = "./data/hls"
-    segment_time_seconds: int = 5
+    segment_time_seconds: int = 60
     max_subscribers_per_stream: int = 200
     ui_poll_seconds: int = 5
 

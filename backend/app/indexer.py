@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from .models import RecordingSegment, Camera
+from .config import settings
 
 
 async def index_recordings(session, recording_dir):
@@ -44,7 +45,7 @@ async def index_recordings(session, recording_dir):
             stat = mp4.stat()
 
             end_ts = stat.st_mtime
-            start_ts = end_ts - 5
+            start_ts = end_ts - settings.segment_time_seconds
 
             session.add(
                 RecordingSegment(
