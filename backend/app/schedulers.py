@@ -1,0 +1,298 @@
+import asyncio
+import json
+import re
+import time
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import quote
+from sqlalchemy import select
+
+from .config import settings
+from .db import get_session
+from .models import Camera, RecordingSegment
+from .media import media_manager
+
+# In-memory tracking of attempted gap recovery timestamps to prevent infinite retries for failed/offline gaps
+# Key format: (stream_id, int(start_ts))
+attempted_gaps = set()
+
+async def camera_scheduler_loop():
+    """
+    Background watchdog that ensures active cameras are continuously recording/streaming
+    independently of frontend live view client connections.
+    """
+    print("[scheduler] Starting camera status watchdog loop...")
+    while True:
+        try:
+            async for session in get_session():
+                # Fetch all active cameras
+                res = await session.execute(
+                    select(Camera).where(Camera.active == True)
+                )
+                active_cameras = list(res.scalars().all())
+                active_stream_ids = {cam.stream_id for cam in active_cameras}
+
+                # 1. Start streams for active cameras if not running
+                for camera in active_cameras:
+                    stream_id = camera.stream_id
+                    existing = media_manager.streams.get(stream_id)
+                    is_running = (
+                        existing
+                        and existing.proc
+                        and existing.proc.returncode is None
+                    )
+
+                    if not is_running:
+                        print(f"[scheduler] Stream '{stream_id}' is not running. Starting background recorder...")
+                        try:
+                            raw = json.loads(camera.raw_json)
+                            username = raw.get("username")
+                            password = raw.get("password")
+                            rtsp_url = camera.rtsp_url.strip()
+
+                            if not rtsp_url.startswith(("rtsp://", "rtsps://")):
+                                rtsp_url = f"rtsp://{rtsp_url}"
+
+                            if username and password:
+                                protocol, rest = rtsp_url.split("://", 1)
+                                encoded_username = quote(str(username), safe="")
+                                encoded_password = quote(str(password), safe="")
+                                rtsp_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+
+                            await media_manager.start_rtsp_stream(
+                                stream_id,
+                                rtsp_url,
+                                settings.recording_dir,
+                                settings.hls_dir
+                            )
+                        except Exception as e:
+                            print(f"[scheduler] Failed to start stream for camera '{stream_id}': {e}")
+
+                # 2. Stop streams for cameras that are no longer active
+                running_stream_ids = list(media_manager.streams.keys())
+                for sid in running_stream_ids:
+                    if sid not in active_stream_ids:
+                        print(f"[scheduler] Stopping stream '{sid}' because it is no longer marked active in database")
+                        try:
+                            await media_manager.stop(sid)
+                        except Exception as e:
+                            print(f"[scheduler] Failed to stop stream '{sid}': {e}")
+
+        except Exception as e:
+            print(f"[scheduler] Error in camera watchdog loop: {e}")
+
+        await asyncio.sleep(settings.scheduler_interval_seconds)
+
+
+async def camera_gap_recovery_loop():
+    """
+    Scans the database for recording gaps (e.g. missing 60s segments) in the last 2 hours.
+    Downloads the missing chunks from the camera's playback RTSP URL if supported.
+    """
+    print("[recovery] Starting recording gap recovery loop...")
+    while True:
+        try:
+            # Let the system stabilize first or sleep
+            await asyncio.sleep(settings.recovery_interval_seconds)
+
+            async for session in get_session():
+                # Get all active cameras
+                res = await session.execute(
+                    select(Camera).where(Camera.active == True)
+                )
+                active_cameras = list(res.scalars().all())
+
+                for camera in active_cameras:
+                    stream_id = camera.stream_id
+                    rtsp_url = camera.rtsp_url.strip()
+                    if not rtsp_url:
+                        continue
+
+                    # Query segments in the last 2 hours
+                    now = time.time()
+                    two_hours_ago = now - (2 * 3600)
+                    seg_res = await session.execute(
+                        select(RecordingSegment)
+                        .where(RecordingSegment.stream_id == stream_id)
+                        .where(RecordingSegment.start_ts >= two_hours_ago)
+                        .order_by(RecordingSegment.start_ts.asc())
+                    )
+                    segments = list(seg_res.scalars().all())
+
+                    if not segments:
+                        continue
+
+                    # Check for gaps between consecutive segments
+                    for i in range(len(segments) - 1):
+                        current_seg = segments[i]
+                        next_seg = segments[i + 1]
+                        
+                        gap_start = current_seg.end_ts
+                        gap_end = next_seg.start_ts
+                        gap_duration = gap_end - gap_start
+
+                        # If gap is larger than 1.2 * segment_time_seconds, attempt recovery
+                        if gap_duration >= (1.2 * settings.segment_time_seconds):
+                            gap_key = (stream_id, int(gap_start))
+                            if gap_key in attempted_gaps:
+                                continue
+
+                            # Mark gap as attempted so we don't retry repeatedly
+                            attempted_gaps.add(gap_key)
+
+                            print(f"[recovery] Detected gap of {int(gap_duration)}s for camera '{stream_id}' "
+                                  f"from {datetime.fromtimestamp(gap_start)} to {datetime.fromtimestamp(gap_end)}")
+
+                            # We download segment-by-segment to match configured segment time
+                            temp_start = gap_start
+                            while temp_start + settings.segment_time_seconds <= gap_end:
+                                temp_end = temp_start + settings.segment_time_seconds
+                                
+                                # Format dates for RTSP query interpolation
+                                dt_start = datetime.fromtimestamp(temp_start)
+                                dt_end = datetime.fromtimestamp(temp_end)
+
+                                start_iso = dt_start.strftime("%Y%m%dT%H%M%SZ")
+                                end_iso = dt_end.strftime("%Y%m%dT%H%M%SZ")
+                                start_time_local = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
+                                end_time_local = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
+
+                                # Construct playback URL
+                                raw = json.loads(camera.raw_json)
+                                username = raw.get("username")
+                                password = raw.get("password")
+                                base_rtsp = camera.rtsp_url.strip()
+                                if not base_rtsp.startswith(("rtsp://", "rtsps://")):
+                                    base_rtsp = f"rtsp://{base_rtsp}"
+                                if username and password:
+                                    protocol, rest = base_rtsp.split("://", 1)
+                                    encoded_username = quote(str(username), safe="")
+                                    encoded_password = quote(str(password), safe="")
+                                    base_rtsp = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+
+                                recovery_url = settings.recovery_rtsp_template.format(
+                                    rtsp_url=base_rtsp,
+                                    start_iso=start_iso,
+                                    end_iso=end_iso,
+                                    start_time_local=start_time_local,
+                                    end_time_local=end_time_local
+                                )
+
+                                # Prepare output file: name format must allow indexer to extract the correct start timestamp
+                                stream_record_dir = Path(settings.recording_dir) / stream_id
+                                stream_record_dir.mkdir(parents=True, exist_ok=True)
+                                filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
+                                output_path = stream_record_dir / filename
+
+                                print(f"[recovery] Attempting to download missing clip: {filename} using {base_rtsp}")
+
+                                # Run ffmpeg to pull playback segment
+                                cmd = [
+                                    settings.ffmpeg_path,
+                                    "-hide_banner",
+                                    "-loglevel", "warning",
+                                    "-rtsp_transport", "tcp",
+                                    "-i", recovery_url,
+                                    "-t", str(settings.segment_time_seconds),
+                                    "-c", "copy",
+                                    str(output_path)
+                                ]
+
+                                try:
+                                    proc = await asyncio.create_subprocess_exec(
+                                        *cmd,
+                                        stdout=asyncio.subprocess.PIPE,
+                                        stderr=asyncio.subprocess.PIPE
+                                    )
+                                    # Wait for download to finish (giving it 2x segment time limit)
+                                    await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
+                                    if proc.returncode == 0:
+                                        print(f"[recovery] Successfully recovered gap segment: {filename}")
+                                    else:
+                                        print(f"[recovery] FFmpeg failed with exit code {proc.returncode} for clip: {filename}")
+                                        if output_path.exists():
+                                            output_path.unlink()
+                                except asyncio.TimeoutError:
+                                    print(f"[recovery] Timeout downloading gap clip: {filename}")
+                                    try:
+                                        proc.kill()
+                                    except Exception:
+                                        pass
+                                    if output_path.exists():
+                                        output_path.unlink()
+                                except Exception as e:
+                                    print(f"[recovery] Error running FFmpeg for recovery: {e}")
+                                    if output_path.exists():
+                                        output_path.unlink()
+
+                                temp_start = temp_end
+
+        except Exception as e:
+            print(f"[recovery] Error in gap recovery loop: {e}")
+
+
+async def camera_archive_cleanup_loop():
+    """
+    Background loop that deletes recording files and DB references older than the camera's configured archive days.
+    """
+    print("[cleanup] Starting camera archive cleanup loop...")
+    while True:
+        try:
+            async for session in get_session():
+                # Query all cameras
+                res = await session.execute(select(Camera))
+                cameras = list(res.scalars().all())
+
+                for camera in cameras:
+                    try:
+                        raw = json.loads(camera.raw_json)
+                    except Exception:
+                        continue
+
+                    # Check if archiveDays is configured
+                    archive_days = raw.get("archiveDays")
+                    if archive_days is None:
+                        continue
+
+                    try:
+                        archive_days = int(archive_days)
+                    except ValueError:
+                        continue
+
+                    if archive_days <= 0:
+                        continue
+
+                    cutoff_ts = time.time() - (archive_days * 24 * 3600)
+                    
+                    # Query segments older than the cutoff
+                    seg_res = await session.execute(
+                        select(RecordingSegment)
+                        .where(RecordingSegment.stream_id == camera.stream_id)
+                        .where(RecordingSegment.end_ts < cutoff_ts)
+                    )
+                    old_segments = list(seg_res.scalars().all())
+
+                    if old_segments:
+                        print(f"[cleanup] Found {len(old_segments)} old segments to clean up for camera '{camera.stream_id}' (Keep duration: {archive_days} days)")
+                        
+                        deleted_count = 0
+                        for seg in old_segments:
+                            # 1. Remove physical file
+                            file_path = Path(seg.file_path)
+                            try:
+                                if file_path.exists():
+                                    file_path.unlink()
+                                deleted_count += 1
+                            except Exception as e:
+                                print(f"[cleanup] Failed to delete file {seg.file_path}: {e}")
+
+                            # 2. Remove DB segment record
+                            await session.delete(seg)
+
+                        await session.commit()
+                        print(f"[cleanup] Successfully deleted {deleted_count} files and database records for '{camera.stream_id}'")
+
+        except Exception as e:
+            print(f"[cleanup] Error in archive cleanup loop: {e}")
+
+        await asyncio.sleep(settings.cleanup_interval_seconds)

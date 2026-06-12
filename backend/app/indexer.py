@@ -44,8 +44,20 @@ async def index_recordings(session, recording_dir):
 
             stat = mp4.stat()
 
-            end_ts = stat.st_mtime
-            start_ts = end_ts - settings.segment_time_seconds
+            import re
+            match = re.search(r"(\d{8})_(\d{6})", mp4.name)
+            if match:
+                try:
+                    date_str, time_str = match.groups()
+                    dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                    start_ts = dt.timestamp()
+                    end_ts = start_ts + settings.segment_time_seconds
+                except Exception:
+                    end_ts = stat.st_mtime
+                    start_ts = end_ts - settings.segment_time_seconds
+            else:
+                end_ts = stat.st_mtime
+                start_ts = end_ts - settings.segment_time_seconds
 
             session.add(
                 RecordingSegment(

@@ -16,6 +16,11 @@ from .models import Camera, RecordingSegment
 from .schemas import CameraOut, RecordingSegmentOut, SyncResponse
 from .upstream import fetch_upstream_cameras
 from .media import media_manager
+from .schedulers import (
+    camera_scheduler_loop,
+    camera_gap_recovery_loop,
+    camera_archive_cleanup_loop
+)
 
 app = FastAPI(title=settings.app_name)
 
@@ -78,6 +83,18 @@ async def startup():
 
     asyncio.create_task(
         recording_index_loop()
+    )
+
+    asyncio.create_task(
+        camera_scheduler_loop()
+    )
+
+    asyncio.create_task(
+        camera_gap_recovery_loop()
+    )
+
+    asyncio.create_task(
+        camera_archive_cleanup_loop()
     )
 
 @app.get(

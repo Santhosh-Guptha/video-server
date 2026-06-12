@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     segment_time_seconds: int = 60
     max_subscribers_per_stream: int = 200
     ui_poll_seconds: int = 5
+    scheduler_interval_seconds: int = 10
+    recovery_interval_seconds: int = 300
+    cleanup_interval_seconds: int = 600
+    recovery_rtsp_template: str = "{rtsp_url}?starttime={start_iso}&endtime={end_iso}"
 
     class Config:
         env_file = ".env"
