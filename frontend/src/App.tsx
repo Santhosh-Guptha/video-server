@@ -31,7 +31,10 @@ export default function App() {
       setCameras(data)
       setStatusText(`Loaded ${data.length} streams`)
       setLastSync(new Date().toLocaleString())
-      if (!selected && data.length > 0) setSelected(data[0])
+      if (!selected && data.length > 0) {
+        setSelected(data[0])
+        setSelectedStreams([data[0]])
+      }
     } catch (e) {
       setStatusText(e instanceof Error ? e.message : 'Failed to load cameras')
     } finally {
@@ -63,6 +66,16 @@ export default function App() {
 
   async function handleStartLive() {
     if (!selected) return
+    // Ensure the started camera is in the selectedStreams grid
+    setSelectedStreams(prev => {
+      if (!prev.some(x => x.stream_id === selected.stream_id)) {
+        if (prev.length >= layout) {
+          return [...prev.slice(1), selected]
+        }
+        return [...prev, selected]
+      }
+      return prev
+    })
     setLiveLoading(true)
     setStatusText(`Starting live: ${selected.name}`)
     try {
