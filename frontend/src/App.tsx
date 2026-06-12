@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import type { Camera, RecordingSegment } from './types'
 import { Sidebar } from './components/Sidebar'
 import { Player } from './components/Player'
@@ -6,7 +6,7 @@ import { Dashboard } from './pages/Dashboard'
 import { CameraDetails } from './pages/CameraDetails'
 import { Playback } from './pages/Playback'
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
-import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2 } from 'lucide-react'
+import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2, ChevronDown, Search } from 'lucide-react'
 
 export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -24,6 +24,10 @@ export default function App() {
   const [liveLoading, setLiveLoading] = useState(false)
   const [lastSync, setLastSync] = useState('Never')
   const [isFullView, setIsFullView] = useState(false)
+
+  const [liveDropdownOpen, setLiveDropdownOpen] = useState(false)
+  const [liveSearchQuery, setLiveSearchQuery] = useState('')
+  const liveDropdownRef = useRef<HTMLDivElement | null>(null)
 
   // Exit full view automatically if grid is cleared
   useEffect(() => {
@@ -43,6 +47,25 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isFullView])
+
+  // Click-outside listener for Live View camera selector dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (liveDropdownRef.current && !liveDropdownRef.current.contains(event.target as Node)) {
+        setLiveDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const filteredLiveCameras = useMemo(() => {
+    return cameras.filter(
+      (cam) =>
+        cam.name.toLowerCase().includes(liveSearchQuery.toLowerCase()) ||
+        cam.stream_id.toLowerCase().includes(liveSearchQuery.toLowerCase())
+    )
+  }, [cameras, liveSearchQuery])
 
   async function loadCameras() {
     setLoading(true)
@@ -231,6 +254,83 @@ export default function App() {
                 </div>
 
                 <div className="controlGroup">
+                  <span className="controlLabel">Select Feeds</span>
+                  <div className="dropdownContainer" ref={liveDropdownRef}>
+                    <button
+                      type="button"
+                      className="dropdownTrigger"
+                      onClick={() => setLiveDropdownOpen(!liveDropdownOpen)}
+                      style={{ minWidth: '200px' }}
+                    >
+                      <span>
+                        {selectedStreams.length === 0
+                          ? 'Select Cameras…'
+                          : `${selectedStreams.length}/${layout} selected`}
+                      </span>
+                      <ChevronDown size={14} style={{ opacity: 0.7 }} />
+                    </button>
+                    {liveDropdownOpen && (
+                      <div className="dropdownMenu">
+                        <div className="dropdownSearchWrapper">
+                          <input
+                            type="text"
+                            className="dropdownSearchInput"
+                            placeholder="Search cameras..."
+                            value={liveSearchQuery}
+                            onChange={(e) => setLiveSearchQuery(e.target.value)}
+                            autoFocus
+                          />
+                        </div>
+                        <div className="dropdownList">
+                          {filteredLiveCameras.length > 0 ? (
+                            filteredLiveCameras.map((cam) => {
+                              const isChecked = selectedStreams.some((x) => x.stream_id === cam.stream_id)
+                              return (
+                                <div
+                                  key={cam.stream_id}
+                                  className={`dropdownOption ${isChecked ? 'selected' : ''}`}
+                                  onClick={() => {
+                                    if (isChecked) {
+                                      const remaining = selectedStreams.filter((x) => x.stream_id !== cam.stream_id)
+                                      setSelectedStreams(remaining)
+                                      if (selected?.stream_id === cam.stream_id) {
+                                        setSelected(remaining[0] || undefined)
+                                      }
+                                    } else {
+                                      if (selectedStreams.length >= layout) {
+                                        setStatusText(`Max layout limit (${layout}) reached. Change layout grid to add more.`)
+                                        return
+                                      }
+                                      setSelectedStreams((prev) => [...prev, cam])
+                                      setSelected(cam)
+                                    }
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="dropdownOptionCheckbox"
+                                    checked={isChecked}
+                                    readOnly
+                                  />
+                                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                    <span style={{ fontWeight: 600 }}>{cam.name}</span>
+                                    <span style={{ fontSize: '0.72rem', opacity: 0.6 }}>{cam.stream_id} ({cam.stream_type})</span>
+                                  </div>
+                                </div>
+                              )
+                            })
+                          ) : (
+                            <div style={{ padding: '8px', fontSize: '0.8rem', color: '#94a3b8', textAlign: 'center' }}>
+                              No cameras found
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="controlGroup">
                   <button
                     className="batchBtn start"
                     onClick={startAll}
@@ -315,7 +415,12 @@ export default function App() {
 
           {activeTab === 'playback' && (
             <div className="streamArea">
-              <Playback streamId={selected?.stream_id} cameraName={selected?.name} />
+              <Playback
+                streamId={selected?.stream_id}
+                cameraName={selected?.name}
+                cameras={cameras}
+                onSelectCamera={(cam) => setSelected(cam)}
+              />
             </div>
           )}
         </div>

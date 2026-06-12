@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
-import { Calendar, PlayCircle, Film, Loader2, AlertCircle, FileVideo } from 'lucide-react'
+import { Calendar, PlayCircle, Film, Loader2, AlertCircle, FileVideo, ChevronDown, Search } from 'lucide-react'
+import type { Camera } from '../types'
 
 type Props = {
   streamId?: string
   cameraName?: string
+  cameras: Camera[]
+  onSelectCamera: (camera: Camera) => void
 }
 
-export function Playback({ streamId, cameraName }: Props) {
+export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Props) {
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [selectedDate, setSelectedDate] = useState('')
   const [selectedTime, setSelectedTime] = useState('00:00')
@@ -20,6 +23,55 @@ export function Playback({ streamId, cameraName }: Props) {
   const [rangeStartTs, setRangeStartTs] = useState<number>(0)
   const [isDragging, setIsDragging] = useState(false)
   const timelineRef = useRef<HTMLDivElement | null>(null)
+
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const dropdownRef = useRef<HTMLDivElement | null>(null)
+
+  const [summary, setSummary] = useState<{ count: number; min_start_ts: number | null; max_end_ts: number | null } | null>(null)
+  const [loadingSummary, setLoadingSummary] = useState(false)
+
+  // Handle click outside for dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Fetch summary when streamId changes
+  useEffect(() => {
+    if (!streamId) {
+      setSummary(null)
+      return
+    }
+
+    async function loadSummary() {
+      setLoadingSummary(true)
+      try {
+        const res = await fetch(`/api/playback/${encodeURIComponent(streamId!)}/summary`)
+        if (res.ok) {
+          const data = await res.json()
+          setSummary(data)
+        }
+      } catch (e) {
+        console.error('Failed to load summary:', e)
+      } finally {
+        setLoadingSummary(false)
+      }
+    }
+
+    loadSummary()
+  }, [streamId])
+
+  const filteredCameras = cameras.filter(
+    (cam) =>
+      cam.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      cam.stream_id.toLowerCase().includes(searchQuery.toLowerCase())
+  )
 
   // Fetch available dates when camera changes
   useEffect(() => {
@@ -182,13 +234,94 @@ export function Playback({ streamId, cameraName }: Props) {
           <div className="eyebrow">Seamless Continuous Playback</div>
           <h2 className="panelTitle">{cameraName ?? 'Select a Camera'}</h2>
           <div className="panelSub">
-            {streamId ? `Stream ID: ${streamId}` : 'Choose a camera feed from the Dashboard to start'}
+            {streamId ? `Stream ID: ${streamId}` : 'Choose a camera feed to start'}
           </div>
+        </div>
+
+        {/* Searchable Camera Selector */}
+        <div className="dropdownContainer" ref={dropdownRef}>
+          <button
+            type="button"
+            className="dropdownTrigger"
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+            style={{ minWidth: '220px' }}
+          >
+            <span>{cameraName ?? 'Select Camera…'}</span>
+            <ChevronDown size={14} style={{ opacity: 0.7 }} />
+          </button>
+
+          {dropdownOpen && (
+            <div className="dropdownMenu" style={{ right: 0, left: 'auto', width: '280px' }}>
+              <div className="dropdownSearchWrapper">
+                <input
+                  type="text"
+                  className="dropdownSearchInput"
+                  placeholder="Search cameras..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="dropdownList">
+                {filteredCameras.length > 0 ? (
+                  filteredCameras.map((cam) => (
+                    <div
+                      key={cam.stream_id}
+                      className={`dropdownOption ${streamId === cam.stream_id ? 'selected' : ''}`}
+                      onClick={() => {
+                        onSelectCamera(cam)
+                        setDropdownOpen(false)
+                        setSearchQuery('')
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <span style={{ fontWeight: 600 }}>{cam.name}</span>
+                        <span style={{ fontSize: '0.72rem', opacity: 0.6 }}>{cam.stream_id} ({cam.stream_type})</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ padding: '8px', fontSize: '0.8rem', color: '#94a3b8', textAlign: 'center' }}>
+                    No cameras found
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {streamId ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Stream Summary Card */}
+          {summary && summary.count > 0 && (
+            <div className="summaryCard">
+              <div className="summaryCardTitle">
+                <Film size={14} style={{ color: '#60a5fa' }} /> Stream Recording Coverage & Stats
+              </div>
+              <div className="summaryMetricGrid">
+                <div className="summaryMetricCell">
+                  <div className="summaryMetricLabel">Total Indexed Segments</div>
+                  <div className="summaryMetricValue">
+                    {summary.count} segments ({Math.floor(summary.count)} mins)
+                  </div>
+                </div>
+                <div className="summaryMetricCell">
+                  <div className="summaryMetricLabel">Recording Start Time</div>
+                  <div className="summaryMetricValue">
+                    {summary.min_start_ts ? new Date(summary.min_start_ts * 1000).toLocaleString() : 'N/A'}
+                  </div>
+                </div>
+                <div className="summaryMetricCell">
+                  <div className="summaryMetricLabel">Recording End Time</div>
+                  <div className="summaryMetricValue">
+                    {summary.max_end_ts ? new Date(summary.max_end_ts * 1000).toLocaleString() : 'N/A'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Minimal Controls Bar */}
           <div className="controlsBar" style={{ margin: 0, padding: '14px 20px' }}>
             {availableDates.length > 0 ? (

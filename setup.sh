@@ -45,13 +45,14 @@ fi
 echo "[2/4] Setting up Backend environment..."
 cd "$SCRIPT_DIR/backend"
 
-# Ensure clean venv setup
-if [ -d "venv" ]; then
-    echo "Existing backend venv found. Re-creating virtual environment..."
-    rm -rf venv
+# Avoid recreating venv if it already exists
+if [ ! -d "venv" ]; then
+    echo "Creating backend virtual environment..."
+    python3 -m venv venv
+else
+    echo "Existing backend venv found. Reusing virtual environment..."
 fi
 
-python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
@@ -61,8 +62,12 @@ deactivate
 echo "[3/4] Setting up Frontend environment..."
 cd "$SCRIPT_DIR/frontend"
 
-# Clean build and install dependencies
-rm -rf node_modules
+# Clean install node_modules only if not present, otherwise incremental npm install
+if [ ! -d "node_modules" ]; then
+    echo "Installing frontend dependencies..."
+else
+    echo "Existing node_modules found. Updating dependencies incrementally..."
+fi
 npm install
 npm run build
 

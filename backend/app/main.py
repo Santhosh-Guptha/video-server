@@ -339,6 +339,27 @@ async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depen
     )))
     return dates
 
+@app.get("/api/playback/{stream_id}/summary")
+async def playback_summary(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
+    from sqlalchemy import func
+    res = await session.execute(
+        select(
+            func.count(RecordingSegment.id),
+            func.min(RecordingSegment.start_ts),
+            func.max(RecordingSegment.end_ts)
+        ).where(RecordingSegment.stream_id == stream_id)
+    )
+    row = res.fetchone()
+    if row:
+        count, min_start, max_end = row
+    else:
+        count, min_start, max_end = 0, None, None
+    return {
+        "count": count or 0,
+        "min_start_ts": min_start,
+        "max_end_ts": max_end,
+    }
+
 @app.get("/api/playback/{stream_id}/stream.mp4")
 async def stream_playback(
     stream_id: str,
