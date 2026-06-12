@@ -254,28 +254,22 @@ async def hls_playlist(stream_id: str):
     path = Path(settings.hls_dir) / stream_id / "index.m3u8"
     if not path.exists():
         raise HTTPException(404, "Playlist not ready")
-    return FileResponse(
-        path,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-    )
+    response = FileResponse(path)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 @app.get("/api/streams/{stream_id}/live/{filename}")
 async def hls_segment(stream_id: str, filename: str):
     path = Path(settings.hls_dir) / stream_id / filename
     if not path.exists():
         raise HTTPException(404, "Segment not found")
-    return FileResponse(
-        path,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-    )
+    response = FileResponse(path)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 @app.get("/api/playback/{stream_id}", response_model=list[RecordingSegmentOut])
 async def playback(stream_id: str, start_ts: float, end_ts: float, session: Annotated[AsyncSession, Depends(get_session)]):
