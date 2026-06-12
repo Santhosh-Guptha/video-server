@@ -295,6 +295,9 @@ async def ws_status(ws: WebSocket):
             }
             await ws.send_json(payload)
             await ws.receive_text()
+    except WebSocketDisconnect:
+        return
+
 @app.get("/api/playback/{stream_id}/available-dates")
 async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
     import time
@@ -390,9 +393,6 @@ async def stream_playback(
             "Content-Disposition": "inline; filename=\"stream.mp4\""
         }
     )
-
-    except WebSocketDisconnect:
-        return
 
 @app.get("/")
 async def root():
