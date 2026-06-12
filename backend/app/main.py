@@ -295,6 +295,102 @@ async def ws_status(ws: WebSocket):
             }
             await ws.send_json(payload)
             await ws.receive_text()
+@app.get("/api/playback/{stream_id}/available-dates")
+async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
+    import time
+    res = await session.execute(
+        select(RecordingSegment.start_ts)
+        .where(RecordingSegment.stream_id == stream_id)
+        .order_by(RecordingSegment.start_ts.asc())
+    )
+    timestamps = res.scalars().all()
+    # Convert timestamps to YYYY-MM-DD strings based on server local time
+    dates = sorted(list(set(
+        time.strftime("%Y-%m-%d", time.localtime(ts))
+        for ts in timestamps
+    )))
+    return dates
+
+@app.get("/api/playback/{stream_id}/stream.mp4")
+async def stream_playback(
+    stream_id: str,
+    start_ts: float,
+    end_ts: float,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    import tempfile
+    import os
+    from fastapi.responses import StreamingResponse
+
+    # 1. Fetch segments
+    res = await session.execute(
+        select(RecordingSegment)
+        .where(RecordingSegment.stream_id == stream_id)
+        .where(RecordingSegment.end_ts >= start_ts)
+        .where(RecordingSegment.start_ts <= end_ts)
+        .order_by(RecordingSegment.start_ts.asc())
+    )
+    segments = list(res.scalars().all())
+    if not segments:
+        raise HTTPException(status_code=404, detail="No recording segments found for this range")
+
+    # 2. Generate temporary concat file
+    concat_content = ""
+    for seg in segments:
+        escaped_path = seg.file_path.replace("'", "'\\''")
+        concat_content += f"file '{escaped_path}'\n"
+
+    tmp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+    tmp_file.write(concat_content)
+    tmp_file.close()
+
+    # 3. Build FFmpeg command to stream concatenated fMP4
+    cmd = [
+        settings.ffmpeg_path,
+        "-f", "concat",
+        "-safe", "0",
+        "-i", tmp_file.name,
+        "-c", "copy",
+        "-f", "mp4",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "pipe:1"
+    ]
+
+    print(f"[stream] Running: {' '.join(cmd)}")
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL
+    )
+
+    async def video_generator():
+        try:
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        except asyncio.CancelledError:
+            try:
+                proc.kill()
+            except:
+                pass
+        finally:
+            try:
+                os.unlink(tmp_file.name)
+            except:
+                pass
+
+    return StreamingResponse(
+        video_generator(),
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "inline; filename=\"stream.mp4\""
+        }
+    )
+
     except WebSocketDisconnect:
         return
 
