@@ -343,6 +343,8 @@ code { padding: 2px 6px; border-radius: 8px; background: rgba(148,163,184,0.14);
   background: rgba(15,23,42,0.65);
   backdrop-filter: blur(10px);
   margin-bottom: 16px;
+  position: relative;
+  z-index: 110; /* Ensure dropdowns overlay the player cells underneath */
 }
 .controlGroup {
   display: flex;
@@ -557,13 +559,13 @@ code { padding: 2px 6px; border-radius: 8px; background: rgba(148,163,184,0.14);
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  width: 260px;
-  background: rgba(15, 23, 42, 0.95);
+  width: 290px;
+  background: rgba(15, 23, 42, 0.96);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 14px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
-  z-index: 1000;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.7), 0 10px 10px -5px rgba(0, 0, 0, 0.7);
+  z-index: 10000; /* Force overlay on top of player cells */
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -581,18 +583,20 @@ code { padding: 2px 6px; border-radius: 8px; background: rgba(148,163,184,0.14);
 
 .dropdownSearchInput {
   width: 100%;
-  padding: 6px 10px;
-  font-size: 0.8rem;
+  padding: 8px 12px;
+  font-size: 0.82rem;
   border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(2, 6, 23, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(2, 6, 23, 0.7);
   color: #fff;
   outline: none;
   box-sizing: border-box;
+  transition: all 0.15s;
 }
 
 .dropdownSearchInput:focus {
   border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
 }
 
 .dropdownList {
