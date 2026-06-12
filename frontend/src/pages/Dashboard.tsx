@@ -3,7 +3,8 @@ import {
   Search,
   Activity,
   Shield,
-  HardDrive
+  HardDrive,
+  Check
 } from "lucide-react";
 
 import type { Camera as CameraType } from "../types";
@@ -12,7 +13,8 @@ type DashboardProps = {
   cameras: CameraType[];
   query: string;
   setQuery: (value: string) => void;
-  selectedStreamId?: string;
+  selectedStreamIds: string[];
+  focusedStreamId?: string;
   onSelect: (camera: CameraType) => void;
 };
 
@@ -36,7 +38,8 @@ export function Dashboard({
   cameras,
   query,
   setQuery,
-  selectedStreamId,
+  selectedStreamIds,
+  focusedStreamId,
   onSelect,
 }: DashboardProps) {
   const filtered = cameras.filter((c) => {
@@ -110,72 +113,78 @@ export function Dashboard({
       </div>
 
       <div className="gridWrap">
-        {filtered.map((camera) => (
-          <button
-            key={camera.pk}
-            className={`cameraCard ${
-              selectedStreamId === camera.stream_id ? "selected" : ""
-            }`}
-            onClick={() => onSelect(camera)}
-          >
-            <div className="cameraTop">
-              <div>
-                <div className="camName">{camera.name}</div>
+        {filtered.map((camera) => {
+          const isSelected = selectedStreamIds.includes(camera.stream_id);
+          const isFocused = focusedStreamId === camera.stream_id;
+          return (
+            <button
+              key={camera.pk}
+              className={`cameraCard ${isSelected ? "selected" : ""} ${isFocused ? "focused" : ""}`}
+              onClick={() => onSelect(camera)}
+            >
+              <div className="cameraTop">
+                <div className="cardHeaderArea">
+                  <span className="selectionCheck">
+                    <Check size={12} strokeWidth={3} />
+                  </span>
+                  <div>
+                    <div className="camName">{camera.name}</div>
+                    <div className="camSub">
+                      {camera.stream_type} • {camera.stream_id}
+                    </div>
+                  </div>
+                </div>
 
-                <div className="camSub">
-                  {camera.stream_type} • {camera.stream_id}
+                <span
+                  className={`statusPill ${
+                    camera.active ? "ok" : "off"
+                  }`}
+                >
+                  {camera.active ? "Active" : "Inactive"}
+                </span>
+              </div>
+
+              <div className="cameraMeta">
+                <div>
+                  <span>Codec</span>
+                  <strong>{codecLabel(camera.archive_type)}</strong>
+                </div>
+
+                <div>
+                  <span>FPS</span>
+                  <strong>{camera.fps ?? "-"}</strong>
+                </div>
+
+                <div>
+                  <span>Resolution</span>
+                  <strong>
+                    {camera.width ?? "-"} × {camera.height ?? "-"}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>Bitrate</span>
+                  <strong>
+                    {camera.bitrate
+                      ? `${Math.round(camera.bitrate / 1000)} kbps`
+                      : "-"}
+                  </strong>
                 </div>
               </div>
 
-              <span
-                className={`statusPill ${
-                  camera.active ? "ok" : "off"
-                }`}
-              >
-                {camera.active ? "Active" : "Inactive"}
-              </span>
-            </div>
+              <div className="cameraFooter">
+                <span className="footTag">
+                  <Activity size={14} />
+                  {camera.transcode ? " Transcode" : " Copy"}
+                </span>
 
-            <div className="cameraMeta">
-              <div>
-                <span>Codec</span>
-                <strong>{codecLabel(camera.archive_type)}</strong>
+                <span className="footTag">
+                  {camera.camera_type || "UNKNOWN"}
+                </span>
               </div>
-
-              <div>
-                <span>FPS</span>
-                <strong>{camera.fps ?? "-"}</strong>
-              </div>
-
-              <div>
-                <span>Resolution</span>
-                <strong>
-                  {camera.width ?? "-"} × {camera.height ?? "-"}
-                </strong>
-              </div>
-
-              <div>
-                <span>Bitrate</span>
-                <strong>
-                  {camera.bitrate
-                    ? `${Math.round(camera.bitrate / 1000)} kbps`
-                    : "-"}
-                </strong>
-              </div>
-            </div>
-
-            <div className="cameraFooter">
-              <span className="footTag">
-                <Activity size={14} />
-                {camera.transcode ? " Transcode" : " Copy"}
-              </span>
-
-              <span className="footTag">
-                {camera.camera_type || "UNKNOWN"}
-              </span>
-            </div>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
     </section>
   );

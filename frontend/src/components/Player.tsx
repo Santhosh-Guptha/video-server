@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
-import { AlertCircle, Loader2, Maximize2, Volume2, VolumeX, Play } from 'lucide-react'
+import { AlertCircle, Loader2, Maximize2, Volume2, VolumeX, Play, X } from 'lucide-react'
 
 type PlayerProps = {
   src?: string
   posterLabel?: string
+  isFocused?: boolean
+  onClose?: () => void
+  onFocus?: () => void
 }
 
-export function Player({ src, posterLabel }: PlayerProps) {
+export function Player({ src, posterLabel, isFocused, onClose, onFocus }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const [muted, setMuted] = useState(true)
@@ -52,13 +55,26 @@ export function Player({ src, posterLabel }: PlayerProps) {
   }, [muted])
 
   return (
-    <div className="playerShell">
+    <div className={`playerShell ${isFocused ? 'focused' : ''}`} onClick={onFocus} style={{ cursor: onFocus ? 'pointer' : 'default' }}>
       <div className="playerHeader">
         <div>
           <div className="eyebrow">{posterLabel ?? 'Live feed'}</div>
           <h3 className="panelTitle">Real-time camera view</h3>
         </div>
-        <div className="playerChips">
+        <div className="playerChips" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {onClose && (
+            <button
+              className="playerCloseBtn"
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose()
+              }}
+              title="Deselect camera"
+            >
+              <X size={16} />
+            </button>
+          )}
           <span className="chip chipLive"><span className="dotPulse" />Live</span>
           <span className="chip">HLS</span>
           <span className="chip">Low latency</span>
