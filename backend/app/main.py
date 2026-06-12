@@ -434,7 +434,8 @@ async def stream_playback(
     # 2. Generate temporary concat file
     concat_content = ""
     for seg in segments:
-        escaped_path = seg.file_path.replace("'", "'\\''")
+        abs_path = os.path.abspath(seg.file_path)
+        escaped_path = abs_path.replace("'", "'\\''")
         concat_content += f"file '{escaped_path}'\n"
 
     tmp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
