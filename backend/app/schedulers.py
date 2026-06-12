@@ -43,15 +43,6 @@ async def camera_scheduler_loop():
                     )
 
                     if not is_running:
-                        # Pre-create day-wise folders for today and tomorrow to avoid FFmpeg write errors
-                        from datetime import timedelta
-                        today_str = datetime.now().strftime("%Y-%m-%d")
-                        tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-                        stream_record_dir = Path(settings.recording_dir) / stream_id
-                        (stream_record_dir / today_str).mkdir(parents=True, exist_ok=True)
-                        (stream_record_dir / tomorrow_str).mkdir(parents=True, exist_ok=True)
-
-                        print(f"[scheduler] Stream '{stream_id}' is not running. Starting background recorder...")
                         try:
                             raw = json.loads(camera.raw_json)
                             username = raw.get("username")
@@ -67,6 +58,36 @@ async def camera_scheduler_loop():
                                 encoded_password = quote(str(password), safe="")
                                 rtsp_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
 
+                            # Validate if camera is online/reachable before creating directories or launching FFmpeg
+                            from urllib.parse import urlparse
+                            import socket
+
+                            def check_rtsp_reachable(url: str) -> bool:
+                                try:
+                                    parsed = urlparse(url)
+                                    host = parsed.hostname
+                                    port = parsed.port or 554
+                                    if not host:
+                                        return False
+                                    with socket.create_connection((host, port), timeout=2.0):
+                                        return True
+                                except Exception:
+                                    return False
+
+                            is_reachable = await asyncio.to_thread(check_rtsp_reachable, rtsp_url)
+                            if not is_reachable:
+                                print(f"[scheduler] Camera '{stream_id}' is offline/unreachable. Skipping startup to avoid empty folder creation.")
+                                continue
+
+                            # Pre-create day-wise folders for today and tomorrow to avoid FFmpeg write errors
+                            from datetime import timedelta
+                            today_str = datetime.now().strftime("%Y-%m-%d")
+                            tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                            stream_record_dir = Path(settings.recording_dir) / stream_id
+                            (stream_record_dir / today_str).mkdir(parents=True, exist_ok=True)
+                            (stream_record_dir / tomorrow_str).mkdir(parents=True, exist_ok=True)
+
+                            print(f"[scheduler] Stream '{stream_id}' is not running. Starting background recorder...")
                             await media_manager.start_rtsp_stream(
                                 stream_id,
                                 rtsp_url,
@@ -311,6 +332,35 @@ async def camera_archive_cleanup_loop():
                                         print(f"[cleanup] Removed empty directory: {sub}")
                         except Exception as ex:
                             print(f"[cleanup] Failed to clean up empty subdirectories: {ex}")
+
+                # Clean up empty parent camera directories for inactive/unreachable/deleted cameras
+                try:
+                    for parent_dir in [Path(settings.recording_dir), Path(settings.hls_dir)]:
+                        if parent_dir.exists():
+                            for stream_dir in parent_dir.iterdir():
+                                if stream_dir.is_dir():
+                                    stream_id = stream_dir.name
+                                    existing = media_manager.streams.get(stream_id)
+                                    is_running = (
+                                        existing
+                                        and existing.proc
+                                        and existing.proc.returncode is None
+                                    )
+                                    if not is_running:
+                                        def is_dir_empty_recursive(d: Path) -> bool:
+                                            for item in d.iterdir():
+                                                if item.is_file():
+                                                    return False
+                                                if item.is_dir() and not is_dir_empty_recursive(item):
+                                                    return False
+                                            return True
+                                        
+                                        if is_dir_empty_recursive(stream_dir):
+                                            import shutil
+                                            shutil.rmtree(stream_dir)
+                                            print(f"[cleanup] Removed empty camera directory for non-streaming camera: {stream_dir}")
+                except Exception as ex:
+                    print(f"[cleanup] Error cleaning empty camera directories: {ex}")
 
         except Exception as e:
             print(f"[cleanup] Error in archive cleanup loop: {e}")
