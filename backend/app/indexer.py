@@ -1,0 +1,59 @@
+from pathlib import Path
+from datetime import datetime
+from sqlalchemy import select
+
+from .models import RecordingSegment, Camera
+
+
+async def index_recordings(session, recording_dir):
+
+    root = Path(recording_dir)
+
+    for stream_dir in root.iterdir():
+
+        if not stream_dir.is_dir():
+            continue
+
+        stream_id = stream_dir.name
+
+        cam = await session.execute(
+            select(Camera).where(
+                Camera.stream_id == stream_id
+            )
+        )
+
+        camera = cam.scalar_one_or_none()
+
+        camera_name = (
+            camera.name
+            if camera
+            else stream_id
+        )
+
+        for mp4 in stream_dir.glob("*.mp4"):
+
+            existing = await session.execute(
+                select(RecordingSegment).where(
+                    RecordingSegment.file_path == str(mp4)
+                )
+            )
+
+            if existing.scalar_one_or_none():
+                continue
+
+            stat = mp4.stat()
+
+            end_ts = stat.st_mtime
+            start_ts = end_ts - 5
+
+            session.add(
+                RecordingSegment(
+                    stream_id=stream_id,
+                    camera_name=camera_name,
+                    file_path=str(mp4),
+                    start_ts=start_ts,
+                    end_ts=end_ts
+                )
+            )
+
+    await session.commit()
