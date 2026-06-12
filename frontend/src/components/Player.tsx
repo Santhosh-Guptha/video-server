@@ -33,7 +33,15 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus }: Player
       video.src = src
       video.play().catch(() => {})
     } else if (Hls.isSupported()) {
-      const hls = new Hls({ lowLatencyMode: true, backBufferLength: 30, liveDurationInfinity: true })
+      const hls = new Hls({
+        lowLatencyMode: true,
+        backBufferLength: 30,
+        liveDurationInfinity: true,
+        liveSyncDuration: 1.5,
+        liveMaxLatencyDuration: 3,
+        maxBufferLength: 4,
+        maxMaxBufferLength: 8
+      })
       hlsRef.current = hls
       hls.loadSource(src)
       hls.attachMedia(video)
