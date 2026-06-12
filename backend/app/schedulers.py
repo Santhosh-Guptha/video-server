@@ -5,12 +5,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
+import httpx
 from sqlalchemy import select
 
 from .config import settings
 from .db import get_session
-from .models import Camera, RecordingSegment
-from .media import media_manager
+from .models import Camera, CameraStream, RecordingSegment, StreamState
+from .redis_client import RedisManager
+from .stream_manager import stream_manager
 
 # In-memory tracking of attempted gap recovery timestamps to prevent infinite retries for failed/offline gaps
 # Key format: (stream_id, int(start_ts))
@@ -18,127 +20,134 @@ attempted_gaps = set()
 
 async def camera_scheduler_loop():
     """
-    Background watchdog that ensures active cameras are continuously recording/streaming
-    independently of frontend live view client connections.
+    Background watchdog that ensures active camera streams are configured in MediaMTX
+    and monitors their status, caching updates in Redis.
     """
     print("[scheduler] Starting camera status watchdog loop...")
-    while True:
-        try:
-            async for session in get_session():
-                # Fetch all active cameras
-                res = await session.execute(
-                    select(Camera).where(Camera.active == True)
-                )
-                active_cameras = list(res.scalars().all())
-                active_stream_ids = {cam.stream_id for cam in active_cameras}
-
-                # 1. Start streams for active cameras if not running
-                for camera in active_cameras:
-                    stream_id = camera.stream_id
-                    existing = media_manager.streams.get(stream_id)
-                    is_running = (
-                        existing
-                        and existing.proc
-                        and existing.proc.returncode is None
+    
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                # 1. Sync camera stream paths from Database to MediaMTX configuration
+                async for session in get_session():
+                    # Fetch all active camera streams
+                    res = await session.execute(
+                        select(CameraStream)
+                        .join(Camera)
+                        .where(Camera.active == True)
                     )
+                    active_streams = list(res.scalars().all())
+                    active_stream_ids = {stream.stream_id for stream in active_streams}
 
-                    if not is_running:
-                        try:
-                            raw = json.loads(camera.raw_json)
-                            username = raw.get("username")
-                            password = raw.get("password")
-                            rtsp_url = camera.rtsp_url.strip()
+                    # Fetch existing configuration paths in MediaMTX
+                    try:
+                        paths_resp = await client.get(f"{settings.mediamtx_api_url}/v3/config/paths/list")
+                        if paths_resp.status_code == 200:
+                            mediamtx_paths_data = paths_resp.json().get("items", {})
+                            mediamtx_paths = set()
+                            if isinstance(mediamtx_paths_data, dict):
+                                mediamtx_paths = set(mediamtx_paths_data.keys())
+                            elif isinstance(mediamtx_paths_data, list):
+                                mediamtx_paths = {item.get("name") for item in mediamtx_paths_data if isinstance(item, dict) and "name" in item}
+                        else:
+                            mediamtx_paths = set()
+                            print(f"[scheduler] Failed to query MediaMTX paths list: {paths_resp.text}")
+                    except Exception as e:
+                        mediamtx_paths = set()
+                        print(f"[scheduler] Connection error querying MediaMTX paths: {e}")
 
-                            if not rtsp_url.startswith(("rtsp://", "rtsps://")):
-                                rtsp_url = f"rtsp://{rtsp_url}"
+                    # Sync paths: Add missing ones
+                    for stream in active_streams:
+                        if stream.stream_id not in mediamtx_paths:
+                            print(f"[scheduler] Registering missing stream path: {stream.stream_id}")
+                            await stream_manager.add_stream(session, stream)
 
-                            if username and password:
-                                protocol, rest = rtsp_url.split("://", 1)
-                                encoded_username = quote(str(username), safe="")
-                                encoded_password = quote(str(password), safe="")
-                                rtsp_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+                    # 2. Query active streams status to update state machine
+                    try:
+                        streams_resp = await client.get(f"{settings.mediamtx_api_url}/v3/streams/list")
+                        if streams_resp.status_code == 200:
+                            active_mediamtx_streams_data = streams_resp.json().get("items", {})
+                            active_mediamtx_streams = {}
+                            if isinstance(active_mediamtx_streams_data, dict):
+                                active_mediamtx_streams = active_mediamtx_streams_data
+                            elif isinstance(active_mediamtx_streams_data, list):
+                                for item in active_mediamtx_streams_data:
+                                    if isinstance(item, dict) and "name" in item:
+                                        active_mediamtx_streams[item["name"]] = item
+                        else:
+                            active_mediamtx_streams = {}
+                            print(f"[scheduler] Failed to query active MediaMTX streams: {streams_resp.text}")
+                    except Exception as e:
+                        active_mediamtx_streams = {}
+                        print(f"[scheduler] Connection error querying active streams: {e}")
 
-                            # Validate if camera is online/reachable before creating directories or launching FFmpeg
-                            from urllib.parse import urlparse
-                            import socket
+                    # Transition states based on MediaMTX stream activity
+                    for stream in active_streams:
+                        stream_info = active_mediamtx_streams.get(stream.stream_id)
+                        
+                        if stream_info:
+                            # Stream is actively pulling/pushing packets
+                            # Check number of clients (readers)
+                            readers = stream_info.get("readers", [])
+                            clients_count = len(readers) if isinstance(readers, list) else 0
+                            await RedisManager.set_viewer_count(stream.stream_id, clients_count)
+                            
+                            # Transition to ONLINE
+                            if stream.status != StreamState.ONLINE:
+                                await stream_manager.set_stream_state(session, stream, StreamState.ONLINE)
+                        else:
+                            # Stream is configured but not active/streaming
+                            # If they are in CONNECTING or ONLINE but show inactive, they might be offline or reconnecting
+                            if stream.status == StreamState.ONLINE:
+                                await stream_manager.set_stream_state(session, stream, StreamState.RECONNECTING, "Source disconnected")
+                            elif stream.status == StreamState.RECONNECTING:
+                                # If stuck in reconnecting, restart path configuration to force a clean retry
+                                print(f"[scheduler] Stream {stream.stream_id} is stuck reconnecting. Triggering path restart.")
+                                await stream_manager.restart_stream(session, stream)
 
-                            def check_rtsp_reachable(url: str) -> bool:
-                                try:
-                                    parsed = urlparse(url)
-                                    host = parsed.hostname
-                                    port = parsed.port or 554
-                                    if not host:
-                                        return False
-                                    with socket.create_connection((host, port), timeout=2.0):
-                                        return True
-                                except Exception:
-                                    return False
+                    # Remove decommissioned paths from MediaMTX config
+                    for path_name in mediamtx_paths:
+                        if path_name != "all_others" and path_name not in active_stream_ids:
+                            print(f"[scheduler] Decommissioning inactive path: {path_name}")
+                            try:
+                                await client.delete(f"{settings.mediamtx_api_url}/v3/config/paths/delete/{path_name}")
+                            except Exception as ex:
+                                print(f"[scheduler] Failed to delete path config {path_name}: {ex}")
 
-                            is_reachable = await asyncio.to_thread(check_rtsp_reachable, rtsp_url)
-                            if not is_reachable:
-                                print(f"[scheduler] Camera '{stream_id}' is offline/unreachable. Skipping startup to avoid empty folder creation.")
-                                continue
+            except Exception as e:
+                print(f"[scheduler] Error in camera watchdog loop: {e}")
 
-                            # Pre-create day-wise folders for today and tomorrow to avoid FFmpeg write errors
-                            from datetime import timedelta
-                            today_str = datetime.now().strftime("%Y-%m-%d")
-                            tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-                            stream_record_dir = Path(settings.recording_dir) / stream_id
-                            (stream_record_dir / today_str).mkdir(parents=True, exist_ok=True)
-                            (stream_record_dir / tomorrow_str).mkdir(parents=True, exist_ok=True)
-
-                            print(f"[scheduler] Stream '{stream_id}' is not running. Starting background recorder...")
-                            await media_manager.start_rtsp_stream(
-                                stream_id,
-                                rtsp_url,
-                                settings.recording_dir,
-                                settings.hls_dir
-                            )
-                        except Exception as e:
-                            print(f"[scheduler] Failed to start stream for camera '{stream_id}': {e}")
-
-                # 2. Stop streams for cameras that are no longer active
-                running_stream_ids = list(media_manager.streams.keys())
-                for sid in running_stream_ids:
-                    if sid not in active_stream_ids:
-                        print(f"[scheduler] Stopping stream '{sid}' because it is no longer marked active in database")
-                        try:
-                            await media_manager.stop(sid)
-                        except Exception as e:
-                            print(f"[scheduler] Failed to stop stream '{sid}': {e}")
-
-        except Exception as e:
-            print(f"[scheduler] Error in camera watchdog loop: {e}")
-
-        await asyncio.sleep(settings.scheduler_interval_seconds)
+            await asyncio.sleep(settings.scheduler_interval_seconds)
 
 
 async def camera_gap_recovery_loop():
     """
-    Scans the database for recording gaps (e.g. missing 60s segments) in the last 24 hours.
+    Scans the database for recording gaps in the last 24 hours.
     Downloads the missing chunks from the camera's playback RTSP URL concurrently.
     """
     print("[recovery] Starting recording gap recovery loop...")
-    semaphore = asyncio.Semaphore(3) # Limit to 3 concurrent downloads to prevent CPU/network overload
+    semaphore = asyncio.Semaphore(3) # Limit to 3 concurrent downloads
 
     while True:
         try:
-            # Let the system stabilize first or sleep
             await asyncio.sleep(settings.recovery_interval_seconds)
 
-            # 1. Gather all gaps to recover using a short-lived DB session
             gaps_to_recover = []
             async for session in get_session():
-                # Get all active cameras
+                # Get all active streams that are currently ONLINE
                 res = await session.execute(
-                    select(Camera).where(Camera.active == True)
+                    select(CameraStream)
+                    .join(Camera)
+                    .where(Camera.active == True)
+                    .where(CameraStream.status == StreamState.ONLINE)
                 )
-                active_cameras = list(res.scalars().all())
+                active_streams = list(res.scalars().all())
 
-                for camera in active_cameras:
-                    stream_id = camera.stream_id
-                    rtsp_url = camera.rtsp_url.strip()
-                    if not rtsp_url:
+                for stream in active_streams:
+                    stream_id = stream.stream_id
+                    rtsp_url = stream.stream_url.strip()
+                    # Skip edge push or invalid RTSP urls
+                    if not rtsp_url.startswith(("rtsp://", "rtsps://")):
                         continue
 
                     # Query segments in the last 24 hours
@@ -164,7 +173,6 @@ async def camera_gap_recovery_loop():
                         gap_end = next_seg.start_ts
                         gap_duration = gap_end - gap_start
 
-                        # If gap is larger than 1.2 * segment_time_seconds, attempt recovery
                         if gap_duration >= (1.2 * settings.segment_time_seconds):
                             temp_start = gap_start
                             while temp_start + settings.segment_time_seconds <= gap_end:
@@ -174,7 +182,7 @@ async def camera_gap_recovery_loop():
                                     gaps_to_recover.append({
                                         "stream_id": stream_id,
                                         "rtsp_url": rtsp_url,
-                                        "raw_json": camera.raw_json,
+                                        "raw_json": stream.camera.name, # Using camera name or default
                                         "start_ts": temp_start,
                                         "end_ts": temp_start + settings.segment_time_seconds
                                     })
@@ -185,12 +193,10 @@ async def camera_gap_recovery_loop():
 
             print(f"[recovery] Found {len(gaps_to_recover)} missing segments to recover across all active cameras.")
 
-            # 2. Define download task helper
             async def download_task(task):
                 stream_id = task["stream_id"]
                 temp_start = task["start_ts"]
                 temp_end = task["end_ts"]
-                raw_json = task["raw_json"]
                 base_rtsp = task["rtsp_url"]
 
                 dt_start = datetime.fromtimestamp(temp_start)
@@ -200,24 +206,6 @@ async def camera_gap_recovery_loop():
                 end_iso = dt_end.strftime("%Y%m%dT%H%M%SZ")
                 start_time_local = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
                 end_time_local = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
-
-                try:
-                    raw = json.loads(raw_json)
-                except Exception:
-                    raw = {}
-                username = raw.get("username")
-                password = raw.get("password")
-                
-                if not base_rtsp.startswith(("rtsp://", "rtsps://")):
-                    base_rtsp = f"rtsp://{base_rtsp}"
-                if username and password:
-                    try:
-                        protocol, rest = base_rtsp.split("://", 1)
-                        encoded_username = quote(str(username), safe="")
-                        encoded_password = quote(str(password), safe="")
-                        base_rtsp = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
-                    except Exception:
-                        pass
 
                 recovery_url = settings.recovery_rtsp_template.format(
                     rtsp_url=base_rtsp,
@@ -252,7 +240,6 @@ async def camera_gap_recovery_loop():
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE
                         )
-                        # Wait for download to finish (giving it 2x segment time limit)
                         await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
                         if proc.returncode == 0:
                             print(f"[recovery] [{stream_id}] Successfully recovered gap segment: {filename}")
@@ -273,7 +260,6 @@ async def camera_gap_recovery_loop():
                         if output_path.exists():
                             output_path.unlink()
 
-            # 3. Run all download tasks concurrently with semaphore limit
             await asyncio.gather(*(download_task(task) for task in gaps_to_recover))
 
         except Exception as e:
@@ -282,23 +268,23 @@ async def camera_gap_recovery_loop():
 
 async def camera_archive_cleanup_loop():
     """
-    Background loop that deletes recording files and DB references older than the camera's configured archive days.
+    Background loop that deletes recording files and DB references older than the stream's configured archive days.
     """
     print("[cleanup] Starting camera archive cleanup loop...")
     while True:
         try:
             async for session in get_session():
-                # Query all cameras
-                res = await session.execute(select(Camera))
-                cameras = list(res.scalars().all())
+                # Query all camera streams
+                res = await session.execute(select(CameraStream).join(Camera))
+                streams = list(res.scalars().all())
 
-                for camera in cameras:
+                for stream in streams:
+                    # Parse archiveDays from parent camera raw_json if present
                     try:
-                        raw = json.loads(camera.raw_json)
+                        raw = json.loads(stream.camera.raw_json) if hasattr(stream.camera, "raw_json") else {}
                     except Exception:
-                        continue
+                        raw = {}
 
-                    # Check if archiveDays is configured
                     archive_days = raw.get("archiveDays")
                     if archive_days is None:
                         continue
@@ -316,13 +302,13 @@ async def camera_archive_cleanup_loop():
                     # Query segments older than the cutoff
                     seg_res = await session.execute(
                         select(RecordingSegment)
-                        .where(RecordingSegment.stream_id == camera.stream_id)
+                        .where(RecordingSegment.stream_id == stream.stream_id)
                         .where(RecordingSegment.end_ts < cutoff_ts)
                     )
                     old_segments = list(seg_res.scalars().all())
 
                     if old_segments:
-                        print(f"[cleanup] Found {len(old_segments)} old segments to clean up for camera '{camera.stream_id}' (Keep duration: {archive_days} days)")
+                        print(f"[cleanup] Found {len(old_segments)} old segments to clean up for stream '{stream.stream_id}' (Keep duration: {archive_days} days)")
                         
                         deleted_count = 0
                         for seg in old_segments:
@@ -339,11 +325,11 @@ async def camera_archive_cleanup_loop():
                             await session.delete(seg)
 
                         await session.commit()
-                        print(f"[cleanup] Successfully deleted {deleted_count} files and database records for '{camera.stream_id}'")
+                        print(f"[cleanup] Successfully deleted {deleted_count} files and database records for '{stream.stream_id}'")
 
                         # 3. Clean up empty date subdirectories
                         try:
-                            cam_rec_dir = Path(settings.recording_dir) / camera.stream_id
+                            cam_rec_dir = Path(settings.recording_dir) / stream.stream_id
                             if cam_rec_dir.exists():
                                 for sub in cam_rec_dir.iterdir():
                                     if sub.is_dir() and not any(sub.iterdir()):
@@ -352,20 +338,17 @@ async def camera_archive_cleanup_loop():
                         except Exception as ex:
                             print(f"[cleanup] Failed to clean up empty subdirectories: {ex}")
 
-                # Clean up empty parent camera directories for inactive/unreachable/deleted cameras
+                # Clean up empty parent directories for decommissioned streams
                 try:
                     for parent_dir in [Path(settings.recording_dir), Path(settings.hls_dir)]:
                         if parent_dir.exists():
                             for stream_dir in parent_dir.iterdir():
                                 if stream_dir.is_dir():
                                     stream_id = stream_dir.name
-                                    existing = media_manager.streams.get(stream_id)
-                                    is_running = (
-                                        existing
-                                        and existing.proc
-                                        and existing.proc.returncode is None
-                                    )
-                                    if not is_running:
+                                    # Check if active in database
+                                    stream_exists = any(stream.stream_id == stream_id for stream in streams)
+                                    if not stream_exists:
+                                        # Delete folder if empty
                                         def is_dir_empty_recursive(d: Path) -> bool:
                                             for item in d.iterdir():
                                                 if item.is_file():
@@ -377,7 +360,7 @@ async def camera_archive_cleanup_loop():
                                         if is_dir_empty_recursive(stream_dir):
                                             import shutil
                                             shutil.rmtree(stream_dir)
-                                            print(f"[cleanup] Removed empty camera directory for non-streaming camera: {stream_dir}")
+                                            print(f"[cleanup] Removed empty camera directory for non-existent stream: {stream_dir}")
                 except Exception as ex:
                     print(f"[cleanup] Error cleaning empty camera directories: {ex}")
 

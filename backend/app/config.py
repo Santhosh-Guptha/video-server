@@ -2,7 +2,11 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "camera-video-platform"
-    database_url: str = "sqlite+aiosqlite:///./data/app.db"
+    # Switch default to postgresql+asyncpg for production, fallback to SQLite for local development without container
+    database_url: str = "postgresql+asyncpg://vms_admin:vms_secure_password@localhost:5432/vms_db"
+    redis_url: str = "redis://localhost:6379/0"
+    mediamtx_api_url: str = "http://localhost:9997"
+    
     upstream_camera_api_url: str = "https://uat1.iviscloud.net/api/cameras/camera-videoserver"
     upstream_timeout_seconds: float = 10.0
     ffmpeg_path: str = "ffmpeg"
@@ -20,3 +24,4 @@ class Settings(BaseSettings):
         env_file = ".env"
 
 settings = Settings()
+

@@ -1,12 +1,74 @@
+version: '3.8'
+
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: vms-postgres
+    environment:
+      POSTGRES_USER: vms_admin
+      POSTGRES_PASSWORD: vms_secure_password
+      POSTGRES_DB: vms_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vms_admin -d vms_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: vms-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: vms-mediamtx
+    ports:
+      - "8554:8554"  # RTSP Ingress/Egress
+      - "1935:1935"  # RTMP Push Ingress
+      - "8080:8080"  # HLS Egress
+      - "8889:8889"  # WebRTC (WHEP/WHIP) Egress/Ingress
+      - "9997:9997"  # REST API Port
+    volumes:
+      - ./backend/app/mediamtx.yml:/mediamtx.yml:ro
+      - ./backend/data:/app/data
+    depends_on:
+      - redis
+
   backend:
     build: ./backend
+    container_name: vms-backend
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://vms_admin:vms_secure_password@postgres:5432/vms_db
+      - REDIS_URL=redis://redis:6379/0
+      - MEDIAMTX_API_URL=http://mediamtx:9997
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/data:/app/data
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+
   frontend:
     image: node:20-alpine
+    container_name: vms-frontend
     working_dir: /app
     volumes:
       - ./frontend:/app
@@ -15,3 +77,7 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+
+volumes:
+  pgdata:
+  redisdata:

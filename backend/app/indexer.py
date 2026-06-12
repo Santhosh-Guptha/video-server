@@ -5,9 +5,8 @@ from pathlib import Path
 from datetime import datetime
 from sqlalchemy import select, delete
 
-from .models import RecordingSegment, Camera
+from .models import RecordingSegment, CameraStream
 from .config import settings
-
 
 def scan_files_sync(recording_dir):
     """
@@ -35,7 +34,6 @@ def scan_files_sync(recording_dir):
                 pass
     return results
 
-
 async def index_recordings(session, recording_dir):
     # 1. Scan filesystem in a background thread to keep event loop free
     scanned_files = await asyncio.to_thread(scan_files_sync, recording_dir)
@@ -57,9 +55,9 @@ async def index_recordings(session, recording_dir):
             )
         await session.commit()
 
-    # 4. Fetch camera names map in a single query
-    cam_res = await session.execute(select(Camera.stream_id, Camera.name))
-    camera_names = {row[0]: row[1] for row in cam_res.all()}
+    # 4. Fetch registered camera stream_ids to satisfy Foreign Key constraints
+    stream_res = await session.execute(select(CameraStream.stream_id))
+    registered_streams = set(stream_res.scalars().all())
 
     # 5. Insert new recording segments
     added_count = 0
@@ -69,7 +67,9 @@ async def index_recordings(session, recording_dir):
             continue
 
         stream_id = item["stream_id"]
-        camera_name = camera_names.get(stream_id, stream_id)
+        # Skip files that belong to unregistered streams to prevent FK errors
+        if stream_id not in registered_streams:
+            continue
         
         match = re.search(r"(\d{8})_(\d{6})", item["name"])
         if match:
@@ -88,7 +88,6 @@ async def index_recordings(session, recording_dir):
         session.add(
             RecordingSegment(
                 stream_id=stream_id,
-                camera_name=camera_name,
                 file_path=path_str,
                 start_ts=start_ts,
                 end_ts=end_ts

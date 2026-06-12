@@ -4,7 +4,10 @@ import {
   Activity,
   Shield,
   HardDrive,
-  Check
+  Check,
+  AlertTriangle,
+  Flame,
+  Radio
 } from "lucide-react";
 
 import type { Camera as CameraType } from "../types";
@@ -58,45 +61,107 @@ export function Dashboard({
     );
   });
 
-  const active = cameras.filter((c) => c.active).length;
-  const inactive = cameras.length - active;
+  // Calculate stats across all cameras and streams
+  const activeCameras = cameras.filter((c) => c.active).length;
+  const inactiveCameras = cameras.length - activeCameras;
+
+  let onlineStreams = 0;
+  let connectingStreams = 0;
+  let reconnectingStreams = 0;
+  let offlineStreams = 0;
+  let errorStreams = 0;
+  let totalStreams = 0;
+
+  cameras.forEach((c) => {
+    if (c.streams && c.streams.length > 0) {
+      c.streams.forEach((s) => {
+        totalStreams++;
+        if (s.status === 'ONLINE') onlineStreams++;
+        else if (s.status === 'CONNECTING') connectingStreams++;
+        else if (s.status === 'RECONNECTING') reconnectingStreams++;
+        else if (s.status === 'OFFLINE' || s.status === 'REGISTERED') offlineStreams++;
+        else if (s.status === 'ERROR') errorStreams++;
+      });
+    } else {
+      totalStreams++;
+      if (c.active) onlineStreams++;
+      else offlineStreams++;
+    }
+  });
 
   return (
     <section className="content" id="dashboard">
       <div className="hero">
         <div>
-          <div className="eyebrow">Camera Registry</div>
-
-          <h1>Connected Camera Streams</h1>
-
+          <div className="eyebrow">Enterprise VMS Ingestion</div>
+          <h1>Camera Streams & Ingest Status</h1>
           <p>
-            Search, inspect and manage camera streams.
-            Each camera may contain HD, NORMAL and ARCHIVE streams.
+            Monitor stream health, resolution mappings, and active transcode pipelines.
+            Camera streams are dynamically ingested and transcoded via MediaMTX and monitored by FastAPI.
           </p>
         </div>
 
-        <div className="heroStats">
+        <div className="heroStats" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
           <div className="heroStat">
             <Camera size={18} />
             <div>
               <strong>{cameras.length}</strong>
-              <span>Total Streams</span>
+              <span>Cameras</span>
             </div>
           </div>
 
           <div className="heroStat">
             <Shield size={18} />
             <div>
-              <strong>{active}</strong>
-              <span>Active</span>
+              <strong>{activeCameras}</strong>
+              <span>Active Cams</span>
+            </div>
+          </div>
+
+          <div className="heroStat" style={{ borderLeft: '1px solid rgba(255, 255, 255, 0.1)', paddingLeft: '15px' }}>
+            <Radio size={18} style={{ color: '#10b981' }} />
+            <div>
+              <strong style={{ color: '#10b981' }}>{onlineStreams}</strong>
+              <span>Streams Online</span>
             </div>
           </div>
 
           <div className="heroStat">
-            <HardDrive size={18} />
+            <Flame size={18} style={{ color: '#f59e0b' }} />
             <div>
-              <strong>{inactive}</strong>
-              <span>Inactive</span>
+              <strong style={{ color: '#f59e0b' }}>{connectingStreams + reconnectingStreams}</strong>
+              <span>Syncing</span>
+            </div>
+          </div>
+
+          <div className="heroStat">
+            <AlertTriangle size={18} style={{ color: '#ef4444' }} />
+            <div>
+              <strong style={{ color: '#ef4444' }}>{errorStreams}</strong>
+              <span>Errors</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stream Health Dashboard Panel */}
+      <div className="streamDashboardPanel" style={{ display: 'flex', gap: '20px', margin: '20px 0', background: 'rgba(30, 41, 59, 0.5)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+        <div style={{ flex: 1 }}>
+          <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#94a3b8' }}>Ingestion Pipe Statistics</h4>
+          <div style={{ display: 'flex', gap: '30px' }}>
+            <div>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>WebRTC WHEP Ready</span>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#f8fafc' }}>{onlineStreams} streams</div>
+            </div>
+            <div>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>HLS Fallback Active</span>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#38bdf8' }}>{totalStreams} streams</div>
+            </div>
+            <div>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>Active Edge Pushes</span>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#a855f7' }}>
+                {cameras.filter(c => c.raw_json.includes('"edgePush"')).length} nodes
+              </div>
             </div>
           </div>
         </div>
@@ -104,11 +169,10 @@ export function Dashboard({
 
       <div className="searchBar">
         <Search size={18} />
-
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name, stream id, FPS, resolution..."
+          placeholder="Search by name, stream ID, codec, status..."
         />
       </div>
 
@@ -116,9 +180,10 @@ export function Dashboard({
         {filtered.map((camera) => {
           const isSelected = selectedStreamIds.includes(camera.stream_id);
           const isFocused = focusedStreamId === camera.stream_id;
+          
           return (
             <button
-              key={camera.pk}
+              key={camera.id}
               className={`cameraCard ${isSelected ? "selected" : ""} ${isFocused ? "focused" : ""}`}
               onClick={() => onSelect(camera)}
             >
@@ -130,7 +195,7 @@ export function Dashboard({
                   <div>
                     <div className="camName">{camera.name}</div>
                     <div className="camSub">
-                      {camera.stream_type} • {camera.stream_id}
+                      ID: {camera.source_camera_id} • {camera.stream_id}
                     </div>
                   </div>
                 </div>
@@ -144,7 +209,23 @@ export function Dashboard({
                 </span>
               </div>
 
-              <div className="cameraMeta">
+              {/* Stream Profiles Area showing dynamic status */}
+              <div className="streamProfilesArea" style={{ display: 'flex', gap: '6px', margin: '12px 0 6px 0', flexWrap: 'wrap' }}>
+                {camera.streams && camera.streams.map((s) => {
+                  let statusClass = "offline";
+                  if (s.status === 'ONLINE') statusClass = "online";
+                  else if (s.status === 'RECONNECTING' || s.status === 'CONNECTING') statusClass = "warning";
+                  else if (s.status === 'ERROR') statusClass = "error";
+                  
+                  return (
+                    <span key={s.id} className={`streamBadge ${statusClass}`}>
+                      {s.profile_type}: {s.status.toLowerCase()}
+                    </span>
+                  );
+                })}
+              </div>
+
+              <div className="cameraMeta" style={{ borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '10px' }}>
                 <div>
                   <span>Codec</span>
                   <strong>{codecLabel(camera.archive_type)}</strong>

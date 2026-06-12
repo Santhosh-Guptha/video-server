@@ -1,9 +1,26 @@
-export type Camera = {
-  pk: number
-  source_camera_id: number
+export type CameraStream = {
+  id: string
+  camera_id: string
   stream_id: string
+  profile_type: 'MAIN' | 'SUB' | 'MOBILE'
+  resolution: string
+  fps: number
+  codec: string
+  bitrate?: number | null
+  stream_url: string
+  status: 'REGISTERED' | 'CONNECTING' | 'ONLINE' | 'DEGRADED' | 'RECONNECTING' | 'OFFLINE' | 'ERROR'
+  error_message?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type Camera = {
+  id: string
+  pk?: number // Backward compatibility
+  source_camera_id: number
+  stream_id: string // Primary stream shortcut
   name: string
-  stream_type: string
+  stream_type: string // Primary stream type shortcut
   rtsp_url?: string | null
   fps?: number | null
   width?: number | null
@@ -16,6 +33,9 @@ export type Camera = {
   decode_type?: string | null
   server_http_port?: number | null
   raw_json: string
+  streams: CameraStream[]
+  created_at: string
+  updated_at: string
 }
 
 export type RecordingSegment = {
