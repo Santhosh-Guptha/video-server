@@ -23,6 +23,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
   const [rangeStartTs, setRangeStartTs] = useState<number>(0)
   const [isDragging, setIsDragging] = useState(false)
   const timelineRef = useRef<HTMLDivElement | null>(null)
+  const [currentStreamStartTs, setCurrentStreamStartTs] = useState<number>(0)
 
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -108,6 +109,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     setStreamUrl('')
     setHasSearched(false)
     setSegments([])
+    setCurrentStreamStartTs(0)
   }, [streamId])
 
   async function loadPlaybackData(targetStartTs: number) {
@@ -126,6 +128,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
           const actualStartTs = Math.max(targetStartTs, segs[0].start_ts)
           const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${actualStartTs}&end_ts=${endTs}`
           setStreamUrl(url)
+          setCurrentStreamStartTs(actualStartTs)
           setHasSearched(true)
           setTimeout(() => {
             if (videoRef.current) {
@@ -154,7 +157,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
   const handleTimeUpdate = () => {
     const video = videoRef.current
     if (!video || segments.length === 0 || isDragging) return
-    const absTs = getAbsoluteTsFromVideoTime(video.currentTime, segments, rangeStartTs)
+    const absTs = getAbsoluteTsFromVideoTime(video.currentTime, segments, rangeStartTs, currentStreamStartTs)
     setCurrentAbsoluteTs(absTs)
   }
 
@@ -163,6 +166,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     const endTs = rangeStartTs + 3600
     const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${targetTs}&end_ts=${endTs}`
     setStreamUrl(url)
+    setCurrentStreamStartTs(targetTs)
     setTimeout(() => {
       if (videoRef.current) {
         videoRef.current.load()
@@ -212,9 +216,15 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
-  function getAbsoluteTsFromVideoTime(videoTime: number, segs: any[], startTs: number): number {
+  function getAbsoluteTsFromVideoTime(videoTime: number, segs: any[], startTs: number, streamStartTs: number): number {
+    const startIndex = segs.findIndex(seg => seg.end_ts >= streamStartTs)
+    if (startIndex === -1) {
+      return (streamStartTs || startTs) + videoTime
+    }
+
     let remaining = videoTime
-    for (const seg of segs) {
+    for (let i = startIndex; i < segs.length; i++) {
+      const seg = segs[i]
       const duration = seg.end_ts - seg.start_ts
       if (remaining <= duration) {
         return seg.start_ts + remaining
@@ -224,7 +234,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     if (segs.length > 0) {
       return segs[segs.length - 1].end_ts
     }
-    return startTs + videoTime
+    return (streamStartTs || startTs) + videoTime
   }
 
   return (
