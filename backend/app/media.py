@@ -103,8 +103,8 @@ class MediaManager:
         tee_output = (
             f"[f=hls:"
             f"hls_time=1:"
-            f"hls_list_size=8:"
-            f"hls_flags=delete_segments+append_list+omit_endlist:"
+            f"hls_list_size=5:"
+            f"hls_flags=delete_segments+omit_endlist:"
             f"master_pl_name={os.path.basename(master)}]"
             f"{playlist}"
             f"|"
@@ -131,12 +131,21 @@ class MediaManager:
 
             "-stimeout",
             "10000000",
-	   
+
+            "-use_wallclock_as_timestamps",
+            "1",
+
             "-fflags",
-            "+genpts",
+            "+genpts+nobuffer",
+
+            "-probesize",
+            "100000",
+
+            "-analyzeduration",
+            "100000",
 
             "-vsync",
-	    "1",
+            "1",
 
             "-i",
             rtsp_url,
@@ -147,17 +156,11 @@ class MediaManager:
             "-map",
             "0:a:0?",
 
-            "-fflags",
-            "+genpts",
-
-            "-use_wallclock_as_timestamps",
-            "1",
-
             "-c:v",
             "libx264",
 
             "-preset",
-            "veryfast",
+            "ultrafast",
 
             "-tune",
             "zerolatency",
@@ -166,7 +169,7 @@ class MediaManager:
             "yuv420p",
 
             "-g",
-            "30",
+            "15",
 
             "-c:a",
             "aac",
@@ -175,7 +178,7 @@ class MediaManager:
             "44100",
 
             "-b:a",
-	    "128k",
+            "128k",
 
             "-f",
             "tee",
