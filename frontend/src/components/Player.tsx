@@ -8,9 +8,10 @@ type PlayerProps = {
   isFocused?: boolean
   onClose?: () => void
   onFocus?: () => void
+  minimal?: boolean
 }
 
-export function Player({ src, posterLabel, isFocused, onClose, onFocus }: PlayerProps) {
+export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const [muted, setMuted] = useState(true)
@@ -63,61 +64,95 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus }: Player
   }, [muted])
 
   return (
-    <div className={`playerShell ${isFocused ? 'focused' : ''}`} onClick={onFocus} style={{ cursor: onFocus ? 'pointer' : 'default' }}>
-      <div className="playerHeader">
-        <div>
-          <div className="eyebrow">{posterLabel ?? 'Live feed'}</div>
-          <h3 className="panelTitle">Real-time camera view</h3>
+    <div className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} onClick={onFocus} style={{ cursor: onFocus ? 'pointer' : 'default' }}>
+      {!minimal && (
+        <div className="playerHeader">
+          <div>
+            <div className="eyebrow">{posterLabel ?? 'Live feed'}</div>
+            <h3 className="panelTitle">Real-time camera view</h3>
+          </div>
+          <div className="playerChips" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {onClose && (
+              <button
+                className="playerCloseBtn"
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onClose()
+                }}
+                title="Deselect camera"
+              >
+                <X size={16} />
+              </button>
+            )}
+            <span className="chip chipLive"><span className="dotPulse" />Live</span>
+            <span className="chip">HLS</span>
+            <span className="chip">Low latency</span>
+          </div>
         </div>
-        <div className="playerChips" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {onClose && (
-            <button
-              className="playerCloseBtn"
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onClose()
-              }}
-              title="Deselect camera"
-            >
-              <X size={16} />
-            </button>
-          )}
-          <span className="chip chipLive"><span className="dotPulse" />Live</span>
-          <span className="chip">HLS</span>
-          <span className="chip">Low latency</span>
-        </div>
-      </div>
+      )}
 
       <div className="playerViewport">
+        {minimal && (
+          <div className="minimalCameraLabel">
+            {posterLabel ?? 'Live feed'}
+          </div>
+        )}
+        {minimal && onClose && (
+          <button
+            className="playerCloseBtn"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            title="Deselect camera"
+            style={{
+              position: 'absolute',
+              top: '10px',
+              right: '10px',
+              zIndex: 11,
+              background: 'rgba(15, 23, 42, 0.75)',
+              backdropFilter: 'blur(4px)',
+              border: '1px solid rgba(148, 163, 184, 0.15)',
+              color: '#fca5a5'
+            }}
+          >
+            <X size={14} />
+          </button>
+        )}
         {!loaded && (
           <div className="playerOverlay">
             <Loader2 className="spin" size={18} />
             <div className="overlayText">Buffering stream…</div>
           </div>
         )}
-        <video ref={videoRef} className="videoEl" controls autoPlay playsInline muted={muted} />
+        <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} />
         <div className="fakeStamp">LIVE</div>
       </div>
 
-      <div className="playerControls">
-        <button className="miniBtn" type="button" onClick={() => setMuted(m => !m)}>
-          {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-          {muted ? 'Unmute' : 'Mute'}
-        </button>
-        <button className="miniBtn" type="button" onClick={() => videoRef.current?.play().catch(() => {})}>
-          <Play size={16} /> Play
-        </button>
-        <button className="miniBtn" type="button" onClick={() => videoRef.current?.requestFullscreen?.()}>
-          <Maximize2 size={16} /> Fullscreen
-        </button>
-        <div className="playerHint">{src ? src.replace(window.location.origin, '') : 'No stream selected'}</div>
-      </div>
+      {!minimal && (
+        <div className="playerControls">
+          <button className="miniBtn" type="button" onClick={() => setMuted(m => !m)}>
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            {muted ? 'Unmute' : 'Mute'}
+          </button>
+          <button className="miniBtn" type="button" onClick={() => videoRef.current?.play().catch(() => {})}>
+            <Play size={16} /> Play
+          </button>
+          <button className="miniBtn" type="button" onClick={() => videoRef.current?.requestFullscreen?.()}>
+            <Maximize2 size={16} /> Fullscreen
+          </button>
+          <div className="playerHint">{src ? src.replace(window.location.origin, '') : 'No stream selected'}</div>
+        </div>
+      )}
 
-      <div className="playerFooter">
-        <AlertCircle size={14} />
-        <span>If the stream is black, the camera may still be loading or the HLS playlist may not be ready yet.</span>
-      </div>
+      {!minimal && (
+        <div className="playerFooter">
+          <AlertCircle size={14} />
+          <span>If the stream is black, the camera may still be loading or the HLS playlist may not be ready yet.</span>
+        </div>
+      )}
     </div>
   )
 }

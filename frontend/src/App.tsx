@@ -6,7 +6,7 @@ import { Dashboard } from './pages/Dashboard'
 import { CameraDetails } from './pages/CameraDetails'
 import { Playback } from './pages/Playback'
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
-import { Activity, RefreshCcw, ServerCrash, Square, Play, X } from 'lucide-react'
+import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2 } from 'lucide-react'
 
 export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -23,6 +23,26 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [liveLoading, setLiveLoading] = useState(false)
   const [lastSync, setLastSync] = useState('Never')
+  const [isFullView, setIsFullView] = useState(false)
+
+  // Exit full view automatically if grid is cleared
+  useEffect(() => {
+    if (selectedStreams.length === 0) {
+      setIsFullView(false)
+    }
+  }, [selectedStreams.length])
+
+  // Keydown listener for Esc key to exit full view
+  useEffect(() => {
+    if (!isFullView) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsFullView(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isFullView])
 
   async function loadCameras() {
     setLoading(true)
@@ -235,6 +255,19 @@ export default function App() {
                   >
                     Clear
                   </button>
+                  <button
+                    className="batchBtn"
+                    onClick={() => setIsFullView(true)}
+                    disabled={selectedStreams.length === 0}
+                    style={{
+                      background: selectedStreams.length > 0 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(15, 23, 42, 0.5)',
+                      color: selectedStreams.length > 0 ? '#60a5fa' : '#cbd5e1',
+                      borderColor: selectedStreams.length > 0 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(148, 163, 184, 0.14)',
+                    }}
+                    title="View selected cameras in immersive fullscreen"
+                  >
+                    <Maximize2 size={14} /> Full View
+                  </button>
                 </div>
               </div>
 
@@ -287,6 +320,38 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {isFullView && selectedStreams.length > 0 && (
+        <div className="fullscreenVideoWall">
+          <div className={`videoGrid layout-${layout}`}>
+            {selectedStreams.map((cam) => (
+              <Player
+                key={cam.stream_id}
+                src={`/api/streams/${encodeURIComponent(cam.stream_id)}/live/index.m3u8`}
+                posterLabel={`${cam.name} — ${cam.stream_type}`}
+                isFocused={selected?.stream_id === cam.stream_id}
+                onFocus={() => setSelected(cam)}
+                onClose={() => {
+                  const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
+                  setSelectedStreams(remaining)
+                  if (selected?.stream_id === cam.stream_id) {
+                    setSelected(remaining[0] || undefined)
+                  }
+                }}
+                minimal={true}
+              />
+            ))}
+          </div>
+          <button
+            className="exitFullViewBtn"
+            type="button"
+            onClick={() => setIsFullView(false)}
+            title="Exit Full View"
+          >
+            <Minimize2 size={18} /> Exit Full View
+          </button>
+        </div>
+      )}
     </div>
   )
 }
