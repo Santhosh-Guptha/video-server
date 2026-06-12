@@ -5,9 +5,11 @@ type SidebarProps = {
   totalCameras: number
   liveCameras: number
   lastSyncText: string
+  activeTab: 'dashboard' | 'live' | 'playback'
+  setActiveTab: (tab: 'dashboard' | 'live' | 'playback') => void
 }
 
-export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText }: SidebarProps) {
+export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, activeTab, setActiveTab }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="brandBlock">
@@ -41,9 +43,30 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText }: 
       </div>
 
       <nav className="navList">
-        <a href="#dashboard" className="navItem active">Dashboard</a>
-        <a href="#live" className="navItem">Live View</a>
-        <a href="#playback" className="navItem">Playback</a>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'dashboard' ? 'active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+          style={{ textAlign: 'left', width: '100%' }}
+        >
+          Dashboard
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'live' ? 'active' : ''}`}
+          onClick={() => setActiveTab('live')}
+          style={{ textAlign: 'left', width: '100%' }}
+        >
+          Live View
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'playback' ? 'active' : ''}`}
+          onClick={() => setActiveTab('playback')}
+          style={{ textAlign: 'left', width: '100%' }}
+        >
+          Playback
+        </button>
       </nav>
 
       <div className="sidebarNote">The backend is wired to <code>/api/cameras/camera-videoserver</code>.</div>

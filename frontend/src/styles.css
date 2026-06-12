@@ -101,6 +101,7 @@ code { padding: 2px 6px; border-radius: 8px; background: rgba(148,163,184,0.14);
 }
 
 .workspace { display: grid; grid-template-columns: minmax(500px, 1.15fr) minmax(520px, 0.95fr); gap: 18px; align-items: start; }
+.workspace.singleTab { display: block; }
 .content { display: grid; gap: 16px; min-width: 0; }
 
 .hero {

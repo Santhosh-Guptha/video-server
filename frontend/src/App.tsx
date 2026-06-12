@@ -15,6 +15,7 @@ export default function App() {
   const [selectedStreams, setSelectedStreams] = useState<Camera[]>([])
 
   const [layout, setLayout] = useState(4) 
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback'>('dashboard')
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
   const [playbackSegments, setPlaybackSegments] = useState<RecordingSegment[]>([])
@@ -148,7 +149,14 @@ export default function App() {
 
   return (
     <div className="appShell">
-      <Sidebar onRefresh={handleSync} totalCameras={cameras.length} liveCameras={liveCount} lastSyncText={lastSync} />
+      <Sidebar
+        onRefresh={handleSync}
+        totalCameras={cameras.length}
+        liveCameras={liveCount}
+        lastSyncText={lastSync}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+      />
 
       <main className="mainPanel">
         <header className="topBar">
@@ -161,119 +169,138 @@ export default function App() {
           </div>
         </header>
 
-        <div className="workspace">
-          <Dashboard
-            cameras={cameras}
-            query={query}
-            setQuery={setQuery}
-            selectedStreamIds={selectedStreams.map((c) => c.stream_id)}
-            focusedStreamId={selected?.stream_id}
-            onSelect={(cam) => {
-              const isSelected = selectedStreams.some(x => x.stream_id === cam.stream_id)
-              if (isSelected) {
-                const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
-                setSelectedStreams(remaining)
-                if (selected?.stream_id === cam.stream_id) {
-                  setSelected(remaining[0] || undefined)
+        <div className="workspace singleTab">
+          {activeTab === 'dashboard' && (
+            <Dashboard
+              cameras={cameras}
+              query={query}
+              setQuery={setQuery}
+              selectedStreamIds={selectedStreams.map((c) => c.stream_id)}
+              focusedStreamId={selected?.stream_id}
+              onSelect={(cam) => {
+                const isSelected = selectedStreams.some(x => x.stream_id === cam.stream_id)
+                if (isSelected) {
+                  const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
+                  setSelectedStreams(remaining)
+                  if (selected?.stream_id === cam.stream_id) {
+                    setSelected(remaining[0] || undefined)
+                  }
+                } else {
+                  if (selectedStreams.length >= layout) {
+                    setStatusText(`Max layout limit (${layout}) reached. Change layout grid to add more.`)
+                    return
+                  }
+                  setSelectedStreams(prev => [...prev, cam])
+                  setSelected(cam)
                 }
-              } else {
-                if (selectedStreams.length >= layout) {
-                  setStatusText(`Max layout limit (${layout}) reached. Change layout grid to add more.`)
-                  return
-                }
-                setSelectedStreams(prev => [...prev, cam])
-                setSelected(cam)
-              }
-            }}
-          />
+                setActiveTab('live')
+              }}
+            />
+          )}
 
-          <div className="streamArea">
-            <div className="controlsBar">
-              <div className="controlGroup">
-                <span className="controlLabel">Layout Grid</span>
-                <div className="btnToggleGroup">
-                  {[1, 2, 4, 9].map((size) => (
-                    <button
-                      key={size}
-                      className={`toggleBtn ${layout === size ? 'active' : ''}`}
-                      onClick={() => {
-                        setLayout(size)
-                        if (selectedStreams.length > size) {
-                          const truncated = selectedStreams.slice(0, size)
-                          setSelectedStreams(truncated)
-                          if (selected && !truncated.some(s => s.stream_id === selected.stream_id)) {
-                            setSelected(truncated[0] || undefined)
+          {activeTab === 'live' && (
+            <div className="streamArea">
+              <div className="controlsBar">
+                <div className="controlGroup">
+                  <span className="controlLabel">Layout Grid</span>
+                  <div className="btnToggleGroup">
+                    {[1, 2, 4, 9].map((size) => (
+                      <button
+                        key={size}
+                        className={`toggleBtn ${layout === size ? 'active' : ''}`}
+                        onClick={() => {
+                          setLayout(size)
+                          if (selectedStreams.length > size) {
+                            const truncated = selectedStreams.slice(0, size)
+                            setSelectedStreams(truncated)
+                            if (selected && !truncated.some(s => s.stream_id === selected.stream_id)) {
+                              setSelected(truncated[0] || undefined)
+                            }
                           }
-                        }
-                      }}
-                    >
-                      {size === 1 ? '1x1' : size === 2 ? '1x2' : size === 4 ? '2x2' : '3x3'}
-                    </button>
-                  ))}
+                        }}
+                      >
+                        {size === 1 ? '1x1' : size === 2 ? '1x2' : size === 4 ? '2x2' : '3x3'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="controlGroup">
+                  <button
+                    className="batchBtn start"
+                    onClick={startAll}
+                    disabled={selectedStreams.length === 0}
+                  >
+                    <Play size={14} /> Start All
+                  </button>
+                  <button
+                    className="batchBtn stop"
+                    onClick={stopAll}
+                    disabled={selectedStreams.length === 0}
+                  >
+                    <Square size={14} /> Stop All
+                  </button>
+                  <button
+                    className="batchBtn"
+                    onClick={() => {
+                      setSelectedStreams([])
+                      setSelected(undefined)
+                    }}
+                    disabled={selectedStreams.length === 0}
+                  >
+                    Clear
+                  </button>
                 </div>
               </div>
 
-              <div className="controlGroup">
-                <button
-                  className="batchBtn start"
-                  onClick={startAll}
-                  disabled={selectedStreams.length === 0}
-                >
-                  <Play size={14} /> Start All
-                </button>
-                <button
-                  className="batchBtn stop"
-                  onClick={stopAll}
-                  disabled={selectedStreams.length === 0}
-                >
-                  <Square size={14} /> Stop All
-                </button>
-                <button
-                  className="batchBtn"
-                  onClick={() => {
-                    setSelectedStreams([])
-                    setSelected(undefined)
-                  }}
-                  disabled={selectedStreams.length === 0}
-                >
-                  Clear
-                </button>
+              <div className="playerWrap">
+                {selectedStreams.length > 0 ? (
+                  <div className={`videoGrid layout-${layout}`}>
+                    {selectedStreams.map((cam) => (
+                      <Player
+                        key={cam.stream_id}
+                        src={`/api/streams/${encodeURIComponent(cam.stream_id)}/live/index.m3u8`}
+                        posterLabel={`${cam.name} — ${cam.stream_type}`}
+                        isFocused={selected?.stream_id === cam.stream_id}
+                        onFocus={() => setSelected(cam)}
+                        onClose={() => {
+                          const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
+                          setSelectedStreams(remaining)
+                          if (selected?.stream_id === cam.stream_id) {
+                            setSelected(remaining[0] || undefined)
+                          }
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="emptyStream">
+                    <ServerCrash size={42} />
+                    <h3>No camera selected</h3>
+                    <p>Go to the Dashboard tab on the left to select camera feeds.</p>
+                  </div>
+                )}
+                {liveLoading && <div className="liveLoading">Starting stream…</div>}
               </div>
-            </div>
 
-            <div className="playerWrap">
-              {selectedStreams.length > 0 ? (
-                <div className={`videoGrid layout-${layout}`}>
-                  {selectedStreams.map((cam) => (
-                    <Player
-                      key={cam.stream_id}
-                      src={`/api/streams/${encodeURIComponent(cam.stream_id)}/live/index.m3u8`}
-                      posterLabel={`${cam.name} — ${cam.stream_type}`}
-                      isFocused={selected?.stream_id === cam.stream_id}
-                      onFocus={() => setSelected(cam)}
-                      onClose={() => {
-                        const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
-                        setSelectedStreams(remaining)
-                        if (selected?.stream_id === cam.stream_id) {
-                          setSelected(remaining[0] || undefined)
-                        }
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="emptyStream">
-                  <ServerCrash size={42} />
-                  <h3>No camera selected</h3>
-                  <p>Pick one or more streams from the registry on the left to start live view grid.</p>
-                </div>
-              )}
-              {liveLoading && <div className="liveLoading">Starting stream…</div>}
+              <CameraDetails
+                camera={selected}
+                recordings={recordings}
+                onStartLive={handleStartLive}
+                onStopLive={handleStopLive}
+                onOpenPlayback={async () => {
+                  await handlePlayback()
+                  setActiveTab('playback')
+                }}
+              />
             </div>
+          )}
 
-            <CameraDetails camera={selected} recordings={recordings} onStartLive={handleStartLive} onStopLive={handleStopLive} onOpenPlayback={handlePlayback} />
-            <Playback streamId={selected?.stream_id} segments={playbackSegments} />
-          </div>
+          {activeTab === 'playback' && (
+            <div className="streamArea">
+              <Playback streamId={selected?.stream_id} segments={playbackSegments} />
+            </div>
+          )}
         </div>
       </main>
     </div>
