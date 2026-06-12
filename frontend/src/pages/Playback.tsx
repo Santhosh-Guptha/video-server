@@ -121,14 +121,22 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
       if (response.ok) {
         const segs = await response.json()
         setSegments(segs)
-        setRangeStartTs(targetStartTs)
-        setCurrentAbsoluteTs(targetStartTs)
 
         if (segs.length > 0) {
-          const actualStartTs = Math.max(targetStartTs, segs[0].start_ts)
-          const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${actualStartTs}&end_ts=${endTs}`
+          // Check if the backend shifted the start time because there were no recordings in the requested hour
+          let alignedRangeStart = targetStartTs
+          if (segs[0].start_ts > targetStartTs + 3600 || segs[0].start_ts < targetStartTs) {
+            alignedRangeStart = segs[0].start_ts
+          }
+
+          setRangeStartTs(alignedRangeStart)
+          const actualStartTs = Math.max(alignedRangeStart, segs[0].start_ts)
+          const streamEndTs = alignedRangeStart + 3600
+          const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${actualStartTs}&end_ts=${streamEndTs}`
+          
           setStreamUrl(url)
           setCurrentStreamStartTs(actualStartTs)
+          setCurrentAbsoluteTs(actualStartTs)
           setHasSearched(true)
           setTimeout(() => {
             if (videoRef.current) {
@@ -136,6 +144,8 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
             }
           }, 50)
         } else {
+          setRangeStartTs(targetStartTs)
+          setCurrentAbsoluteTs(targetStartTs)
           setStreamUrl('')
           setHasSearched(true)
         }

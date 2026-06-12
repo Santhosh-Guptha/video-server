@@ -281,6 +281,30 @@ async def playback(stream_id: str, start_ts: float, end_ts: float, session: Anno
         .order_by(RecordingSegment.start_ts.asc())
     )
     segments = list(res.scalars().all())
+
+    # Fallback: if no segments are found in range, find the next nearest segment starting after start_ts
+    if not segments:
+        stmt = (
+            select(RecordingSegment)
+            .where(RecordingSegment.stream_id == stream_id)
+            .where(RecordingSegment.start_ts >= start_ts)
+            .order_by(RecordingSegment.start_ts.asc())
+            .limit(1)
+        )
+        fallback_res = await session.execute(stmt)
+        nearest = fallback_res.scalar_one_or_none()
+        if nearest:
+            new_start_ts = nearest.start_ts
+            new_end_ts = new_start_ts + 3600
+            res = await session.execute(
+                select(RecordingSegment)
+                .where(RecordingSegment.stream_id == stream_id)
+                .where(RecordingSegment.end_ts >= new_start_ts)
+                .where(RecordingSegment.start_ts <= new_end_ts)
+                .order_by(RecordingSegment.start_ts.asc())
+            )
+            segments = list(res.scalars().all())
+
     return segments
 
 @app.get("/api/cameras/{stream_id}/recordings")
