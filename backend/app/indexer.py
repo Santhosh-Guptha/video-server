@@ -31,6 +31,15 @@ async def index_recordings(session, recording_dir):
             else stream_id
         )
 
+        # Clean up orphaned database entries for files deleted from disk
+        db_segs = await session.execute(
+            select(RecordingSegment).where(RecordingSegment.stream_id == stream_id)
+        )
+        for seg in db_segs.scalars().all():
+            if not Path(seg.file_path).exists():
+                print(f"[indexer] Removing orphaned database segment for missing file: {seg.file_path}")
+                await session.delete(seg)
+
         for mp4 in stream_dir.glob("*.mp4"):
 
             existing = await session.execute(
