@@ -24,7 +24,19 @@ if [ -f /etc/debian_version ]; then
         exit 1
     fi
     apt-get update -y
-    apt-get install -y python3 python3-pip python3-venv nodejs npm ffmpeg curl
+    apt-get install -y python3 python3-pip python3-venv ffmpeg curl
+
+    # Install nodejs if not already present; NodeSource nodejs automatically includes npm
+    if ! command -v node &> /dev/null; then
+        echo "Node.js not found, installing nodejs..."
+        apt-get install -y nodejs
+    fi
+
+    # Check if npm is available; only attempt standalone npm install if not present
+    if ! command -v npm &> /dev/null; then
+        echo "npm not found, attempting to install standalone npm..."
+        apt-get install -y npm || echo "Warning: npm package installation failed, but proceeding anyway."
+    fi
 else
     echo "Warning: Non-Debian based Linux detected. Please ensure python3, pip, venv, nodejs, npm, and ffmpeg are installed."
 fi
