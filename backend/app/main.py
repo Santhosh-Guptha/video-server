@@ -48,7 +48,14 @@ async def startup():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     except Exception as e:
-        print(f"[startup] DB creation warning (Alembic should run first): {e}")
+        print(f"[startup] PostgreSQL connection/migration failed: {e}. Falling back to local SQLite.")
+        from .db import reset_db_engine
+        sqlite_url = "sqlite+aiosqlite:///./data/app.db"
+        Path("./data").mkdir(parents=True, exist_ok=True)
+        reset_db_engine(sqlite_url)
+        # Create SQLite tables
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     Path(settings.recording_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.hls_dir).mkdir(parents=True, exist_ok=True)

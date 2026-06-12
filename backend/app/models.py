@@ -1,10 +1,43 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, ForeignKey, Enum, text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, ForeignKey, Enum, text, CHAR
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
+
+class GUID(TypeDecorator):
+    """
+    Platform-independent GUID type.
+    Uses PostgreSQL's UUID type, otherwise CHAR(36), storing as string.
+    """
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+            return dialect.type_descriptor(PG_UUID(as_uuid=True))
+        else:
+            return dialect.type_descriptor(CHAR(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif dialect.name == 'postgresql':
+            return value
+        else:
+            if isinstance(value, uuid.UUID):
+                return str(value)
+            return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        else:
+            if not isinstance(value, uuid.UUID):
+                return uuid.UUID(value)
+            return value
 
 class StreamState(str, enum.Enum):
     REGISTERED = "REGISTERED"
@@ -24,7 +57,7 @@ class Camera(Base):
     __tablename__ = "cameras"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         server_default=text("gen_random_uuid()"),
         default=uuid.uuid4
@@ -42,12 +75,12 @@ class CameraStream(Base):
     __tablename__ = "camera_streams"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         server_default=text("gen_random_uuid()"),
         default=uuid.uuid4
     )
-    camera_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
+    camera_id: Mapped[uuid.UUID] = mapped_column(GUID, ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
     stream_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
     profile_type: Mapped[ProfileType] = mapped_column(Enum(ProfileType, name="profile_type_enum"), nullable=False)
     resolution: Mapped[str] = mapped_column(String(32), nullable=False)
