@@ -44,9 +44,10 @@ def map_stream_profile(upstream_type: str) -> ProfileType:
 @app.on_event("startup")
 async def startup():
     # Attempt to auto-create PostgreSQL tables on start (fallback logic)
+    from . import db
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        async with db.engine.begin() as conn:
+            await conn.run_sync(db.Base.metadata.create_all)
     except Exception as e:
         print(f"[startup] PostgreSQL connection/migration failed: {e}. Falling back to local SQLite.")
         from .db import reset_db_engine
@@ -54,8 +55,8 @@ async def startup():
         Path("./data").mkdir(parents=True, exist_ok=True)
         reset_db_engine(sqlite_url)
         # Create SQLite tables
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        async with db.engine.begin() as conn:
+            await conn.run_sync(db.Base.metadata.create_all)
 
     Path(settings.recording_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.hls_dir).mkdir(parents=True, exist_ok=True)
