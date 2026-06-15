@@ -64,28 +64,29 @@ async def camera_scheduler_loop():
 
                     # 2. Query active streams status to update state machine
                     try:
-                        streams_resp = await client.get(f"{settings.mediamtx_api_url}/v3/streams/list")
-                        if streams_resp.status_code == 200:
-                            active_mediamtx_streams_data = streams_resp.json().get("items", {})
-                            active_mediamtx_streams = {}
-                            if isinstance(active_mediamtx_streams_data, dict):
-                                active_mediamtx_streams = active_mediamtx_streams_data
-                            elif isinstance(active_mediamtx_streams_data, list):
-                                for item in active_mediamtx_streams_data:
+                        paths_status_resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list")
+                        if paths_status_resp.status_code == 200:
+                            active_mediamtx_paths_data = paths_status_resp.json().get("items", {})
+                            active_mediamtx_paths = {}
+                            if isinstance(active_mediamtx_paths_data, dict):
+                                active_mediamtx_paths = active_mediamtx_paths_data
+                            elif isinstance(active_mediamtx_paths_data, list):
+                                for item in active_mediamtx_paths_data:
                                     if isinstance(item, dict) and "name" in item:
-                                        active_mediamtx_streams[item["name"]] = item
+                                        active_mediamtx_paths[item["name"]] = item
                         else:
-                            active_mediamtx_streams = {}
-                            print(f"[scheduler] Failed to query active MediaMTX streams: {streams_resp.text}")
+                            active_mediamtx_paths = {}
+                            print(f"[scheduler] Failed to query active MediaMTX paths: {paths_status_resp.text}")
                     except Exception as e:
-                        active_mediamtx_streams = {}
-                        print(f"[scheduler] Connection error querying active streams: {e}")
+                        active_mediamtx_paths = {}
+                        print(f"[scheduler] Connection error querying active paths: {e}")
 
                     # Transition states based on MediaMTX stream activity
                     for stream in active_streams:
-                        stream_info = active_mediamtx_streams.get(stream.stream_id)
+                        stream_info = active_mediamtx_paths.get(stream.stream_id)
                         
-                        if stream_info:
+                        # A stream is considered ONLINE if its path is active and ready (publisher is streaming)
+                        if stream_info and stream_info.get("ready") is True:
                             # Stream is actively pulling/pushing packets
                             # Check number of clients (readers)
                             readers = stream_info.get("readers", [])
@@ -97,13 +98,36 @@ async def camera_scheduler_loop():
                                 await stream_manager.set_stream_state(session, stream, StreamState.ONLINE)
                         else:
                             # Stream is configured but not active/streaming
-                            # If they are in CONNECTING or ONLINE but show inactive, they might be offline or reconnecting
+                            # If they are in CONNECTING or ONLINE but show inactive, they might be offline or connecting
                             if stream.status == StreamState.ONLINE:
-                                await stream_manager.set_stream_state(session, stream, StreamState.RECONNECTING, "Source disconnected")
-                            elif stream.status == StreamState.RECONNECTING:
-                                # If stuck in reconnecting, restart path configuration to force a clean retry
-                                print(f"[scheduler] Stream {stream.stream_id} is stuck reconnecting. Triggering path restart.")
-                                await stream_manager.restart_stream(session, stream)
+                                await stream_manager.set_stream_state(session, stream, StreamState.CONNECTING, "Source disconnected")
+                            elif stream.status == StreamState.CONNECTING:
+                                # Only restart if it has been stuck in CONNECTING for a while (e.g. 60 seconds)
+                                # AND (it is always-on OR it has active readers).
+                                now = datetime.utcnow()
+                                updated_at_naive = stream.updated_at.replace(tzinfo=None) if stream.updated_at else now
+                                elapsed = (now - updated_at_naive).total_seconds()
+                                
+                                if elapsed >= 60:
+                                    # Determine if it's on-demand
+                                    is_on_demand = True
+                                    if stream.always_on:
+                                        is_on_demand = False
+                                    elif stream.last_viewed:
+                                        last_viewed_naive = stream.last_viewed.replace(tzinfo=None)
+                                        if (now - last_viewed_naive).total_seconds() < 900:
+                                            is_on_demand = False
+                                    
+                                    # Get readers count if stream_info exists
+                                    readers_count = 0
+                                    if stream_info:
+                                        readers = stream_info.get("readers", [])
+                                        readers_count = len(readers) if isinstance(readers, list) else 0
+                                    
+                                    # We only restart if it is always-on/active or if someone is actively trying to watch it
+                                    if not is_on_demand or readers_count > 0:
+                                        print(f"[scheduler] Stream {stream.stream_id} is stuck connecting (elapsed: {elapsed:.1f}s, readers: {readers_count}). Triggering path restart.")
+                                        await stream_manager.restart_stream(session, stream)
 
                     # Remove decommissioned paths from MediaMTX config
                     for path_name in mediamtx_paths:
@@ -368,3 +392,20 @@ async def camera_archive_cleanup_loop():
             print(f"[cleanup] Error in archive cleanup loop: {e}")
 
         await asyncio.sleep(settings.cleanup_interval_seconds)
+
+
+async def webrtc_session_watchdog_loop():
+    """
+    Background watchdog that periodically cleans up WebRTC sessions that are no longer
+    active on MediaMTX.
+    """
+    print("[scheduler] Starting WebRTC session watchdog loop...")
+    from .session_manager import webrtc_session_watchdog_cleanup
+    while True:
+        try:
+            async for session in get_session():
+                await webrtc_session_watchdog_cleanup(session)
+        except Exception as e:
+            print(f"[scheduler] Error in WebRTC session watchdog: {e}")
+        await asyncio.sleep(10)
+

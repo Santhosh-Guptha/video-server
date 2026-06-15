@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app.config import settings
 from app.db import Base
 # Import models so they are registered on Base.metadata
-from app.models import Camera, CameraStream, RecordingSegment
+from app.models import Camera, CameraStream, RecordingSegment, WebRTCSession, StreamMetricHistory
 
 # ----------------------------------------------------
 # 2. Setup Alembic configuration

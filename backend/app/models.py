@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, ForeignKey, Enum, text, CHAR
+from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, ForeignKey, Enum, text, CHAR, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
@@ -44,9 +44,10 @@ class StreamState(str, enum.Enum):
     CONNECTING = "CONNECTING"
     ONLINE = "ONLINE"
     DEGRADED = "DEGRADED"
-    RECONNECTING = "RECONNECTING"
+    RECOVERING = "RECOVERING"
     OFFLINE = "OFFLINE"
-    ERROR = "ERROR"
+    FAILED = "FAILED"
+    DISABLED = "DISABLED"
 
 class ProfileType(str, enum.Enum):
     MAIN = "MAIN"
@@ -88,15 +89,22 @@ class CameraStream(Base):
     stream_url: Mapped[str] = mapped_column(Text, nullable=False) # Source RTSP or PUSH publisher url
     status: Mapped[StreamState] = mapped_column(Enum(StreamState, name="stream_state_enum"), default=StreamState.REGISTERED, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    always_on: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    camera_priority: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    last_viewed: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     camera: Mapped[Camera] = relationship("Camera", back_populates="streams")
     segments: Mapped[list["RecordingSegment"]] = relationship("RecordingSegment", back_populates="stream", cascade="all, delete-orphan")
+    webrtc_sessions: Mapped[list["WebRTCSession"]] = relationship("WebRTCSession", back_populates="stream", cascade="all, delete-orphan")
 
 class RecordingSegment(Base):
     __tablename__ = "recording_segments"
+    __table_args__ = (
+        UniqueConstraint("stream_id", "file_path", name="idx_recording_segment_unique"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stream_id: Mapped[str] = mapped_column(String(128), ForeignKey("camera_streams.stream_id", ondelete="CASCADE"), index=True, nullable=False)
@@ -107,3 +115,56 @@ class RecordingSegment(Base):
 
     # Relationships
     stream: Mapped[CameraStream] = relationship("CameraStream", back_populates="segments")
+
+class WebRTCSession(Base):
+    __tablename__ = "webrtc_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    session_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    stream_id: Mapped[str] = mapped_column(String(128), ForeignKey("camera_streams.stream_id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(GUID, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="ACTIVE") # ACTIVE, CLOSED, TIMEOUT
+    protocol: Mapped[str] = mapped_column(String(16), default="WHEP") # WHEP / WHIP
+    client_ip: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Relationships
+    stream: Mapped[CameraStream] = relationship("CameraStream", back_populates="webrtc_sessions")
+
+class StreamMetricHistory(Base):
+    __tablename__ = "stream_metrics_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stream_id: Mapped[str] = mapped_column(String(128), ForeignKey("camera_streams.stream_id", ondelete="CASCADE"), index=True, nullable=False)
+    session_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    fps: Mapped[float] = mapped_column(Float, default=0.0)
+    resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    bitrate: Mapped[float] = mapped_column(Float, default=0.0) # in kbps
+    rtt: Mapped[float | None] = mapped_column(Float, nullable=True) # in ms
+    packet_loss: Mapped[float] = mapped_column(Float, default=0.0)
+    jitter: Mapped[float | None] = mapped_column(Float, nullable=True)
+    frames_dropped: Mapped[int] = mapped_column(Integer, default=0)
+    decoder_latency: Mapped[float | None] = mapped_column(Float, nullable=True) # in ms
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
+
+class StreamRegistry(Base):
+    __tablename__ = "stream_registry"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    stream_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    mediamtx_node: Mapped[str] = mapped_column(String(128), default="node1", nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False) # RTSP_PULL, EDGE_PUSH, WEBRTC_PUBLISH
+    current_viewers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    recording_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="REGISTERED", nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)

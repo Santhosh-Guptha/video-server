@@ -55,7 +55,8 @@ async def test_add_stream_mediamtx_rtsp():
         fps=15,
         codec="H264",
         stream_url="rtsp://camera_ip:554/h264",
-        status=StreamState.REGISTERED
+        status=StreamState.REGISTERED,
+        always_on=True
     )
     
     # Mock HTTP response
@@ -93,7 +94,8 @@ async def test_add_stream_mediamtx_push():
         fps=15,
         codec="H264",
         stream_url="publisher", # Edge Push publisher
-        status=StreamState.REGISTERED
+        status=StreamState.REGISTERED,
+        always_on=True
     )
     
     mock_response = MagicMock()
@@ -109,7 +111,8 @@ async def test_add_stream_mediamtx_push():
             json={
                 "source": "publisher",
                 "sourceOnDemand": False,
-                "record": True
+                "record": True,
+                "runOnDemand": "ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://localhost:8554/edge_camera_main"
             }
         )
         mock_state.assert_called_once_with(session, stream, StreamState.CONNECTING)
@@ -121,20 +124,20 @@ async def test_recording_provider_toggles():
     mock_response.status_code = 200
     mock_response.json.return_value = {"record": True}
     
-    with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_response) as mock_post, \
+    with patch("httpx.AsyncClient.patch", new_callable=AsyncMock, return_value=mock_response) as mock_patch, \
          patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response) as mock_get:
         
         # 1. Start recording
         await recording_provider.start_recording("test_stream_main")
-        mock_post.assert_called_with(
-            "http://localhost:9997/v3/config/paths/edit/test_stream_main",
+        mock_patch.assert_called_with(
+            "http://localhost:9997/v3/config/paths/patch/test_stream_main",
             json={"record": True}
         )
         
         # 2. Stop recording
         await recording_provider.stop_recording("test_stream_main")
-        mock_post.assert_called_with(
-            "http://localhost:9997/v3/config/paths/edit/test_stream_main",
+        mock_patch.assert_called_with(
+            "http://localhost:9997/v3/config/paths/patch/test_stream_main",
             json={"record": False}
         )
         

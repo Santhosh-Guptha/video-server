@@ -12,6 +12,9 @@ import asyncio
 import httpx
 import os
 import tempfile
+import subprocess
+from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from .indexer import index_recordings
 from .config import settings
@@ -21,8 +24,13 @@ from .schemas import CameraOut, CameraStreamOut, RecordingSegmentOut, SyncRespon
 from .upstream import fetch_upstream_cameras
 from .redis_client import RedisManager
 from .stream_manager import stream_manager
+from .webrtc import router as webrtc_router, streams_router as webrtc_streams_router
+from .timeline_service import PlaybackTimelineService
 
 app = FastAPI(title=settings.app_name)
+
+app.include_router(webrtc_router)
+app.include_router(webrtc_streams_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,25 +87,127 @@ async def startup():
     asyncio.create_task(initial_sync())
 
     # Start periodic watchdog loops
-    asyncio.create_task(recording_index_loop())
+    asyncio.create_task(recording_recovery_loop())
     
     from .schedulers import (
         camera_scheduler_loop,
         camera_gap_recovery_loop,
-        camera_archive_cleanup_loop
+        camera_archive_cleanup_loop,
+        webrtc_session_watchdog_loop
     )
+    from .health_monitor import health_monitor_loop
     asyncio.create_task(camera_scheduler_loop())
     asyncio.create_task(camera_gap_recovery_loop())
     asyncio.create_task(camera_archive_cleanup_loop())
+    asyncio.create_task(webrtc_session_watchdog_loop())
+    asyncio.create_task(health_monitor_loop())
 
-async def recording_index_loop():
+class SegmentCompletePayload(BaseModel):
+    stream_id: str
+    file_path: str
+
+def get_file_duration(file_path: str, ffmpeg_path: str = "ffmpeg") -> float:
+    """Uses ffprobe to extract the duration of a video file."""
+    ffprobe_path = "ffprobe"
+    if "/" in ffmpeg_path or "\\" in ffmpeg_path:
+        dirname = os.path.dirname(ffmpeg_path)
+        basename = os.path.basename(ffmpeg_path)
+        ext = os.path.splitext(basename)[1]
+        ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
+    
+    cmd = [
+        ffprobe_path,
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        file_path
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            duration_str = data.get("format", {}).get("duration")
+            if duration_str:
+                return float(duration_str)
+    except Exception as e:
+        print(f"[metadata] ffprobe failed for {file_path}: {e}")
+    
+    return float(settings.segment_time_seconds)
+
+@app.post("/api/recordings/segment-complete")
+async def record_segment_complete(
+    payload: SegmentCompletePayload,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    print(f"[webhook] Segment complete notification received: stream_id={payload.stream_id}, path={payload.file_path}")
+    
+    # 1. Validate payload inputs
+    if not payload.stream_id or not payload.file_path:
+        raise HTTPException(status_code=400, detail="stream_id and file_path are required")
+        
+    # 2. Verify stream is registered
+    res = await session.execute(
+        select(CameraStream).where(CameraStream.stream_id == payload.stream_id)
+    )
+    stream = res.scalar_one_or_none()
+    if not stream:
+        raise HTTPException(status_code=400, detail=f"Unregistered stream_id: {payload.stream_id}")
+        
+    # 3. Verify file exists on local disk and size > 0
+    p = Path(payload.file_path)
+    if not p.exists():
+        print(f"[webhook] File not found: {payload.file_path}")
+        raise HTTPException(status_code=400, detail="File does not exist on disk")
+        
+    try:
+        size = p.stat().st_size
+        if size == 0:
+            print(f"[webhook] Rejecting 0-byte file: {payload.file_path}")
+            raise HTTPException(status_code=400, detail="File size is zero")
+            
+        end_ts = p.stat().st_mtime
+    except Exception as e:
+        print(f"[webhook] Error checking file stats for {payload.file_path}: {e}")
+        raise HTTPException(status_code=400, detail=f"Error checking file: {e}")
+        
+    # 4. Calculate duration and start timestamp
+    duration = await asyncio.to_thread(get_file_duration, payload.file_path, settings.ffmpeg_path)
+    start_ts = end_ts - duration
+    
+    # 5. Insert RecordingSegment idempotent
+    seg = RecordingSegment(
+        stream_id=payload.stream_id,
+        file_path=payload.file_path,
+        start_ts=start_ts,
+        end_ts=end_ts
+    )
+    session.add(seg)
+    try:
+        await session.commit()
+        print(f"[webhook] Indexed segment: {payload.file_path} (Duration: {duration}s)")
+    except IntegrityError:
+        await session.rollback()
+        print(f"[webhook] Duplicate segment ignored: {payload.file_path}")
+        
+    return {"status": "ok"}
+
+async def recording_recovery_loop():
+    print("[indexer] Starting periodic recording recovery scanner (safety net)...")
+    
+    # Initial recovery scan on startup
+    try:
+        async for session in get_session():
+            await index_recordings(session, settings.recording_dir)
+    except Exception as e:
+        print("[indexer] Initial recovery scanner error:", e)
+
     while True:
+        await asyncio.sleep(43200) # 12 hours
         async for session in get_session():
             try:
                 await index_recordings(session, settings.recording_dir)
             except Exception as e:
-                print("[indexer] Loop error:", e)
-        await asyncio.sleep(5)
+                print("[indexer] Recovery scanner loop error:", e)
 
 @app.get("/api/recordings/file")
 async def recording_file(path: str):
@@ -197,7 +307,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
     return SyncResponse(total=len(raw_cameras), created_or_updated=updated_count, source=settings.upstream_camera_api_url)
 
 @app.get("/api/cameras", response_model=list[CameraOut])
-async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], sync: bool = Query(default=True)):
+async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], sync: bool = Query(default=False)):
     if sync:
         try:
             await sync_cameras(session)
@@ -365,7 +475,9 @@ async def list_recordings(stream_id: str, session: Annotated[AsyncSession, Depen
 
     # Get camera name
     stream_res = await session.execute(
-        select(CameraStream).where(CameraStream.stream_id == stream_id)
+        select(CameraStream)
+        .options(selectinload(CameraStream.camera))
+        .where(CameraStream.stream_id == stream_id)
     )
     stream = stream_res.scalar_one_or_none()
     cam_name = stream.camera.name if stream and stream.camera else stream_id
@@ -435,8 +547,50 @@ async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depen
     )))
     return dates
 
+@app.get("/api/playback/{stream_id}/timeline")
+async def get_playback_timeline(
+    stream_id: str,
+    date: str,
+    zoom_level: str = "24h",
+    session: Annotated[AsyncSession, Depends(get_session)] = None
+):
+    try:
+        timeline = await PlaybackTimelineService.get_daily_timeline(session, stream_id, date)
+        return timeline
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/playback/{stream_id}/gaps")
+async def get_playback_gaps(
+    stream_id: str,
+    date: str,
+    session: Annotated[AsyncSession, Depends(get_session)] = None
+):
+    try:
+        timeline = await PlaybackTimelineService.get_daily_timeline(session, stream_id, date)
+        return timeline["gaps"]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.get("/api/playback/{stream_id}/summary")
-async def playback_summary(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
+async def playback_summary(
+    stream_id: str,
+    date: str = None,
+    session: Annotated[AsyncSession, Depends(get_session)] = None
+):
+    if date:
+        try:
+            timeline = await PlaybackTimelineService.get_daily_timeline(session, stream_id, date)
+            return {
+                "date": date,
+                "coverage_percent": timeline["coverage_percent"],
+                "recorded_hours": round(timeline["recorded_duration"] / 3600.0, 1),
+                "gaps": len(timeline["gaps"])
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+    # Fallback to old behavior if date is not provided
     from sqlalchemy import func
     res = await session.execute(
         select(
@@ -535,7 +689,8 @@ async def stream_playback(
                 yield chunk
         except asyncio.CancelledError:
             try:
-                proc.kill()
+                proc.terminate()
+                await proc.wait()
             except:
                 pass
         finally:

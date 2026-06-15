@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
 import { AlertCircle, Loader2, Maximize2, Volume2, VolumeX, Play, X } from 'lucide-react'
+import { WebRTCPlayer } from './WebRTCPlayer'
 
 type PlayerProps = {
   src?: string
@@ -12,6 +13,89 @@ type PlayerProps = {
 }
 
 export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal }: PlayerProps) {
+  const [useWebRTC, setUseWebRTC] = useState(true)
+
+  // Reset WebRTC try status if src changes
+  useEffect(() => {
+    setUseWebRTC(true)
+  }, [src])
+
+  // Extract stream_id from src, e.g. /api/streams/cam_12_MAIN/live/index.m3u8
+  const match = src ? src.match(/\/api\/streams\/([^/]+)\/live/) : null
+  const streamId = match ? decodeURIComponent(match[1]) : undefined
+
+  if (useWebRTC && streamId) {
+    return (
+      <div 
+        className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} 
+        onClick={onFocus} 
+        style={{ cursor: onFocus ? 'pointer' : 'default', width: '100%', height: '100%' }}
+      >
+        {onClose && !minimal && (
+          <button
+            className="playerCloseBtn"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            title="Deselect camera"
+            style={{ position: 'absolute', top: '16px', right: '16px', zIndex: 12 }}
+          >
+            <X size={16} />
+          </button>
+        )}
+        {onClose && minimal && (
+          <button
+            className="playerCloseBtn"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            title="Deselect camera"
+            style={{
+              position: 'absolute',
+              top: '10px',
+              right: '10px',
+              zIndex: 12,
+              background: 'rgba(15, 23, 42, 0.75)',
+              backdropFilter: 'blur(4px)',
+              border: '1px solid rgba(148, 163, 184, 0.15)',
+              color: '#fca5a5'
+            }}
+          >
+            <X size={14} />
+          </button>
+        )}
+        <WebRTCPlayer
+          streamId={streamId}
+          posterLabel={posterLabel}
+          isFocused={isFocused}
+          minimal={minimal}
+          onFallbackToHls={() => {
+            console.log(`[Player] WebRTC failed. Falling back to HLS for stream: ${streamId}`);
+            setUseWebRTC(false);
+          }}
+        />
+      </div>
+    )
+  }
+
+  // Fallback HLS Player Code
+  return <HLSPlayer src={src} posterLabel={posterLabel} isFocused={isFocused} onClose={onClose} onFocus={onFocus} minimal={minimal} />
+}
+
+type HLSPlayerProps = {
+  src?: string
+  posterLabel?: string
+  isFocused?: boolean
+  onClose?: () => void
+  onFocus?: () => void
+  minimal?: boolean
+}
+
+function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: HLSPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const [muted, setMuted] = useState(true)
@@ -64,7 +148,7 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal 
   }, [muted])
 
   return (
-    <div className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} onClick={onFocus} style={{ cursor: onFocus ? 'pointer' : 'default' }}>
+    <div className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} onClick={onFocus} style={{ cursor: onFocus ? 'pointer' : 'default', width: '100%', height: '100%' }}>
       {!minimal && (
         <div className="playerHeader">
           <div>
@@ -86,16 +170,17 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal 
               </button>
             )}
             <span className="chip chipLive"><span className="dotPulse" />Live</span>
-            <span className="chip">HLS</span>
+            <span className="chip" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', borderColor: 'rgba(245, 158, 11, 0.3)' }}>HLS (Fallback)</span>
             <span className="chip">Low latency</span>
           </div>
         </div>
       )}
 
-      <div className="playerViewport">
+      <div className="playerViewport" style={{ position: 'relative', overflow: 'hidden', background: '#090d16' }}>
         {minimal && (
-          <div className="minimalCameraLabel">
+          <div className="minimalCameraLabel" style={{ zIndex: 11 }}>
             {posterLabel ?? 'Live feed'}
+            <span style={{ marginLeft: '6px', fontSize: '9px', opacity: 0.8, color: '#fbbf24' }}>HLS</span>
           </div>
         )}
         {minimal && onClose && (
@@ -111,7 +196,7 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal 
               position: 'absolute',
               top: '10px',
               right: '10px',
-              zIndex: 11,
+              zIndex: 12,
               background: 'rgba(15, 23, 42, 0.75)',
               backdropFilter: 'blur(4px)',
               border: '1px solid rgba(148, 163, 184, 0.15)',
@@ -124,10 +209,10 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal 
         {!loaded && (
           <div className="playerOverlay">
             <Loader2 className="spin" size={18} />
-            <div className="overlayText">Buffering stream…</div>
+            <div className="overlayText">Buffering HLS stream…</div>
           </div>
         )}
-        <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} />
+        <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         <div className="fakeStamp">LIVE</div>
       </div>
 
@@ -150,7 +235,7 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal 
       {!minimal && (
         <div className="playerFooter">
           <AlertCircle size={14} />
-          <span>If the stream is black, the camera may still be loading or the HLS playlist may not be ready yet.</span>
+          <span>Using standard HLS fallback due to WebRTC unavailability or user override.</span>
         </div>
       )}
     </div>

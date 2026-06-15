@@ -8,14 +8,36 @@ import { Playback } from './pages/Playback'
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
 import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2, ChevronDown, Search } from 'lucide-react'
 
+function getStreamIdForLayout(cam: Camera, layoutSize: number): string {
+  if (!cam.streams || cam.streams.length === 0) {
+    return cam.stream_id;
+  }
+  const targetProfile = layoutSize === 1 ? 'MAIN' : 'SUB';
+  const matchedStream = cam.streams.find(s => s.profile_type === targetProfile);
+  if (matchedStream) {
+    return matchedStream.stream_id;
+  }
+  const mainStream = cam.streams.find(s => s.profile_type === 'MAIN');
+  if (mainStream) return mainStream.stream_id;
+  const subStream = cam.streams.find(s => s.profile_type === 'SUB');
+  if (subStream) return subStream.stream_id;
+  return cam.stream_id;
+}
+
 export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selected, setSelected] = useState<Camera | undefined>()
 
   const [selectedStreams, setSelectedStreams] = useState<Camera[]>([])
 
-  const [layout, setLayout] = useState(4) 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback'>('dashboard')
+  const [layout, setLayout] = useState(() => {
+    const stored = localStorage.getItem('vms_layout')
+    return stored ? parseInt(stored, 10) : 4
+  }) 
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback'>(() => {
+    const stored = localStorage.getItem('vms_active_tab')
+    return (stored === 'dashboard' || stored === 'live' || stored === 'playback') ? stored : 'dashboard'
+  })
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
   const [liveUrl, setLiveUrl] = useState<string>('')
@@ -28,6 +50,32 @@ export default function App() {
   const [liveDropdownOpen, setLiveDropdownOpen] = useState(false)
   const [liveSearchQuery, setLiveSearchQuery] = useState('')
   const liveDropdownRef = useRef<HTMLDivElement | null>(null)
+
+  // Caching states to localStorage for page-refresh persistence
+  useEffect(() => {
+    localStorage.setItem('vms_active_tab', activeTab)
+  }, [activeTab])
+
+  useEffect(() => {
+    localStorage.setItem('vms_layout', layout.toString())
+  }, [layout])
+
+  useEffect(() => {
+    if (selectedStreams.length > 0) {
+      const ids = selectedStreams.map((c) => c.stream_id)
+      localStorage.setItem('vms_selected_stream_ids', JSON.stringify(ids))
+    } else {
+      localStorage.removeItem('vms_selected_stream_ids')
+    }
+  }, [selectedStreams])
+
+  useEffect(() => {
+    if (selected) {
+      localStorage.setItem('vms_focused_stream_id', selected.stream_id)
+    } else {
+      localStorage.removeItem('vms_focused_stream_id')
+    }
+  }, [selected])
 
   // Exit full view automatically if grid is cleared
   useEffect(() => {
@@ -74,7 +122,26 @@ export default function App() {
       setCameras(data)
       setStatusText(`Loaded ${data.length} streams`)
       setLastSync(new Date().toLocaleString())
-      if (!selected && data.length > 0) {
+
+      // Restore selected streams from localStorage
+      const storedIdsJson = localStorage.getItem('vms_selected_stream_ids')
+      let restoredStreams: Camera[] = []
+      if (storedIdsJson) {
+        try {
+          const storedIds = JSON.parse(storedIdsJson) as string[]
+          restoredStreams = data.filter((c) => storedIds.includes(c.stream_id))
+        } catch (e) {
+          console.error("Failed to parse stored stream IDs", e)
+        }
+      }
+
+      const storedFocusedId = localStorage.getItem('vms_focused_stream_id')
+      const restoredFocused = restoredStreams.find((c) => c.stream_id === storedFocusedId)
+
+      if (restoredStreams.length > 0) {
+        setSelectedStreams(restoredStreams)
+        setSelected(restoredFocused || restoredStreams[0])
+      } else if (data.length > 0) {
         setSelected(data[0])
         setSelectedStreams([data[0]])
       }
@@ -377,7 +444,7 @@ export default function App() {
                     {selectedStreams.map((cam) => (
                       <Player
                         key={cam.stream_id}
-                        src={`/api/streams/${encodeURIComponent(cam.stream_id)}/live/index.m3u8`}
+                        src={`/api/streams/${encodeURIComponent(getStreamIdForLayout(cam, layout))}/live/index.m3u8`}
                         posterLabel={`${cam.name} — ${cam.stream_type}`}
                         isFocused={selected?.stream_id === cam.stream_id}
                         onFocus={() => setSelected(cam)}
@@ -432,7 +499,7 @@ export default function App() {
             {selectedStreams.map((cam) => (
               <Player
                 key={cam.stream_id}
-                src={`/api/streams/${encodeURIComponent(cam.stream_id)}/live/index.m3u8`}
+                src={`/api/streams/${encodeURIComponent(getStreamIdForLayout(cam, layout))}/live/index.m3u8`}
                 posterLabel={`${cam.name} — ${cam.stream_type}`}
                 isFocused={selected?.stream_id === cam.stream_id}
                 onFocus={() => setSelected(cam)}

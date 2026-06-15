@@ -3,7 +3,7 @@ import type { Camera, RecordingSegment } from '../types'
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 export async function fetchCameras(): Promise<Camera[]> {
-  const res = await fetch('/api/cameras?sync=true')
+  const res = await fetch('/api/cameras?sync=false')
   if (!res.ok) throw new Error(`Failed to fetch cameras: ${res.status}`)
   return res.json()
 }

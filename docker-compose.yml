@@ -41,11 +41,26 @@ services:
       - "8080:8080"  # HLS Egress
       - "8889:8889"  # WebRTC (WHEP/WHIP) Egress/Ingress
       - "9997:9997"  # REST API Port
+    environment:
+      - BACKEND_WEBHOOK_URL=http://backend:8000
     volumes:
       - ./backend/app/mediamtx.yml:/mediamtx.yml:ro
       - ./backend/data:/app/data
     depends_on:
       - redis
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: vms-coturn
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+    command:
+      - -n
+      - --log-file=stdout
+      - --lt-cred-mech
+      - --user=vms_user:vms_turn_password
+      - --realm=vms.local
 
   backend:
     build: ./backend

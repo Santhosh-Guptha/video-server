@@ -2,12 +2,18 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_name: str = "camera-video-platform"
+    enable_webrtc: bool = True
     # Switch default to postgresql+asyncpg for production, fallback to SQLite for local development without container
     database_url: str = "postgresql+asyncpg://vms_admin:vms_secure_password@localhost:5432/vms_db"
     redis_url: str = "redis://localhost:6379/0"
     mediamtx_api_url: str = "http://localhost:9997"
+    mediamtx_webrtc_url: str = "http://localhost:8889"
+    stun_servers: list[str] = ["stun:stun.l.google.com:19302"]
+    turn_server_url: str = "turn:localhost:3478"
+    turn_server_username: str = "vms_user"
+    turn_server_credential: str = "vms_turn_password"
     
-    upstream_camera_api_url: str = "https://uat1.iviscloud.net/api/cameras/camera-videoserver"
+    upstream_camera_api_url: str = "https://iportal.iviscloud.net/api/cameras/camera-videoserver"
     upstream_timeout_seconds: float = 10.0
     ffmpeg_path: str = "ffmpeg"
     recording_dir: str = "./data/recordings"

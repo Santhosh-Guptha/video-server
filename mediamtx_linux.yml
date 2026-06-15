@@ -27,17 +27,20 @@ hlsPartDuration: 200ms
 # WebRTC server settings (WHEP / WHIP live viewing)
 webrtc: yes
 webrtcAddress: :8889
-webrtcICEServers: [stun:stun.l.google.com:19302]
+webrtcICEServers2:
+  - url: "stun:stun.l.google.com:19302"
 
 # Recording settings
 # We enable recording on paths. Each dynamic stream will configure its record option.
 # By default, we write fragmented MP4 files matching the indexer folder structure.
-record: yes
-recordPath: /app/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_recovered
-recordFormat: fmp4
-recordPartDuration: 1s
-recordSegmentDuration: 60s
-runOnRecordSegmentComplete: python -m app.record_complete "$RTSP_PATH" "$RECORD_PATH"
+pathDefaults:
+  record: yes
+  recordPath: "/mnt/c/Users/santhosh/Downloads/vs/camera_video_platform_fullstack/backend/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_recovered"
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordSegmentDuration: 60s
+  runOnRecordSegmentComplete: |
+    cd /mnt/c/Users/santhosh/Downloads/vs/camera_video_platform_fullstack/backend && /opt/video-backend-venv/bin/python3 -m app.record_complete "%RTSP_PATH%" "%RECORD_PATH%"
 
 # Configuration for paths
 paths:

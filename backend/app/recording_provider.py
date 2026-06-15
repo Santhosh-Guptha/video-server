@@ -24,9 +24,9 @@ class MediaMTXRecordingProvider(RecordingProvider):
 
     async def start_recording(self, stream_id: str) -> None:
         async with httpx.AsyncClient() as client:
-            url = f"{self.api_url}/v3/config/paths/edit/{stream_id}"
+            url = f"{self.api_url}/v3/config/paths/patch/{stream_id}"
             try:
-                response = await client.post(url, json={"record": True})
+                response = await client.patch(url, json={"record": True})
                 if response.status_code not in (200, 201):
                     print(f"[recording] Failed to start MediaMTX recording for {stream_id}: {response.text}")
             except Exception as e:
@@ -34,9 +34,9 @@ class MediaMTXRecordingProvider(RecordingProvider):
 
     async def stop_recording(self, stream_id: str) -> None:
         async with httpx.AsyncClient() as client:
-            url = f"{self.api_url}/v3/config/paths/edit/{stream_id}"
+            url = f"{self.api_url}/v3/config/paths/patch/{stream_id}"
             try:
-                response = await client.post(url, json={"record": False})
+                response = await client.patch(url, json={"record": False})
                 if response.status_code not in (200, 201):
                     print(f"[recording] Failed to stop MediaMTX recording for {stream_id}: {response.text}")
             except Exception as e:

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
-import { Calendar, PlayCircle, Film, Loader2, AlertCircle, FileVideo, ChevronDown, Search } from 'lucide-react'
-import type { Camera } from '../types'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { Calendar, Film, Loader2, AlertCircle, FileVideo, ChevronDown, Clock, Activity } from 'lucide-react'
+import type { Camera, RecordingSegment } from '../types'
 
 type Props = {
   streamId?: string
@@ -9,28 +9,51 @@ type Props = {
   onSelectCamera: (camera: Camera) => void
 }
 
+type TimelinePayload = {
+  segments: { start_ts: number; end_ts: number; duration: number }[]
+  gaps: { start_ts: number; end_ts: number; duration: number }[]
+  coverage_percent: number
+  recorded_duration: number
+  gap_duration: number
+  segment_count: number
+  first_recording_ts: number | null
+  last_recording_ts: number | null
+}
+
 export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Props) {
+  // Available dates loaded from API
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [selectedDate, setSelectedDate] = useState('')
   const [selectedTime, setSelectedTime] = useState('00:00')
-  const [streamUrl, setStreamUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
-  const videoRef = useRef<HTMLVideoElement | null>(null)
 
-  const [segments, setSegments] = useState<any[]>([])
+  // Daily Timeline data
+  const [timeline, setTimeline] = useState<TimelinePayload | null>(null)
+  const [rawSegments, setRawSegments] = useState<RecordingSegment[]>([])
+
+  // Playback state
+  const [currentSegment, setCurrentSegment] = useState<RecordingSegment | null>(null)
   const [currentAbsoluteTs, setCurrentAbsoluteTs] = useState<number>(0)
-  const [rangeStartTs, setRangeStartTs] = useState<number>(0)
   const [isDragging, setIsDragging] = useState(false)
-  const timelineRef = useRef<HTMLDivElement | null>(null)
-  const [currentStreamStartTs, setCurrentStreamStartTs] = useState<number>(0)
+  const [zoomLevel, setZoomLevel] = useState<'24h' | '6h' | '1h'>('24h')
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0)
+  const [videoSrc, setVideoSrc] = useState<string>('')
+  const [isPaused, setIsPaused] = useState(true)
 
+  // Interactive Hover tooltip state
+  const [hoverTime, setHoverTime] = useState<number | null>(null)
+  const [hoverTooltip, setHoverTooltip] = useState<{ text: string; x: number } | null>(null)
+
+  // Ref elements
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const timelineRef = useRef<HTMLDivElement | null>(null)
+  const pendingSeekOffset = useRef<number | null>(null)
+
+  // Camera search dropdown
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const dropdownRef = useRef<HTMLDivElement | null>(null)
-
-  const [summary, setSummary] = useState<{ count: number; min_start_ts: number | null; max_end_ts: number | null } | null>(null)
-  const [loadingSummary, setLoadingSummary] = useState(false)
 
   // Handle click outside for dropdown
   useEffect(() => {
@@ -43,31 +66,6 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Fetch summary when streamId changes
-  useEffect(() => {
-    if (!streamId) {
-      setSummary(null)
-      return
-    }
-
-    async function loadSummary() {
-      setLoadingSummary(true)
-      try {
-        const res = await fetch(`/api/playback/${encodeURIComponent(streamId!)}/summary`)
-        if (res.ok) {
-          const data = await res.json()
-          setSummary(data)
-        }
-      } catch (e) {
-        console.error('Failed to load summary:', e)
-      } finally {
-        setLoadingSummary(false)
-      }
-    }
-
-    loadSummary()
-  }, [streamId])
-
   const filteredCameras = cameras.filter(
     (cam) =>
       cam.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -79,9 +77,11 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     if (!streamId) {
       setAvailableDates([])
       setSelectedDate('')
-      setStreamUrl('')
+      setTimeline(null)
+      setRawSegments([])
+      setVideoSrc('')
+      setCurrentSegment(null)
       setHasSearched(false)
-      setSegments([])
       return
     }
 
@@ -106,105 +106,226 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     }
 
     loadAvailableDates()
-    setStreamUrl('')
+    setTimeline(null)
+    setRawSegments([])
+    setVideoSrc('')
+    setCurrentSegment(null)
     setHasSearched(false)
-    setSegments([])
-    setCurrentStreamStartTs(0)
   }, [streamId])
 
-  async function loadPlaybackData(targetStartTs: number) {
-    if (!streamId) return
+  // Get start/end timestamps of the selected day in local timezone
+  const dayBoundaries = useMemo(() => {
+    if (!selectedDate) return { start: 0, end: 0 }
+    const dtStart = new Date(`${selectedDate}T00:00:00`)
+    const startTs = Math.floor(dtStart.getTime() / 1000)
+    return {
+      start: startTs,
+      end: startTs + 86400
+    }
+  }, [selectedDate])
+
+  // Calculate the active window depending on current playhead & zoom resolution
+  const timelineWindow = useMemo(() => {
+    const { start: dayStart, end: dayEnd } = dayBoundaries
+    if (!selectedDate) return { start: 0, end: 0, duration: 86400 }
+
+    let duration = 86400
+    if (zoomLevel === '6h') duration = 21600
+    if (zoomLevel === '1h') duration = 3600
+
+    if (zoomLevel === '24h') {
+      return { start: dayStart, end: dayEnd, duration }
+    }
+
+    // Center the window on the current playhead
+    const refTs = currentAbsoluteTs || dayStart
+    let wStart = refTs - duration / 2
+    let wEnd = refTs + duration / 2
+
+    if (wStart < dayStart) {
+      wStart = dayStart
+      wEnd = dayStart + duration
+    }
+    if (wEnd > dayEnd) {
+      wEnd = dayEnd
+      wStart = dayEnd - duration
+    }
+
+    return { start: wStart, end: wEnd, duration }
+  }, [zoomLevel, currentAbsoluteTs, dayBoundaries, selectedDate])
+
+  // Fetch timeline segments and coverage statistics
+  async function loadTimelineData(targetTsToPlay?: number) {
+    if (!streamId || !selectedDate) return
     setLoading(true)
     try {
-      const endTs = targetStartTs + 3600
-      const response = await fetch(`/api/playback/${encodeURIComponent(streamId)}?start_ts=${targetStartTs}&end_ts=${endTs}`)
-      if (response.ok) {
-        const segs = await response.json()
-        setSegments(segs)
+      // 1. Fetch raw segments for matching (so we have file paths)
+      const rawRes = await fetch(`/api/playback/${encodeURIComponent(streamId)}?start_ts=${dayBoundaries.start}&end_ts=${dayBoundaries.end}`)
+      let rawSegs: RecordingSegment[] = []
+      if (rawRes.ok) {
+        rawSegs = await rawRes.json()
+        setRawSegments(rawSegs)
+      }
 
-        if (segs.length > 0) {
-          // Check if the backend shifted the start time because there were no recordings in the requested hour
-          let alignedRangeStart = targetStartTs
-          if (segs[0].start_ts > targetStartTs + 3600 || segs[0].start_ts < targetStartTs) {
-            alignedRangeStart = segs[0].start_ts
-          }
+      // 2. Fetch timeline coverage metrics
+      const timelineRes = await fetch(`/api/playback/${encodeURIComponent(streamId)}/timeline?date=${selectedDate}`)
+      if (timelineRes.ok) {
+        const payload: TimelinePayload = await timelineRes.json()
+        setTimeline(payload)
+        setHasSearched(true)
 
-          setRangeStartTs(alignedRangeStart)
-          const actualStartTs = Math.max(alignedRangeStart, segs[0].start_ts)
-          const streamEndTs = alignedRangeStart + 3600
-          const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${actualStartTs}&end_ts=${streamEndTs}`
-          
-          setStreamUrl(url)
-          setCurrentStreamStartTs(actualStartTs)
-          setCurrentAbsoluteTs(actualStartTs)
-          setHasSearched(true)
-          setTimeout(() => {
-            if (videoRef.current) {
-              videoRef.current.load()
-            }
-          }, 50)
+        // 3. Initiate playback if requested
+        if (targetTsToPlay !== undefined) {
+          playSegmentAtTimestamp(targetTsToPlay, rawSegs)
         } else {
-          setRangeStartTs(targetStartTs)
-          setCurrentAbsoluteTs(targetStartTs)
-          setStreamUrl('')
-          setHasSearched(true)
+          // Play from beginning of recorded footage
+          if (payload.first_recording_ts) {
+            playSegmentAtTimestamp(payload.first_recording_ts, rawSegs)
+          } else {
+            playSegmentAtTimestamp(dayBoundaries.start, rawSegs)
+          }
         }
       }
     } catch (e) {
-      console.error('Failed to load playback segments:', e)
+      console.error('Failed to load timeline:', e)
     } finally {
       setLoading(false)
     }
   }
 
-  function handleLoadStream() {
-    if (!streamId || !selectedDate || !selectedTime) return
+  // Play a specific segment matching a timestamp
+  function playSegmentAtTimestamp(ts: number, segList: RecordingSegment[]) {
+    // Find segment covering this timestamp
+    let match = segList.find((s) => s.start_ts <= ts && ts <= s.end_ts)
+    
+    if (match) {
+      const offset = ts - match.start_ts
+      pendingSeekOffset.current = offset
+      setCurrentSegment(match)
+      setCurrentAbsoluteTs(ts)
+      setVideoSrc(`/api/recordings/file?path=${encodeURIComponent(match.file_path)}`)
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.load()
+        }
+      }, 50)
+    } else {
+      // Find the next closest segment after this timestamp
+      const nextSeg = segList
+        .filter((s) => s.start_ts >= ts)
+        .sort((a, b) => a.start_ts - b.start_ts)[0]
+
+      if (nextSeg) {
+        pendingSeekOffset.current = 0
+        setCurrentSegment(nextSeg)
+        setCurrentAbsoluteTs(nextSeg.start_ts)
+        setVideoSrc(`/api/recordings/file?path=${encodeURIComponent(nextSeg.file_path)}`)
+        setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.load()
+          }
+        }, 50)
+      } else {
+        // No segments found after this timestamp
+        setVideoSrc('')
+        setCurrentSegment(null)
+        setCurrentAbsoluteTs(ts)
+      }
+    }
+  }
+
+  function handleLoadPlayback() {
+    if (!selectedDate || !selectedTime) return
     const localDateTimeStr = `${selectedDate}T${selectedTime}`
     const startTs = Math.floor(new Date(localDateTimeStr).getTime() / 1000)
-    loadPlaybackData(startTs)
+    loadTimelineData(startTs)
   }
 
+  // Handle Video Time updates (sync playhead)
   const handleTimeUpdate = () => {
     const video = videoRef.current
-    if (!video || segments.length === 0 || isDragging) return
-    const absTs = getAbsoluteTsFromVideoTime(video.currentTime, segments, rangeStartTs, currentStreamStartTs)
-    setCurrentAbsoluteTs(absTs)
+    if (!video || !currentSegment || isDragging) return
+    const currentAbs = currentSegment.start_ts + video.currentTime
+    setCurrentAbsoluteTs(currentAbs)
   }
 
+  // Handle Segment transitions when the current file ends
+  const handleVideoEnded = () => {
+    if (!currentSegment || rawSegments.length === 0) return
+
+    // Find the next segment in chronological order
+    const nextSeg = rawSegments
+      .filter((s) => s.start_ts >= currentSegment.end_ts)
+      .sort((a, b) => a.start_ts - b.start_ts)[0]
+
+    if (nextSeg) {
+      console.log(`[playback] Transitioning to next segment: ${nextSeg.file_path}`)
+      pendingSeekOffset.current = 0
+      setCurrentSegment(nextSeg)
+      setCurrentAbsoluteTs(nextSeg.start_ts)
+      setVideoSrc(`/api/recordings/file?path=${encodeURIComponent(nextSeg.file_path)}`)
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.load()
+          videoRef.current.play().catch(() => {})
+        }
+      }, 50)
+    } else {
+      console.log('[playback] End of recorded timeline reached')
+      setIsPaused(true)
+    }
+  }
+
+  // Handles metadata loading (restores seek offsets)
+  const handleLoadedMetadata = () => {
+    const video = videoRef.current
+    if (!video) return
+    
+    // Apply speed settings
+    video.playbackRate = playbackSpeed
+
+    if (pendingSeekOffset.current !== null) {
+      video.currentTime = pendingSeekOffset.current
+      pendingSeekOffset.current = null
+    }
+
+    if (!isPaused) {
+      video.play().catch(() => {})
+    }
+  }
+
+  // Dynamic seeking triggered by timeline clicks or drags
   const seekToTimestamp = (targetTs: number) => {
-    if (!streamId) return
-    const endTs = rangeStartTs + 3600
-    const url = `/api/playback/${encodeURIComponent(streamId)}/stream.mp4?start_ts=${targetTs}&end_ts=${endTs}`
-    setStreamUrl(url)
-    setCurrentStreamStartTs(targetTs)
-    setTimeout(() => {
-      if (videoRef.current) {
-        videoRef.current.load()
-      }
-    }, 50)
+    playSegmentAtTimestamp(targetTs, rawSegments)
   }
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    setIsDragging(true)
-    handleSeekFromEvent(e)
-  }
-
-  const handleSeekFromEvent = (e: React.MouseEvent<HTMLDivElement> | MouseEvent) => {
+  const handleTimelineInteraction = (e: React.MouseEvent<HTMLDivElement> | MouseEvent) => {
     const timeline = timelineRef.current
     if (!timeline) return
     const rect = timeline.getBoundingClientRect()
     const clientX = 'clientX' in e ? e.clientX : (e as MouseEvent).clientX
     const clickX = Math.max(0, Math.min(clientX - rect.left, rect.width))
     const percentage = clickX / rect.width
-    const clickedTs = rangeStartTs + percentage * 3600
-    setCurrentAbsoluteTs(clickedTs)
+    const clickedTs = timelineWindow.start + percentage * timelineWindow.duration
+    return clickedTs
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    setIsDragging(true)
+    const ts = handleTimelineInteraction(e)
+    if (ts !== undefined) {
+      setCurrentAbsoluteTs(ts)
+    }
   }
 
   useEffect(() => {
     if (!isDragging) return
 
     const handleMouseMove = (e: MouseEvent) => {
-      handleSeekFromEvent(e)
+      const ts = handleTimelineInteraction(e)
+      if (ts !== undefined) {
+        setCurrentAbsoluteTs(ts)
+      }
     }
 
     const handleMouseUp = () => {
@@ -219,42 +340,80 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isDragging, currentAbsoluteTs])
+  }, [isDragging, currentAbsoluteTs, rawSegments])
 
-  function formatTimeLabel(ts: number) {
-    if (!ts) return ''
-    return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  // Mouse hover event (updates tooltip)
+  const handleMouseMoveTimeline = (e: React.MouseEvent<HTMLDivElement>) => {
+    const timeline = timelineRef.current
+    if (!timeline || rawSegments.length === 0) return
+    const rect = timeline.getBoundingClientRect()
+    const hoverX = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
+    const percentage = hoverX / rect.width
+    const ts = timelineWindow.start + percentage * timelineWindow.duration
+    setHoverTime(ts)
+
+    // Check if hover falls in a segment
+    const hoverSeg = rawSegments.find((s) => s.start_ts <= ts && ts <= s.end_ts)
+    let text = `${new Date(ts * 1000).toLocaleTimeString()}`
+    if (hoverSeg) {
+      const dur = Math.round(hoverSeg.end_ts - hoverSeg.start_ts)
+      text += ` [Recorded - Duration: ${dur}s]`
+    } else {
+      text += ' [Gap - No video]'
+    }
+
+    setHoverTooltip({ text, x: hoverX })
   }
 
-  function getAbsoluteTsFromVideoTime(videoTime: number, segs: any[], startTs: number, streamStartTs: number): number {
-    const startIndex = segs.findIndex(seg => seg.end_ts >= streamStartTs)
-    if (startIndex === -1) {
-      return (streamStartTs || startTs) + videoTime
-    }
+  const handleMouseLeaveTimeline = () => {
+    setHoverTime(null)
+    setHoverTooltip(null)
+  }
 
-    let remaining = videoTime
-    for (let i = startIndex; i < segs.length; i++) {
-      const seg = segs[i]
-      const duration = seg.end_ts - seg.start_ts
-      if (remaining <= duration) {
-        return seg.start_ts + remaining
-      }
-      remaining -= duration
+  // Format Unix Timestamp into HH:MM:SS
+  function formatTimeLabel(ts: number) {
+    if (!ts) return '00:00:00'
+    const dateObj = new Date(ts * 1000)
+    return dateObj.toLocaleTimeString([], { hour12: false })
+  }
+
+  // Generate tick markers dynamically for visual rulers
+  const rulerTicks = useMemo(() => {
+    const ticks = []
+    const count = 12 // Number of major indicators on the timeline ruler
+    for (let i = 0; i <= count; i++) {
+      const ts = timelineWindow.start + (i / count) * timelineWindow.duration
+      ticks.push({
+        label: new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+        positionPercent: (i / count) * 100
+      })
     }
-    if (segs.length > 0) {
-      return segs[segs.length - 1].end_ts
+    return ticks
+  }, [timelineWindow])
+
+  // Speed adjustments
+  const handleSpeedChange = (rate: number) => {
+    setPlaybackSpeed(rate)
+    if (videoRef.current) {
+      videoRef.current.playbackRate = rate
     }
-    return (streamStartTs || startTs) + videoTime
+  }
+
+  // Format durations into human-readable hours and minutes
+  function formatDuration(sec: number) {
+    const hrs = Math.floor(sec / 3600)
+    const mins = Math.floor((sec % 3600) / 60)
+    return `${hrs}h ${mins}m`
   }
 
   return (
     <section className="content" id="playback">
       <div className="panelHead">
         <div>
-          <div className="eyebrow">Seamless Continuous Playback</div>
+          <div className="eyebrow">Enterprise Playback Engine</div>
           <h2 className="panelTitle">{cameraName ?? 'Select a Camera'}</h2>
           <div className="panelSub">
-            {streamId ? `Stream ID: ${streamId}` : 'Choose a camera feed to start'}
+            {streamId ? `Stream ID: ${streamId}` : 'Select a camera feed to open visual logs'}
           </div>
         </div>
 
@@ -271,7 +430,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
           </button>
 
           {dropdownOpen && (
-            <div className="dropdownMenu" style={{ right: 0, left: 'auto', width: '280px' }}>
+            <div className="dropdownMenu" style={{ right: 0, left: 'auto', width: '280px', zIndex: 100 }}>
               <div className="dropdownSearchWrapper">
                 <input
                   type="text"
@@ -313,99 +472,131 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
 
       {streamId ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Stream Summary Card */}
-          {summary && summary.count > 0 && (
-            <div className="summaryCard">
-              <div className="summaryCardTitle">
-                <Film size={14} style={{ color: '#60a5fa' }} /> Stream Recording Coverage & Stats
+          
+          {/* Timeline KPI Density Dashboard Cards */}
+          {timeline && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '14px' }}>
+              <div className="summaryMetricCell" style={{ background: '#0f172a', padding: '14px', borderRadius: '14px', border: '1px solid rgba(148,163,184,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Recording Coverage</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#10b981', marginTop: '4px' }}>{timeline.coverage_percent}%</div>
               </div>
-              <div className="summaryMetricGrid">
-                <div className="summaryMetricCell">
-                  <div className="summaryMetricLabel">Total Indexed Segments</div>
-                  <div className="summaryMetricValue">
-                    {summary.count} segments ({Math.floor(summary.count)} mins)
-                  </div>
+              <div className="summaryMetricCell" style={{ background: '#0f172a', padding: '14px', borderRadius: '14px', border: '1px solid rgba(148,163,184,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Recorded Time</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#60a5fa', marginTop: '4px' }}>{formatDuration(timeline.recorded_duration)}</div>
+              </div>
+              <div className="summaryMetricCell" style={{ background: '#0f172a', padding: '14px', borderRadius: '14px', border: '1px solid rgba(148,163,184,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Gaps Count</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f59e0b', marginTop: '4px' }}>{timeline.gaps.length} gaps</div>
+              </div>
+              <div className="summaryMetricCell" style={{ background: '#0f172a', padding: '14px', borderRadius: '14px', border: '1px solid rgba(148,163,184,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Total Chunks</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#cbd5e1', marginTop: '4px' }}>{timeline.segment_count} files</div>
+              </div>
+              <div className="summaryMetricCell" style={{ background: '#0f172a', padding: '14px', borderRadius: '14px', border: '1px solid rgba(148,163,184,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>First Video Log</div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#94a3b8', marginTop: '6px' }}>
+                  {timeline.first_recording_ts ? new Date(timeline.first_recording_ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
                 </div>
-                <div className="summaryMetricCell">
-                  <div className="summaryMetricLabel">Recording Start Time</div>
-                  <div className="summaryMetricValue">
-                    {summary.min_start_ts ? new Date(summary.min_start_ts * 1000).toLocaleString() : 'N/A'}
-                  </div>
-                </div>
-                <div className="summaryMetricCell">
-                  <div className="summaryMetricLabel">Recording End Time</div>
-                  <div className="summaryMetricValue">
-                    {summary.max_end_ts ? new Date(summary.max_end_ts * 1000).toLocaleString() : 'N/A'}
-                  </div>
+              </div>
+              <div className="summaryMetricCell" style={{ background: '#0f172a', padding: '14px', borderRadius: '14px', border: '1px solid rgba(148,163,184,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Last Video Log</div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: '#94a3b8', marginTop: '6px' }}>
+                  {timeline.last_recording_ts ? new Date(timeline.last_recording_ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
                 </div>
               </div>
             </div>
           )}
 
-          {/* Minimal Controls Bar */}
+          {/* Controls Bar */}
           <div className="controlsBar" style={{ margin: 0, padding: '14px 20px' }}>
             {availableDates.length > 0 ? (
-              <div className="controlGroup" style={{ flexWrap: 'wrap', gap: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="controlLabel" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Calendar size={14} /> Date:
-                  </span>
-                  <select
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: '12px',
-                      border: '1px solid rgba(148,163,184,0.16)',
-                      background: 'rgba(2,6,23,0.5)',
-                      color: '#fff',
-                      fontSize: '0.9rem',
-                      outline: 'none',
-                      cursor: 'pointer'
-                    }}
+              <div className="controlGroup" style={{ flexWrap: 'wrap', gap: '14px', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                  
+                  {/* Date selection dropdown */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="controlLabel" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Calendar size={14} /> Date:
+                    </span>
+                    <select
+                      value={selectedDate}
+                      onChange={(e) => setSelectedDate(e.target.value)}
+                      style={{
+                        padding: '8px 12px',
+                        borderRadius: '12px',
+                        border: '1px solid rgba(148,163,184,0.16)',
+                        background: 'rgba(2,6,23,0.5)',
+                        color: '#fff',
+                        fontSize: '0.9rem',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {availableDates.map((d) => {
+                        const dateObj = new Date(d)
+                        const formatted = dateObj.toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric'
+                        })
+                        return (
+                          <option key={d} value={d}>
+                            {formatted}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+
+                  {/* Hour input */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="controlLabel">Time:</span>
+                    <input
+                      type="time"
+                      value={selectedTime}
+                      onChange={(e) => setSelectedTime(e.target.value)}
+                      style={{
+                        padding: '8px 12px',
+                        borderRadius: '12px',
+                        border: '1px solid rgba(148,163,184,0.16)',
+                        background: 'rgba(2,6,23,0.5)',
+                        color: '#fff',
+                        fontSize: '0.9rem',
+                        outline: 'none'
+                      }}
+                    />
+                  </div>
+
+                  <button
+                    className="primaryBtn"
+                    onClick={handleLoadPlayback}
+                    disabled={loading}
+                    style={{ borderRadius: '12px', padding: '9px 18px', fontSize: '0.86rem' }}
                   >
-                    {availableDates.map((d) => {
-                      const dateObj = new Date(d)
-                      const formatted = dateObj.toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric'
-                      })
-                      return (
-                        <option key={d} value={d}>
-                          {formatted}
-                        </option>
-                      )
-                    })}
-                  </select>
+                    {loading ? <Loader2 className="spin" size={14} /> : 'Load Visual Logs'}
+                  </button>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="controlLabel">Time:</span>
-                  <input
-                    type="time"
-                    value={selectedTime}
-                    onChange={(e) => setSelectedTime(e.target.value)}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: '12px',
-                      border: '1px solid rgba(148,163,184,0.16)',
-                      background: 'rgba(2,6,23,0.5)',
-                      color: '#fff',
-                      fontSize: '0.9rem',
-                      outline: 'none'
-                    }}
-                  />
+                {/* Speed Controls */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  {videoSrc && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="controlLabel">Play Speed:</span>
+                      <div className="btnToggleGroup">
+                        {[0.5, 1.0, 2.0, 4.0, 8.0].map((rate) => (
+                          <button
+                            key={rate}
+                            className={`toggleBtn ${playbackSpeed === rate ? 'active' : ''}`}
+                            onClick={() => handleSpeedChange(rate)}
+                            style={{ padding: '4px 8px', fontSize: '0.78rem' }}
+                          >
+                            {rate}x
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-
-                <button
-                  className="primaryBtn"
-                  onClick={handleLoadStream}
-                  disabled={loading}
-                  style={{ borderRadius: '12px', padding: '9px 18px', fontSize: '0.86rem' }}
-                >
-                  {loading ? <Loader2 className="spin" size={14} /> : 'Play Continuous Video'}
-                </button>
               </div>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8', fontSize: '0.9rem' }}>
@@ -415,126 +606,199 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
             )}
           </div>
 
-          {/* Continuous Player Viewport */}
-          {streamUrl ? (
+          {/* Continuous Player Viewport & Interactive Timeline */}
+          {videoSrc ? (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '18px', maxWidth: '960px', margin: '0 auto', width: '100%' }}>
               <div className="playerShell" style={{ padding: '14px' }}>
-                <div className="playerHeader" style={{ padding: '0 0 10px' }}>
+                
+                <div className="playerHeader" style={{ padding: '0 0 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <span className="eyebrow">Continuous Playback Timeline</span>
+                    <span className="eyebrow">Enterprise Playback Viewer</span>
                     <h3 className="panelTitle" style={{ fontSize: '1.05rem', margin: '4px 0 0' }}>
-                      Streaming from: {new Date(`${selectedDate}T${selectedTime}`).toLocaleString()}
+                      Local File: {currentSegment ? currentSegment.file_path.split(/[\\/]/).pop() : ''}
                     </h3>
                   </div>
-                  <div className="playerChips">
-                    <span className="chip chipLive" style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', borderColor: 'rgba(96,165,250,0.2)' }}>
-                      <Film size={12} /> Continuous Mux
-                    </span>
+                  
+                  {/* Zoom controls */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="controlLabel" style={{ fontSize: '0.78rem' }}>Timeline Span:</span>
+                    <div className="btnToggleGroup">
+                      {(['24h', '6h', '1h'] as const).map((z) => (
+                        <button
+                          key={z}
+                          className={`toggleBtn ${zoomLevel === z ? 'active' : ''}`}
+                          onClick={() => setZoomLevel(z)}
+                          style={{ padding: '4px 10px', fontSize: '0.78rem' }}
+                        >
+                          {z.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
-                <div className="playerViewport" style={{ position: 'relative', overflow: 'hidden', borderRadius: '20px', marginBottom: '14px' }}>
+                {/* HTML5 video element */}
+                <div className="playerViewport" style={{ position: 'relative', overflow: 'hidden', borderRadius: '20px', marginBottom: '14px', background: '#020617' }}>
                   <video
                     ref={videoRef}
                     className="videoEl"
-                    src={streamUrl}
+                    src={videoSrc}
                     controls
                     autoPlay
                     playsInline
                     onTimeUpdate={handleTimeUpdate}
+                    onEnded={handleVideoEnded}
+                    onLoadedMetadata={handleLoadedMetadata}
+                    onPlay={() => setIsPaused(false)}
+                    onPause={() => setIsPaused(true)}
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   >
                     Your browser does not support the video tag.
                   </video>
                 </div>
 
-                {/* Timeline scrubber bar */}
-                <div style={{ padding: '8px 4px 14px' }}>
-                  <div className="timelineTitle" style={{ fontSize: '0.82rem', fontWeight: 600, color: '#94a3b8', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Linear Scrubber Timeline (1 Hour)</span>
-                    <span style={{ color: '#60a5fa' }}>Current: {formatTimeLabel(currentAbsoluteTs)}</span>
+                {/* Visual Scrubber timeline */}
+                <div style={{ padding: '8px 4px 14px', position: 'relative' }}>
+                  
+                  <div className="timelineTitle" style={{ fontSize: '0.82rem', fontWeight: 600, color: '#94a3b8', marginBottom: '12px', display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={12} /> Playback Time (Local Server Time)</span>
+                    <span style={{ color: '#10b981', fontWeight: 700 }}>{formatTimeLabel(currentAbsoluteTs)}</span>
                   </div>
                   
-                  <div
-                    ref={timelineRef}
-                    className="timelineBar"
-                    onMouseDown={handleMouseDown}
-                    style={{
-                      height: '24px',
-                      background: '#1e293b',
-                      borderRadius: '8px',
-                      position: 'relative',
-                      cursor: 'ew-resize',
-                      border: '1px solid rgba(148, 163, 184, 0.12)',
-                      overflow: 'hidden'
-                    }}
-                  >
-                    {/* Render recording segments */}
-                    {segments.map((seg, idx) => {
-                      const leftPercent = ((seg.start_ts - rangeStartTs) / 3600) * 100
-                      const widthPercent = ((seg.end_ts - seg.start_ts) / 3600) * 100
-                      return (
-                        <div
-                          key={idx}
-                          className="timelineSegment"
-                          style={{
-                            position: 'absolute',
-                            left: `${Math.max(0, Math.min(100, leftPercent))}%`,
-                            width: `${Math.max(0, Math.min(100, widthPercent))}%`,
-                            height: '100%',
-                            background: 'linear-gradient(180deg, #10b981, #059669)',
-                            opacity: 0.85
-                          }}
-                        />
-                      )
-                    })}
+                  {/* Outer container */}
+                  <div style={{ position: 'relative' }}>
+                    
+                    {/* Hover Tooltip display */}
+                    {hoverTooltip && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: '34px',
+                          left: `${hoverTooltip.x}px`,
+                          transform: 'translateX(-50%)',
+                          background: 'rgba(15, 23, 42, 0.95)',
+                          border: '1px solid rgba(148, 163, 184, 0.25)',
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          color: '#fff',
+                          fontSize: '0.72rem',
+                          whiteSpace: 'nowrap',
+                          pointerEvents: 'none',
+                          zIndex: 10,
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+                        }}
+                      >
+                        {hoverTooltip.text}
+                      </div>
+                    )}
 
-                    {/* Playhead marker */}
+                    {/* Timeline bar with segments */}
                     <div
-                      className="timelinePlayhead"
+                      ref={timelineRef}
+                      className="timelineBar"
+                      onMouseDown={handleMouseDown}
+                      onMouseMove={handleMouseMoveTimeline}
+                      onMouseLeave={handleMouseLeaveTimeline}
                       style={{
-                        position: 'absolute',
-                        left: `${Math.max(0, Math.min(100, ((currentAbsoluteTs - rangeStartTs) / 3600) * 100))}%`,
-                        width: '3px',
-                        height: '100%',
-                        background: '#ef4444',
-                        boxShadow: '0 0 8px #ef4444',
-                        top: 0,
-                        pointerEvents: 'none',
-                        zIndex: 5
+                        height: '28px',
+                        background: '#090d16',
+                        borderRadius: '10px',
+                        position: 'relative',
+                        cursor: 'pointer',
+                        border: '1px solid rgba(148, 163, 184, 0.16)',
+                        overflow: 'hidden',
+                        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.8)'
                       }}
-                    />
+                    >
+                      {/* Render recorded segments clamped to the current active zoom window */}
+                      {rawSegments.map((seg, idx) => {
+                        const start = Math.max(seg.start_ts, timelineWindow.start)
+                        const end = Math.min(seg.end_ts, timelineWindow.end)
+                        if (start >= end) return null
+
+                        const leftPercent = ((start - timelineWindow.start) / timelineWindow.duration) * 100
+                        const widthPercent = ((end - start) / timelineWindow.duration) * 100
+                        return (
+                          <div
+                            key={idx}
+                            className="timelineSegment"
+                            style={{
+                              position: 'absolute',
+                              left: `${Math.max(0, Math.min(100, leftPercent))}%`,
+                              width: `${Math.max(0.1, Math.min(100, widthPercent))}%`,
+                              height: '100%',
+                              background: 'linear-gradient(180deg, #10b981, #059669)',
+                              opacity: 0.85
+                            }}
+                          />
+                        )
+                      })}
+
+                      {/* Playhead marker */}
+                      <div
+                        className="timelinePlayhead"
+                        style={{
+                          position: 'absolute',
+                          left: `${Math.max(0, Math.min(100, ((currentAbsoluteTs - timelineWindow.start) / timelineWindow.duration) * 100))}%`,
+                          width: '4px',
+                          height: '100%',
+                          background: '#ef4444',
+                          boxShadow: '0 0 10px #ef4444',
+                          top: 0,
+                          pointerEvents: 'none',
+                          zIndex: 6
+                        }}
+                      />
+                    </div>
                   </div>
 
-                  {/* Timeline labels */}
-                  <div className="timelineLabels" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
-                    <span>{formatTimeLabel(rangeStartTs)}</span>
-                    <span>{formatTimeLabel(rangeStartTs + 1800)}</span>
-                    <span>{formatTimeLabel(rangeStartTs + 3600)}</span>
+                  {/* Timeline Ruler Tick marks */}
+                  <div style={{ position: 'relative', height: '22px', marginTop: '8px' }}>
+                    {rulerTicks.map((tick, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          position: 'absolute',
+                          left: `${tick.positionPercent}%`,
+                          transform: 'translateX(-50%)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          pointerEvents: 'none'
+                        }}
+                      >
+                        <div style={{ width: '1px', height: '5px', background: 'rgba(148, 163, 184, 0.4)' }} />
+                        <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600, marginTop: '3px' }}>
+                          {tick.label}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
-                <div className="playerFooter" style={{ marginTop: '12px' }}>
-                  <AlertCircle size={14} />
-                  <span>The timeline above highlights available recorded segments in green. Drag or click the timeline to seek instantly.</span>
+                <div className="playerFooter" style={{ marginTop: '24px', display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8' }}>
+                  <Activity size={14} style={{ color: '#10b981' }} />
+                  <span style={{ fontSize: '0.8rem' }}>
+                    Seeking performs sub-second direct range streaming. Playback automatically jumps over recorded gaps.
+                  </span>
                 </div>
               </div>
             </div>
           ) : (
             hasSearched && (
-              <div className="emptyState" style={{ padding: '40px 20px' }}>
-                <FileVideo size={42} style={{ color: '#64748b' }} />
-                <h3 style={{ marginTop: '12px' }}>No recordings found</h3>
-                <p style={{ marginTop: '6px' }}>Try selecting another date or time.</p>
+              <div className="emptyState" style={{ padding: '40px 20px', background: '#090d16', borderRadius: '20px', textAlign: 'center' }}>
+                <FileVideo size={48} style={{ color: '#64748b', margin: '0 auto' }} />
+                <h3 style={{ marginTop: '12px', color: '#fff' }}>No video logs found</h3>
+                <p style={{ marginTop: '6px', color: '#94a3b8' }}>Try selecting another date or time from the picker.</p>
               </div>
             )
           )}
         </div>
       ) : (
-        <div className="emptyState" style={{ padding: '40px 20px' }}>
-          <FileVideo size={42} style={{ color: '#64748b' }} />
-          <h3 style={{ marginTop: '12px' }}>No camera selected</h3>
-          <p style={{ marginTop: '6px' }}>Go to the Dashboard tab to select a camera to load recorded video history.</p>
+        <div className="emptyState" style={{ padding: '40px 20px', background: '#090d16', borderRadius: '20px', textAlign: 'center' }}>
+          <FileVideo size={48} style={{ color: '#64748b', margin: '0 auto' }} />
+          <h3 style={{ marginTop: '12px', color: '#fff' }}>No camera selected</h3>
+          <p style={{ marginTop: '6px', color: '#94a3b8' }}>Select a camera from the dropdown menu to inspect its video timeline.</p>
         </div>
       )}
     </section>
