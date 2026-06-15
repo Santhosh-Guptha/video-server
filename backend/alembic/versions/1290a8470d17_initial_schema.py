@@ -40,6 +40,7 @@ def upgrade() -> None:
 
     uuid_type = postgresql.UUID(as_uuid=True) if is_postgres else sa.UUID(as_uuid=True)
     uuid_default = sa.text('gen_random_uuid()') if is_postgres else None
+    now_default = sa.text('now()') if is_postgres else sa.text('CURRENT_TIMESTAMP')
 
     # 2. Create cameras table
     op.create_table(
@@ -48,8 +49,8 @@ def upgrade() -> None:
         sa.Column('source_camera_id', sa.Integer(), nullable=False),
         sa.Column('name', sa.String(length=255), nullable=False),
         sa.Column('active', sa.Boolean(), server_default='true', nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('source_camera_id')
     )
@@ -60,7 +61,7 @@ def upgrade() -> None:
     op.create_table(
         'camera_streams',
         sa.Column('id', uuid_type, server_default=uuid_default, nullable=False),
-        sa.Column('camera_id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('camera_id', uuid_type, nullable=False),
         sa.Column('stream_id', sa.String(length=128), nullable=False),
         sa.Column('profile_type', sa.Enum('MAIN', 'SUB', 'MOBILE', name='profile_type_enum'), nullable=False),
         sa.Column('resolution', sa.String(length=32), nullable=False),
@@ -70,8 +71,8 @@ def upgrade() -> None:
         sa.Column('stream_url', sa.Text(), nullable=False),
         sa.Column('status', sa.Enum('REGISTERED', 'CONNECTING', 'ONLINE', 'DEGRADED', 'RECONNECTING', 'OFFLINE', 'ERROR', name='stream_state_enum'), server_default='REGISTERED', nullable=False),
         sa.Column('error_message', sa.Text(), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
         sa.ForeignKeyConstraint(['camera_id'], ['cameras.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('stream_id')
@@ -86,7 +87,7 @@ def upgrade() -> None:
         sa.Column('file_path', sa.Text(), nullable=False),
         sa.Column('start_ts', sa.Float(), nullable=False),
         sa.Column('end_ts', sa.Float(), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
         sa.ForeignKeyConstraint(['stream_id'], ['camera_streams.stream_id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )

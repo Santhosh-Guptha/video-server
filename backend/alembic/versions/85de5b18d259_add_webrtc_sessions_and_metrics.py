@@ -40,6 +40,7 @@ def upgrade() -> None:
 
     uuid_type = postgresql.UUID(as_uuid=True) if is_postgres else sa.UUID(as_uuid=True)
     uuid_default = sa.text('gen_random_uuid()') if is_postgres else None
+    now_default = sa.text('now()') if is_postgres else sa.text('CURRENT_TIMESTAMP')
 
     # 2. Add columns to camera_streams for preloading/warmup
     op.add_column('camera_streams', sa.Column('always_on', sa.Boolean(), server_default='false', nullable=False))
@@ -56,8 +57,8 @@ def upgrade() -> None:
         sa.Column('current_viewers', sa.Integer(), server_default='0', nullable=False),
         sa.Column('recording_enabled', sa.Boolean(), server_default='true', nullable=False),
         sa.Column('status', sa.String(length=32), server_default='REGISTERED', nullable=False),
-        sa.Column('last_seen', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('last_seen', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('stream_id')
     )
@@ -71,7 +72,7 @@ def upgrade() -> None:
         sa.Column('session_id', sa.String(length=128), nullable=False),
         sa.Column('stream_id', sa.String(length=128), nullable=False),
         sa.Column('user_id', uuid_type, nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
         sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('status', sa.String(length=32), server_default='ACTIVE', nullable=False),
         sa.Column('protocol', sa.String(length=16), server_default='WHEP', nullable=False),
@@ -110,7 +111,7 @@ def upgrade() -> None:
         sa.Column('jitter', sa.Float(), nullable=True),
         sa.Column('frames_dropped', sa.Integer(), nullable=False),
         sa.Column('decoder_latency', sa.Float(), nullable=True),
-        sa.Column('timestamp', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('timestamp', sa.DateTime(timezone=True), server_default=now_default, nullable=False),
         sa.ForeignKeyConstraint(['stream_id'], ['camera_streams.stream_id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
