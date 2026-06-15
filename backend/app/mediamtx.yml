@@ -10,7 +10,7 @@ logLevel: warn
 # RTSP server settings (Ingress and Egress)
 rtsp: yes
 rtspAddress: :8554
-rtspTransports: [udp, multicast, tcp]
+protocols: [udp, multicast, tcp]
 
 # RTMP server settings (Edge push ingress)
 rtmp: yes
