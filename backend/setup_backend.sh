@@ -45,7 +45,7 @@ log_info "Project root directory: $PROJECT_DIR"
 # 2. System Dependencies
 log_info "Installing system dependencies..."
 apt-get update -y
-apt-get install -y ffmpeg sqlite3 curl python3 python3-pip python3-venv git
+apt-get install -y ffmpeg sqlite3 curl python3 python3-pip python3-venv redis-server git
 
 # 3. Create MediaMTX Directory and Download Binary
 log_info "Setting up MediaMTX..."
@@ -160,9 +160,11 @@ EOF
 log_info "Enabling and starting systemd services..."
 systemctl daemon-reload
 
+systemctl enable redis-server || true
 systemctl enable mediamtx.service
 systemctl enable video-backend.service
 
+systemctl restart redis-server || true
 systemctl restart mediamtx.service
 systemctl restart video-backend.service
 
