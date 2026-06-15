@@ -15,6 +15,7 @@ import tempfile
 import subprocess
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
+from urllib.parse import quote
 
 from .indexer import index_recordings
 from .config import settings
@@ -49,6 +50,18 @@ def map_stream_profile(upstream_type: str) -> ProfileType:
     else:
         return ProfileType.MOBILE
 
+async def upstream_sync_loop():
+    print("[upstream_sync] Starting periodic upstream camera sync watchdog loop...")
+    while True:
+        await asyncio.sleep(3600) # 1 hour
+        try:
+            print("[upstream_sync] Running periodic camera synchronization...")
+            async for session in get_session():
+                await sync_cameras(session)
+            print("[upstream_sync] Periodic camera sync complete.")
+        except Exception as e:
+            print("[upstream_sync] Periodic camera sync error:", e)
+
 @app.on_event("startup")
 async def startup():
     # Attempt to auto-create PostgreSQL tables on start (fallback logic)
@@ -69,20 +82,16 @@ async def startup():
     Path(settings.recording_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.hls_dir).mkdir(parents=True, exist_ok=True)
 
-    # Sync registered camera streams with MediaMTX on boot
+    # Sync registered camera streams with Upstream API and MediaMTX on boot
     async def initial_sync():
         await asyncio.sleep(2.0) # Wait for MediaMTX to boot up fully in Compose
+        print("[startup] Syncing camera streams with upstream API dynamically...")
         async for session in get_session():
             try:
-                res = await session.execute(
-                    select(CameraStream).join(Camera).where(Camera.active == True)
-                )
-                streams = res.scalars().all()
-                print(f"[startup] Syncing {len(streams)} active streams with MediaMTX...")
-                for stream in streams:
-                    await stream_manager.add_stream(session, stream)
+                await sync_cameras(session)
+                print("[startup] Dynamic camera synchronization complete.")
             except Exception as e:
-                print(f"[startup] Error performing initial MediaMTX path sync: {e}")
+                print(f"[startup] Error performing dynamic camera sync: {e}")
 
     asyncio.create_task(initial_sync())
 
@@ -96,6 +105,7 @@ async def startup():
         webrtc_session_watchdog_loop
     )
     from .health_monitor import health_monitor_loop
+    asyncio.create_task(upstream_sync_loop())
     asyncio.create_task(camera_scheduler_loop())
     asyncio.create_task(camera_gap_recovery_loop())
     asyncio.create_task(camera_archive_cleanup_loop())
@@ -193,6 +203,8 @@ async def record_segment_complete(
 
 async def recording_recovery_loop():
     print("[indexer] Starting periodic recording recovery scanner (safety net)...")
+    # Wait for initial_sync to register all camera streams in the database
+    await asyncio.sleep(10.0)
     
     # Initial recovery scan on startup
     try:
@@ -273,6 +285,16 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
         codec_val = "H265" if "h265" in (raw.get("archiveType") or "").lower() else "H264"
         bitrate_val = int(raw.get("bitrate") // 1000) if raw.get("bitrate") else None
 
+        # Determine always_on based on archiveDays
+        archive_days = raw.get("archiveDays")
+        always_on_val = False
+        if archive_days is not None:
+            try:
+                if int(archive_days) > 0:
+                    always_on_val = True
+            except (ValueError, TypeError):
+                pass
+
         if not stream:
             stream = CameraStream(
                 camera_id=camera.id,
@@ -283,6 +305,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
                 codec=codec_val,
                 bitrate=bitrate_val,
                 stream_url=stream_url,
+                always_on=always_on_val,
                 status=StreamState.REGISTERED
             )
             session.add(stream)
@@ -293,6 +316,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
             stream.fps = fps_val
             stream.codec = codec_val
             stream.bitrate = bitrate_val
+            stream.always_on = always_on_val
             await session.flush()
 
         # Register in MediaMTX config
@@ -305,6 +329,13 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
 
     await session.commit()
     return SyncResponse(total=len(raw_cameras), created_or_updated=updated_count, source=settings.upstream_camera_api_url)
+
+@app.get("/api/cameras/sync", response_model=SyncResponse)
+async def sync_cameras_get(session: Annotated[AsyncSession, Depends(get_session)]):
+    """GET alias for syncing cameras. Calls the same sync logic as the POST endpoint.
+    Useful for browsers or tools that default to GET.
+    """
+    return await sync_cameras(session)
 
 @app.get("/api/cameras", response_model=list[CameraOut])
 async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], sync: bool = Query(default=False)):

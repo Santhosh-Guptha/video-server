@@ -124,8 +124,8 @@ async def camera_scheduler_loop():
                                         readers = stream_info.get("readers", [])
                                         readers_count = len(readers) if isinstance(readers, list) else 0
                                     
-                                    # We only restart if it is always-on/active or if someone is actively trying to watch it
-                                    if not is_on_demand or readers_count > 0:
+                                    # We only restart if someone is actively trying to watch it and it is stuck
+                                    if readers_count > 0:
                                         print(f"[scheduler] Stream {stream.stream_id} is stuck connecting (elapsed: {elapsed:.1f}s, readers: {readers_count}). Triggering path restart.")
                                         await stream_manager.restart_stream(session, stream)
 

@@ -40,7 +40,7 @@ pathDefaults:
   recordPartDuration: 1s
   recordSegmentDuration: 60s
   runOnRecordSegmentComplete: |
-    cd /mnt/c/Users/santhosh/Downloads/vs/camera_video_platform_fullstack/backend && /opt/video-backend-venv/bin/python3 -m app.record_complete "%RTSP_PATH%" "%RECORD_PATH%"
+    cd /opt/video-server/backend && /opt/video-backend-venv/bin/python3 -m app.record_complete "${MTX_PATH:-$RTSP_PATH}" "${MTX_SEGMENT_PATH:-$RECORD_PATH}"
 
 # Configuration for paths
 paths:

@@ -37,7 +37,7 @@ recordPath: /app/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_recovered
 recordFormat: fmp4
 recordPartDuration: 1s
 recordSegmentDuration: 60s
-runOnRecordSegmentComplete: python -m app.record_complete "$RTSP_PATH" "$RECORD_PATH"
+runOnRecordSegmentComplete: python -m app.record_complete "${MTX_PATH:-$RTSP_PATH}" "${MTX_SEGMENT_PATH:-$RECORD_PATH}"
 
 # Configuration for paths
 paths:
