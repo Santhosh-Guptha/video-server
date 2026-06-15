@@ -216,7 +216,7 @@ async def proxy_signaling_session(
                 url,
                 content=body_bytes,
                 headers={"Content-Type": request.headers.get("Content-Type", "application/sdp")},
-                timeout=5.0
+                timeout=15.0
             )
         except Exception as e:
             import traceback
@@ -278,7 +278,7 @@ async def proxy_signaling_action(
                 url=url,
                 content=body_bytes,
                 headers={"Content-Type": request.headers.get("Content-Type", "application/sdp")},
-                timeout=5.0
+                timeout=15.0
             )
         except Exception as e:
             import traceback
