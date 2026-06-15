@@ -20,24 +20,31 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # Ensure pgcrypto is enabled for gen_random_uuid() if needed
-    op.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto"')
+    bind = op.get_bind()
+    is_postgres = bind.dialect.name == 'postgresql'
 
-    # 1. Create custom enum types in PostgreSQL if they do not exist
-    # Note: checkfirst=True prevents failure if run on a DB where they already exist
-    profile_type_enum = postgresql.ENUM('MAIN', 'SUB', 'MOBILE', name='profile_type_enum')
-    profile_type_enum.create(op.get_bind(), checkfirst=True)
+    if is_postgres:
+        # Ensure pgcrypto is enabled for gen_random_uuid() if needed
+        op.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto"')
 
-    stream_state_enum = postgresql.ENUM(
-        'REGISTERED', 'CONNECTING', 'ONLINE', 'DEGRADED', 'RECONNECTING', 'OFFLINE', 'ERROR',
-        name='stream_state_enum'
-    )
-    stream_state_enum.create(op.get_bind(), checkfirst=True)
+        # 1. Create custom enum types in PostgreSQL if they do not exist
+        # Note: checkfirst=True prevents failure if run on a DB where they already exist
+        profile_type_enum = postgresql.ENUM('MAIN', 'SUB', 'MOBILE', name='profile_type_enum')
+        profile_type_enum.create(bind, checkfirst=True)
+
+        stream_state_enum = postgresql.ENUM(
+            'REGISTERED', 'CONNECTING', 'ONLINE', 'DEGRADED', 'RECONNECTING', 'OFFLINE', 'ERROR',
+            name='stream_state_enum'
+        )
+        stream_state_enum.create(bind, checkfirst=True)
+
+    uuid_type = postgresql.UUID(as_uuid=True) if is_postgres else sa.UUID(as_uuid=True)
+    uuid_default = sa.text('gen_random_uuid()') if is_postgres else None
 
     # 2. Create cameras table
     op.create_table(
         'cameras',
-        sa.Column('id', postgresql.UUID(as_uuid=True), server_default=sa.text('gen_random_uuid()'), nullable=False),
+        sa.Column('id', uuid_type, server_default=uuid_default, nullable=False),
         sa.Column('source_camera_id', sa.Integer(), nullable=False),
         sa.Column('name', sa.String(length=255), nullable=False),
         sa.Column('active', sa.Boolean(), server_default='true', nullable=False),
@@ -52,7 +59,7 @@ def upgrade() -> None:
     # 3. Create camera_streams table
     op.create_table(
         'camera_streams',
-        sa.Column('id', postgresql.UUID(as_uuid=True), server_default=sa.text('gen_random_uuid()'), nullable=False),
+        sa.Column('id', uuid_type, server_default=uuid_default, nullable=False),
         sa.Column('camera_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('stream_id', sa.String(length=128), nullable=False),
         sa.Column('profile_type', sa.Enum('MAIN', 'SUB', 'MOBILE', name='profile_type_enum'), nullable=False),

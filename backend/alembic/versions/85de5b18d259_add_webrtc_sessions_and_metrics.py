@@ -22,17 +22,24 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # 1. Add new enum values to stream_state_enum in PostgreSQL
-    # Using commit_as_transaction=False context or execute statements
-    # Note: ALTER TYPE ADD VALUE cannot run inside a transaction block in Postgres,
-    # so we execute them. Alembic handles this gracefully if we run them.
-    # To run outside of active transaction in some dialects, we can run them with autocommit.
-    # We execute them directly.
-    op.execute("COMMIT") # End active transaction block to allow ALTER TYPE
-    op.execute("ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'RECOVERING'")
-    op.execute("ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'FAILED'")
-    op.execute("ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'DISABLED'")
-    op.execute("BEGIN") # Restart transaction block for subsequent tables
+    bind = op.get_bind()
+    is_postgres = bind.dialect.name == 'postgresql'
+
+    if is_postgres:
+        # 1. Add new enum values to stream_state_enum in PostgreSQL
+        # Using commit_as_transaction=False context or execute statements
+        # Note: ALTER TYPE ADD VALUE cannot run inside a transaction block in Postgres,
+        # so we execute them. Alembic handles this gracefully if we run them.
+        # To run outside of active transaction in some dialects, we can run them with autocommit.
+        # We execute them directly.
+        op.execute("COMMIT") # End active transaction block to allow ALTER TYPE
+        op.execute("ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'RECOVERING'")
+        op.execute("ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'FAILED'")
+        op.execute("ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'DISABLED'")
+        op.execute("BEGIN") # Restart transaction block for subsequent tables
+
+    uuid_type = postgresql.UUID(as_uuid=True) if is_postgres else sa.UUID(as_uuid=True)
+    uuid_default = sa.text('gen_random_uuid()') if is_postgres else None
 
     # 2. Add columns to camera_streams for preloading/warmup
     op.add_column('camera_streams', sa.Column('always_on', sa.Boolean(), server_default='false', nullable=False))
@@ -42,7 +49,7 @@ def upgrade() -> None:
     # 3. Create stream_registry table
     op.create_table(
         'stream_registry',
-        sa.Column('id', postgresql.UUID(as_uuid=True), server_default=sa.text('gen_random_uuid()'), nullable=False),
+        sa.Column('id', uuid_type, server_default=uuid_default, nullable=False),
         sa.Column('stream_id', sa.String(length=128), nullable=False),
         sa.Column('mediamtx_node', sa.String(length=128), server_default='node1', nullable=False),
         sa.Column('source_type', sa.String(length=32), nullable=False),
@@ -60,10 +67,10 @@ def upgrade() -> None:
     # 4. Create webrtc_sessions table
     op.create_table(
         'webrtc_sessions',
-        sa.Column('id', postgresql.UUID(as_uuid=True), server_default=sa.text('gen_random_uuid()'), nullable=False),
+        sa.Column('id', uuid_type, server_default=uuid_default, nullable=False),
         sa.Column('session_id', sa.String(length=128), nullable=False),
         sa.Column('stream_id', sa.String(length=128), nullable=False),
-        sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('user_id', uuid_type, nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('status', sa.String(length=32), server_default='ACTIVE', nullable=False),
@@ -74,12 +81,20 @@ def upgrade() -> None:
         sa.UniqueConstraint('session_id')
     )
     op.create_index(op.f('ix_webrtc_sessions_session_id'), 'webrtc_sessions', ['session_id'], unique=True)
-    op.create_index(
-        'idx_sessions_active', 
-        'webrtc_sessions', 
-        ['stream_id', 'status'], 
-        postgresql_where=sa.text("status = 'ACTIVE'")
-    )
+    
+    if is_postgres:
+        op.create_index(
+            'idx_sessions_active', 
+            'webrtc_sessions', 
+            ['stream_id', 'status'], 
+            postgresql_where=sa.text("status = 'ACTIVE'")
+        )
+    else:
+        op.create_index(
+            'idx_sessions_active', 
+            'webrtc_sessions', 
+            ['stream_id', 'status']
+        )
 
     # 5. Create stream_metrics_history table
     op.create_table(
