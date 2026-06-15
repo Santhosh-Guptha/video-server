@@ -100,6 +100,10 @@ async def camera_scheduler_loop():
                             # Stream is configured but not active/streaming
                             # If they are in CONNECTING or ONLINE but show inactive, they might be offline or connecting
                             if stream.status == StreamState.ONLINE:
+                                # For active EDGE_PUSH streams, keep ONLINE if the TCP socket is still connected
+                                from .edge_receiver import active_connections
+                                if stream.stream_id in active_connections:
+                                    continue
                                 await stream_manager.set_stream_state(session, stream, StreamState.CONNECTING, "Source disconnected")
                             elif stream.status == StreamState.CONNECTING:
                                 # Only restart if it has been stuck in CONNECTING for a while (e.g. 60 seconds)
