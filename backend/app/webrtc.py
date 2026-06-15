@@ -184,7 +184,7 @@ async def proxy_signaling_session(
             detail="Stream viewer limit exceeded"
         )
     
-    # 2. Extract user_id if present in query params to enforce user session limits
+    # 2. Extract or dynamically generate user_id to enforce user session limits
     user_id_str = request.query_params.get("user_id")
     user_id = None
     if user_id_str:
@@ -192,6 +192,10 @@ async def proxy_signaling_session(
             user_id = uuid.UUID(user_id_str)
         except ValueError:
             pass
+            
+    # Auto-generate user_id if not present
+    if not user_id:
+        user_id = uuid.uuid4()
             
     if user_id:
         # Count active user sessions
@@ -245,8 +249,11 @@ async def proxy_signaling_session(
                 "created_at": datetime.utcnow().isoformat()
             })
             
-            # Rewrite Location header
-            response.headers["Location"] = f"/api/streams/{stream_id}/live/{protocol}/{session_id}"
+            # Rewrite Location header dynamically based on the incoming request route prefix
+            if "/api/webrtc" in request.url.path:
+                response.headers["Location"] = f"/api/webrtc/play/{stream_id}/{session_id}"
+            else:
+                response.headers["Location"] = f"/api/streams/{stream_id}/live/{protocol}/{session_id}"
             
     return Response(
         content=mtx_resp.content,
@@ -343,3 +350,29 @@ async def whip_session_route(
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
     return await proxy_signaling_action(stream_id, session_id, "whip", request, response, session)
+
+
+# New Dynamic WebRTC play API for camera_id (where camera_id corresponds to stream_id)
+@router.post("/play/{camera_id}")
+@router.options("/play/{camera_id}")
+async def webrtc_play_camera(
+    camera_id: str,
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    """Serve live WebRTC WHEP signaling for a camera ID.
+    Validates stream status, auto-generates missing user_id, and proxies to MediaMTX.
+    """
+    return await proxy_signaling_session(camera_id, "whep", request, response, session)
+
+@router.api_route("/play/{camera_id}/{session_id}", methods=["POST", "PATCH", "DELETE", "OPTIONS"])
+async def webrtc_play_session_route(
+    camera_id: str,
+    session_id: str,
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    """Handle WebRTC WHEP session actions (Trickle ICE, Session Termination) for camera ID."""
+    return await proxy_signaling_action(camera_id, session_id, "whep", request, response, session)

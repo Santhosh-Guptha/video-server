@@ -739,6 +739,16 @@ async def stream_playback(
         }
     )
 
+@app.get("/api/playback/{camera_id}/play")
+async def play_playback_camera(
+    camera_id: str,
+    start_ts: float,
+    end_ts: float,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    """Serve playback stream for a camera ID (which matches stream_id in the DB)."""
+    return await stream_playback(camera_id, start_ts, end_ts, session)
+
 @app.get("/")
 async def root():
     return {"message": "Enterprise VMS FastAPI backend is running"}
