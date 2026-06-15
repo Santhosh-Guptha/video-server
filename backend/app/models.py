@@ -168,3 +168,21 @@ class StreamRegistry(Base):
     status: Mapped[str] = mapped_column(String(32), default="REGISTERED", nullable=False)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
+
+
+class EdgeConnection(Base):
+    __tablename__ = "edge_connections"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    camera_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
+    disconnected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_frame_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bytes_received: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="CONNECTED", nullable=False)
+    client_ip: Mapped[str] = mapped_column(String(64), nullable=False)
+

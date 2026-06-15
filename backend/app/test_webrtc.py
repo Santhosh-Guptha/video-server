@@ -103,6 +103,10 @@ async def test_whep_signaling_proxy():
     sdp_answer = "v=0\r\no=- 1 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nc=IN IP4 127.0.0.1"
     
     mock_db_session = AsyncMock(spec=AsyncSession)
+    mock_execute_result = MagicMock()
+    mock_execute_result.scalars.return_value.all.return_value = []
+    mock_db_session.execute.return_value = mock_execute_result
+    
     mock_response = MagicMock()
     mock_response.status_code = 201
     mock_response.headers = {

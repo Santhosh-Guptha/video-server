@@ -20,7 +20,7 @@ from urllib.parse import quote
 from .indexer import index_recordings
 from .config import settings
 from .db import engine, Base, get_session
-from .models import Camera, CameraStream, RecordingSegment, StreamState, ProfileType
+from .models import Camera, CameraStream, RecordingSegment, StreamState, ProfileType, EdgeConnection
 from .schemas import CameraOut, CameraStreamOut, RecordingSegmentOut, SyncResponse
 from .upstream import fetch_upstream_cameras
 from .redis_client import RedisManager
@@ -111,6 +111,10 @@ async def startup():
     asyncio.create_task(camera_archive_cleanup_loop())
     asyncio.create_task(webrtc_session_watchdog_loop())
     asyncio.create_task(health_monitor_loop())
+
+    if settings.edge_receiver_enabled:
+        from .edge_receiver import start_edge_receiver
+        asyncio.create_task(start_edge_receiver())
 
 class SegmentCompletePayload(BaseModel):
     stream_id: str
@@ -748,6 +752,70 @@ async def play_playback_camera(
 ):
     """Serve playback stream for a camera ID (which matches stream_id in the DB)."""
     return await stream_playback(camera_id, start_ts, end_ts, session)
+
+
+@app.get("/api/edge/status")
+async def get_edge_status(session: Annotated[AsyncSession, Depends(get_session)]):
+    # Retrieve active connections and their state
+    from .edge_receiver import active_connections, metrics
+    
+    stmt = select(CameraStream)
+    res = await session.execute(stmt)
+    streams = res.scalars().all()
+    
+    online_streams = []
+    offline_streams = []
+    for s in streams:
+        is_push = "publisher" in s.stream_url.lower() or not s.stream_url.strip()
+        if is_push:
+            if s.status == StreamState.ONLINE:
+                online_streams.append(s.stream_id)
+            else:
+                offline_streams.append(s.stream_id)
+                
+    return {
+        "active_edge_connections": metrics["active_edge_connections"],
+        "active_ffmpeg_relays": metrics["active_ffmpeg_relays"],
+        "online_streams": online_streams,
+        "offline_streams": offline_streams,
+        "metrics": metrics
+    }
+
+
+@app.get("/api/edge/connections")
+async def get_edge_connections(session: Annotated[AsyncSession, Depends(get_session)]):
+    from .edge_receiver import active_connections
+    from .models import EdgeConnection
+    
+    stmt = select(EdgeConnection).order_by(EdgeConnection.connected_at.desc()).limit(100)
+    res = await session.execute(stmt)
+    db_conns = res.scalars().all()
+    
+    result = []
+    for conn in db_conns:
+        bytes_received = conn.bytes_received
+        last_frame_ts = conn.last_frame_ts
+        status = conn.status
+        
+        if conn.status == "CONNECTED" and conn.camera_id in active_connections:
+            mem_conn = active_connections[conn.camera_id]
+            if mem_conn.get("connection_db_id") == conn.id:
+                bytes_received = mem_conn["bytes_received"]
+                last_frame_ts = mem_conn["last_frame_ts"]
+        
+        result.append({
+            "id": str(conn.id),
+            "camera_id": conn.camera_id,
+            "connected_at": conn.connected_at.isoformat() if conn.connected_at else None,
+            "disconnected_at": conn.disconnected_at.isoformat() if conn.disconnected_at else None,
+            "last_frame_ts": last_frame_ts.isoformat() if last_frame_ts else None,
+            "bytes_received": bytes_received,
+            "status": status,
+            "client_ip": conn.client_ip
+        })
+        
+    return result
+
 
 @app.get("/")
 async def root():

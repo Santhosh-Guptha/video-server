@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     recovery_interval_seconds: int = 300
     cleanup_interval_seconds: int = 600
     recovery_rtsp_template: str = "{rtsp_url}?starttime={start_iso}&endtime={end_iso}"
+    
+    edge_receiver_host: str = "0.0.0.0"
+    edge_receiver_port: int = 9999
+    edge_receiver_enabled: bool = True
 
     class Config:
         env_file = ".env"
