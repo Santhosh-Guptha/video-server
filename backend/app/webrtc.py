@@ -31,7 +31,7 @@ class StatsPayload(BaseModel):
     decoder_latency: float | None = None
 
 @router.get("/ice-servers")
-async def get_ice_servers():
+async def get_ice_servers(request: Request):
     """Returns the STUN and TURN server configurations for WebRTC players."""
     # Check if WebRTC is enabled
     if not settings.enable_webrtc:
@@ -47,8 +47,13 @@ async def get_ice_servers():
         
     # Add TURN server if configured
     if settings.turn_server_url:
+        turn_url = settings.turn_server_url
+        if "localhost" in turn_url or "127.0.0.1" in turn_url:
+            host = request.url.hostname or "localhost"
+            turn_url = turn_url.replace("localhost", host).replace("127.0.0.1", host)
+            
         turn_config = {
-            "urls": [settings.turn_server_url]
+            "urls": [turn_url]
         }
         if settings.turn_server_username:
             turn_config["username"] = settings.turn_server_username
