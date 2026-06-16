@@ -146,10 +146,12 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
       if (!whepResp.ok) {
         const errText = await whepResp.text();
-        throw new Error(`Signaling failed: ${errText || whepResp.statusText}`);
+        const error = new Error(`Signaling failed: ${errText || whepResp.statusText}`);
+        (error as any).status = whepResp.status;
+        throw error;
       }
 
-      // 5. Get Session URL from Location header
+      // Get Session URL from Location header
       const locationHeader = whepResp.headers.get('Location');
       if (!locationHeader) throw new Error('Missing WHEP Location session header');
       
@@ -157,7 +159,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       (pc as any).sessionUrl = sessionUrl;
       (pc as any).sessionId = sessionUrl.split('/').pop();
 
-      // 6. Handle Trickle ICE Candidates
+      // Handle Trickle ICE Candidates
       pc.onicecandidate = (event) => {
         if (event.candidate && pcRef.current === pc) {
           fetch(sessionUrl, {
@@ -168,7 +170,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
         }
       };
 
-      // 7. Apply SDP Answer
+      // Apply SDP Answer
       const answerSdp = await whepResp.text();
       await pc.setRemoteDescription(new RTCSessionDescription({
         type: 'answer',
@@ -180,16 +182,17 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
     } catch (err: any) {
       console.error(`[WebRTCPlayer:${streamId}] WHEP connection failed:`, err);
-      handleDisconnection(err.message || 'Negotiation failed');
+      const isPermanent = err && (err.status === 400 || err.status === 415 || (err.message && err.message.toLowerCase().includes('codec')));
+      handleDisconnection(err.message || 'Negotiation failed', isPermanent);
     }
   };
 
-  const handleDisconnection = (reason: string) => {
+  const handleDisconnection = (reason: string, isPermanent = false) => {
     setHealth('RECOVERING');
     setErrorMessage(reason);
     cleanupConnection();
 
-    if (reconnectCountRef.current < maxReconnectAttempts) {
+    if (!isPermanent && reconnectCountRef.current < maxReconnectAttempts) {
       reconnectCountRef.current += 1;
       const backoffDelay = Math.min(1000 * Math.pow(2, reconnectCountRef.current), 10000);
       console.log(`[WebRTCPlayer:${streamId}] Reconnecting (attempt ${reconnectCountRef.current}) in ${backoffDelay}ms...`);
@@ -199,7 +202,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
         startWebRTC();
       }, backoffDelay);
     } else {
-      console.error(`[WebRTCPlayer:${streamId}] Max reconnection attempts reached. Falling back to HLS.`);
+      console.error(`[WebRTCPlayer:${streamId}] Permanent failure or max reconnection attempts reached. Falling back to HLS.`);
       setHealth('FAILED');
       onFallbackToHls();
     }
