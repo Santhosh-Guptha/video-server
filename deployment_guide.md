@@ -71,7 +71,21 @@ sudo git checkout feature/vms-edge-push
    sudo cp /opt/video-server/mediamtx_linux.yml /opt/mediamtx/mediamtx.yml
    ```
 
-3. Setup MediaMTX as a systemd service:
+3. Configure server IP for WebRTC & HLS fallback (CRITICAL):
+   Open `/opt/mediamtx/mediamtx.yml` and configure the following parameters:
+   - **`webrtcAdditionalHosts`**: Add the server's external IP (e.g. `[172.20.100.235]`) under the `webrtc:` block. This advertises the correct host candidate to WebRTC clients.
+   - **`hlsSegmentCount`**: Ensure it is set to `8` or higher. Low-Latency HLS requires at least 7 segments; setting it lower (e.g., the default of 3) causes the HLS muxer to fail and break streaming fallback for H265 cameras.
+   
+   To apply these automatically via sed:
+   ```bash
+   # Set HLS segment count to 8
+   sudo sed -i 's/hlsSegmentCount: 3/hlsSegmentCount: 8/g' /opt/mediamtx/mediamtx.yml
+   
+   # Add your server IP to the WebRTC host candidates list (replace 172.20.100.235 with your VM IP)
+   sudo sed -i '/webrtcAddress: :8889/a webrtcAdditionalHosts: [172.20.100.235]' /opt/mediamtx/mediamtx.yml
+   ```
+
+4. Setup MediaMTX as a systemd service:
    ```bash
    sudo cp /opt/video-server/mediamtx.service /etc/systemd/system/mediamtx.service
    sudo systemctl daemon-reload
@@ -195,3 +209,21 @@ sudo journalctl -u mediamtx -f
 # View live frontend console logs (if running dev server)
 sudo journalctl -u video-frontend -f
 ```
+
+---
+
+## 6. How Live Streaming Works (WebRTC & HLS)
+
+The platform supports both ultra-low latency **WebRTC (WHEP)** and highly compatible **Low-Latency HLS (LL-HLS)** playback:
+
+### Step 6.1: WebRTC (H264 Cameras)
+- Active H264 camera streams are played via WebRTC.
+- The backend API (`/api/webrtc/ice-servers`) dynamically resolves the correct TURN candidate IP for the client browser. It inspects browser headers (`Referer`, `Origin`, and `X-Forwarded-Host`) to automatically retrieve the server's public IP address, bypassing any localhost/loopback proxy issues.
+- MediaMTX serves WebRTC traffic on UDP port `8189`.
+
+### Step 6.2: LL-HLS Fallback (H265 Cameras)
+- WebRTC does not support H265 streams in most browsers and is not supported by MediaMTX WebRTC.
+- The player automatically falls back to **LL-HLS** when WebRTC fails (e.g. for all H265 cameras like `ENR1001C9_NORMAL`).
+- The HLS playlist (`index.m3u8`) is served by the MediaMTX HLS muxer on port `8080` and proxied through the FastAPI backend.
+- **Troubleshooting Muxer Destruction**: If HLS playback returns a `404 Not Found` in your logs, ensure that `hlsSegmentCount` is set to `8` or higher in `/opt/mediamtx/mediamtx.yml`.
+
