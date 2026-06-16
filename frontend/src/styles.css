@@ -634,17 +634,21 @@ code { padding: 2px 6px; border-radius: 8px; background: rgba(148,163,184,0.14);
   cursor: pointer;
   transition: all 0.12s;
   user-select: none;
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
 }
 
 .dropdownOption:hover {
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(59, 130, 246, 0.22);
   color: #fff;
+  border-color: rgba(96, 165, 250, 0.2);
 }
 
 .dropdownOption.selected {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.28);
   color: #60a5fa;
-  font-weight: 600;
+  font-weight: 700;
+  border-left: 3px solid #3b82f6;
 }
 
 .dropdownOptionCheckbox {
@@ -773,5 +777,51 @@ code { padding: 2px 6px; border-radius: 8px; background: rgba(148,163,184,0.14);
   color: #94a3b8;
   background: rgba(148, 163, 184, 0.12);
   border-color: rgba(148, 163, 184, 0.22);
+}
+
+/* Native select/option hover fix for dark theme */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2212%22%20height%3D%228%22%20viewBox%3D%220%200%2012%208%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M1%201l5%205%205-5%22%20stroke%3D%22%2394a3b8%22%20stroke-width%3D%222%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px;
+  padding-right: 32px;
+}
+select:hover {
+  border-color: rgba(96, 165, 250, 0.35);
+  background-color: rgba(15, 23, 42, 0.7);
+}
+select:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+select option {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 8px 12px;
+}
+select option:hover,
+select option:checked {
+  background: #1e3a5f;
+  color: #fff;
+}
+
+/* Timeline hover line indicator */
+.timelineBar:hover {
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.8), 0 0 0 1px rgba(96, 165, 250, 0.25);
+}
+
+/* Input type=time dark theme fix */
+input[type="time"] {
+  color-scheme: dark;
+}
+input[type="time"]:hover {
+  border-color: rgba(96, 165, 250, 0.35) !important;
+}
+input[type="time"]:focus {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
 }
 

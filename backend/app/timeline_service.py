@@ -160,3 +160,16 @@ class PlaybackTimelineService:
         local_memory_cache.set(cache_key, timeline_payload, 60)
 
         return timeline_payload
+
+    @staticmethod
+    async def invalidate_cache(stream_id: str, date_str: str):
+        cache_key = f"vms:timeline:{stream_id}:{date_str}"
+        if redis_client:
+            await redis_client.delete(cache_key)
+        local_memory_cache._cache.pop(cache_key, None)
+        print(f"[timeline_service] Cache invalidated for {stream_id} on {date_str}")
+
+    @staticmethod
+    async def invalidate_cache_for_timestamp(stream_id: str, ts: float):
+        date_str = time.strftime("%Y-%m-%d", time.localtime(ts))
+        await PlaybackTimelineService.invalidate_cache(stream_id, date_str)

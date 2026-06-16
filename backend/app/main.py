@@ -216,6 +216,7 @@ async def record_segment_complete(
     try:
         await session.commit()
         print(f"[webhook] Indexed segment: {payload.file_path} (Duration: {duration}s)")
+        await PlaybackTimelineService.invalidate_cache_for_timestamp(payload.stream_id, start_ts)
     except IntegrityError:
         await session.rollback()
         print(f"[webhook] Duplicate segment ignored: {payload.file_path}")
@@ -1134,6 +1135,7 @@ async def upload_edge_backlog(
     session.add(new_segment)
     try:
         await session.commit()
+        await PlaybackTimelineService.invalidate_cache_for_timestamp(stream_id, parsed_start_ts)
     except IntegrityError:
         await session.rollback()
         if file_path.exists():

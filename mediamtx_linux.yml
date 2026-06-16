@@ -35,7 +35,7 @@ webrtcICEServers2:
 # By default, we write fragmented MP4 files matching the indexer folder structure.
 pathDefaults:
   record: yes
-  recordPath: "/mnt/c/Users/santhosh/Downloads/vs/camera_video_platform_fullstack/backend/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_recovered"
+  recordPath: "/mnt/c/Users/santhosh/Downloads/vs/camera_video_platform_fullstack/backend/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live"
   recordFormat: fmp4
   recordPartDuration: 1s
   recordSegmentDuration: 60s

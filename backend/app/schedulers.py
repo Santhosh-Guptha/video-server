@@ -307,6 +307,100 @@ async def camera_gap_recovery_loop():
         except Exception as e:
             print(f"[recovery] Error in gap recovery loop: {e}")
 
+        # --- Edge Push Filesystem Re-Index ---
+        # For edge push streams, scan the recording directory for files on disk
+        # that are NOT yet indexed in the database (written by MediaMTX but missed
+        # by the webhook due to crashes/timeouts/race conditions).
+        try:
+            async for session in get_session():
+                res = await session.execute(
+                    select(CameraStream)
+                    .options(selectinload(CameraStream.camera))
+                    .join(Camera)
+                    .where(Camera.active == True)
+                )
+                all_streams = list(res.scalars().all())
+
+                for stream in all_streams:
+                    rtsp_url = stream.stream_url.strip()
+                    # Only process edge push streams (empty or publisher URL)
+                    is_push = not rtsp_url or "publisher" in rtsp_url.lower()
+                    if not is_push:
+                        continue
+
+                    stream_id = stream.stream_id
+                    # Scan today's recording directory
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    stream_rec_dir = Path(settings.recording_dir) / stream_id / today_str
+                    if not stream_rec_dir.exists():
+                        continue
+
+                    # Get all indexed file paths for this stream today
+                    now = time.time()
+                    day_start_ts = datetime.strptime(today_str, "%Y-%m-%d").timestamp()
+                    seg_res = await session.execute(
+                        select(RecordingSegment.file_path)
+                        .where(RecordingSegment.stream_id == stream_id)
+                        .where(RecordingSegment.start_ts >= day_start_ts)
+                    )
+                    indexed_paths = set(seg_res.scalars().all())
+
+                    # Scan directory for mp4 files not yet indexed
+                    reindexed_count = 0
+                    for mp4_file in sorted(stream_rec_dir.glob("*.mp4")):
+                        file_path_str = str(mp4_file)
+                        # Also check with /mnt/c/ prefix since MediaMTX uses WSL paths
+                        wsl_path = file_path_str.replace("C:\\", "/mnt/c/").replace("\\", "/")
+                        wsl_path_alt = file_path_str.replace("c:\\", "/mnt/c/").replace("\\", "/")
+                        
+                        if file_path_str in indexed_paths or wsl_path in indexed_paths or wsl_path_alt in indexed_paths:
+                            continue
+
+                        # Skip 0-byte files
+                        try:
+                            if mp4_file.stat().st_size == 0:
+                                continue
+                        except Exception:
+                            continue
+
+                        # Parse timestamp from filename
+                        match = re.search(r"(\d{8})_(\d{6})", mp4_file.name)
+                        if match:
+                            try:
+                                date_str_m, time_str_m = match.groups()
+                                dt = datetime.strptime(f"{date_str_m}_{time_str_m}", "%Y%m%d_%H%M%S")
+                                start_ts = dt.timestamp()
+                                end_ts = start_ts + settings.segment_time_seconds
+                            except Exception:
+                                end_ts = mp4_file.stat().st_mtime
+                                start_ts = end_ts - settings.segment_time_seconds
+                        else:
+                            end_ts = mp4_file.stat().st_mtime
+                            start_ts = end_ts - settings.segment_time_seconds
+
+                        # Index the file
+                        new_seg = RecordingSegment(
+                            stream_id=stream_id,
+                            file_path=file_path_str,
+                            start_ts=start_ts,
+                            end_ts=end_ts
+                        )
+                        session.add(new_seg)
+                        reindexed_count += 1
+
+                    if reindexed_count > 0:
+                        await session.commit()
+                        print(f"[recovery] [{stream_id}] Re-indexed {reindexed_count} unindexed edge push recording files from disk")
+                        # Invalidate timeline cache
+                        try:
+                            from .timeline_service import PlaybackTimelineService
+                            await PlaybackTimelineService.invalidate_cache(stream_id, today_str)
+                        except Exception:
+                            pass
+
+        except Exception as e:
+            print(f"[recovery] Error in edge push filesystem re-index: {e}")
+
 
 async def camera_archive_cleanup_loop():
     """

@@ -18,7 +18,8 @@ PROXY_METADATA_IMAGE = 0x02
 PROXY_COMMAND_TYPE_CAMERA_CONFIG = 0x05
 
 MAX_PACKET_SIZE = 10 * 1024 * 1024  # 10 MB
-EDGE_SOCKET_TIMEOUT = 30.0  # 30 seconds
+EDGE_SOCKET_TIMEOUT = 45.0  # 45 seconds
+MAX_FFMPEG_RESTARTS = 3  # Max FFmpeg restart attempts per connection
 
 # ================= GLOBAL STATE & METRICS =============
 metrics = {
@@ -258,9 +259,20 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                 *cmd,
                                 stdin=asyncio.subprocess.PIPE,
                                 stdout=asyncio.subprocess.DEVNULL,
-                                stderr=asyncio.subprocess.DEVNULL
+                                stderr=asyncio.subprocess.PIPE
                             )
                             metrics["active_ffmpeg_relays"] += 1
+                            # Background task to log FFmpeg stderr
+                            async def _log_ffmpeg_stderr(proc, cam_id):
+                                try:
+                                    while True:
+                                        line = await proc.stderr.readline()
+                                        if not line:
+                                            break
+                                        print(f"[edge_receiver] FFmpeg stderr [{cam_id}]: {line.decode('utf-8', errors='replace').strip()}")
+                                except Exception:
+                                    pass
+                            asyncio.create_task(_log_ffmpeg_stderr(ffmpeg_proc, camera_id))
                         except Exception as fe:
                             print(f"[edge_receiver] Failed to start FFmpeg for camera {camera_id}: {fe}")
                             metrics["ffmpeg_failures"] += 1
@@ -339,11 +351,90 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                         ffmpeg_proc.stdin.write(nal)
                         await ffmpeg_proc.stdin.drain()
                     except (OSError, BrokenPipeError, ConnectionResetError) as ex:
-                        print(f"[edge_receiver] FFmpeg pipe broken for camera {camera_id}: {ex}")
-                        break
+                        print(f"[edge_receiver] FFmpeg pipe broken for camera {camera_id}: {ex}. Attempting restart...")
+                        # Try to restart FFmpeg relay
+                        ffmpeg_restart_count = getattr(ffmpeg_proc, '_restart_count', 0)
+                        if ffmpeg_restart_count < MAX_FFMPEG_RESTARTS:
+                            await cleanup_ffmpeg(ffmpeg_proc)
+                            metrics["active_ffmpeg_relays"] -= 1
+                            try:
+                                ffmpeg_proc = await asyncio.create_subprocess_exec(
+                                    *cmd,
+                                    stdin=asyncio.subprocess.PIPE,
+                                    stdout=asyncio.subprocess.DEVNULL,
+                                    stderr=asyncio.subprocess.PIPE
+                                )
+                                ffmpeg_proc._restart_count = ffmpeg_restart_count + 1
+                                metrics["active_ffmpeg_relays"] += 1
+                                asyncio.create_task(_log_ffmpeg_stderr(ffmpeg_proc, camera_id))
+                                # Re-send the current NAL unit
+                                if config_param:
+                                    try:
+                                        parts = config_param.split(",")
+                                        for part in parts:
+                                            part = part.strip()
+                                            if part:
+                                                nal_bytes = base64.b64decode(part)
+                                                if not (nal_bytes.startswith(b"\x00\x00\x00\x01") or nal_bytes.startswith(b"\x00\x00\x01")):
+                                                    nal_bytes = b"\x00\x00\x00\x01" + nal_bytes
+                                                ffmpeg_proc.stdin.write(nal_bytes)
+                                        await ffmpeg_proc.stdin.drain()
+                                    except Exception:
+                                        pass
+                                # Update active_connections
+                                if camera_id in active_connections:
+                                    active_connections[camera_id]["ffmpeg_proc"] = ffmpeg_proc
+                                print(f"[edge_receiver] FFmpeg relay restarted for {camera_id} (attempt {ffmpeg_proc._restart_count}/{MAX_FFMPEG_RESTARTS})")
+                                continue
+                            except Exception as restart_err:
+                                print(f"[edge_receiver] FFmpeg restart failed for {camera_id}: {restart_err}")
+                                metrics["ffmpeg_failures"] += 1
+                                break
+                        else:
+                            print(f"[edge_receiver] Max FFmpeg restarts reached for {camera_id}. Disconnecting.")
+                            break
                 else:
-                    print(f"[edge_receiver] FFmpeg relayer process has stopped unexpectedly for {camera_id}.")
-                    break
+                    # FFmpeg process has exited
+                    ffmpeg_restart_count = getattr(ffmpeg_proc, '_restart_count', 0) if ffmpeg_proc else MAX_FFMPEG_RESTARTS
+                    if ffmpeg_restart_count < MAX_FFMPEG_RESTARTS:
+                        print(f"[edge_receiver] FFmpeg relayer process stopped for {camera_id}. Attempting restart...")
+                        if ffmpeg_proc:
+                            await cleanup_ffmpeg(ffmpeg_proc)
+                            metrics["active_ffmpeg_relays"] -= 1
+                        try:
+                            ffmpeg_proc = await asyncio.create_subprocess_exec(
+                                *cmd,
+                                stdin=asyncio.subprocess.PIPE,
+                                stdout=asyncio.subprocess.DEVNULL,
+                                stderr=asyncio.subprocess.PIPE
+                            )
+                            ffmpeg_proc._restart_count = ffmpeg_restart_count + 1
+                            metrics["active_ffmpeg_relays"] += 1
+                            asyncio.create_task(_log_ffmpeg_stderr(ffmpeg_proc, camera_id))
+                            if config_param:
+                                try:
+                                    parts = config_param.split(",")
+                                    for part in parts:
+                                        part = part.strip()
+                                        if part:
+                                            nal_bytes = base64.b64decode(part)
+                                            if not (nal_bytes.startswith(b"\x00\x00\x00\x01") or nal_bytes.startswith(b"\x00\x00\x01")):
+                                                nal_bytes = b"\x00\x00\x00\x01" + nal_bytes
+                                            ffmpeg_proc.stdin.write(nal_bytes)
+                                    await ffmpeg_proc.stdin.drain()
+                                except Exception:
+                                    pass
+                            if camera_id in active_connections:
+                                active_connections[camera_id]["ffmpeg_proc"] = ffmpeg_proc
+                            print(f"[edge_receiver] FFmpeg relay restarted for {camera_id} (attempt {ffmpeg_proc._restart_count}/{MAX_FFMPEG_RESTARTS})")
+                            continue
+                        except Exception as restart_err:
+                            print(f"[edge_receiver] FFmpeg restart failed for {camera_id}: {restart_err}")
+                            metrics["ffmpeg_failures"] += 1
+                            break
+                    else:
+                        print(f"[edge_receiver] Max FFmpeg restarts reached for {camera_id}. Disconnecting.")
+                        break
 
             else:
                 print(f"[edge_receiver] Unknown magic type: {magic_type} from {client_ip}.")
