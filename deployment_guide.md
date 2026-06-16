@@ -212,18 +212,32 @@ sudo journalctl -u video-frontend -f
 
 ---
 
-## 6. How Live Streaming Works (WebRTC & HLS)
+## 6. How Live Streaming Works & H.265 Transcoding
 
-The platform supports both ultra-low latency **WebRTC (WHEP)** and highly compatible **Low-Latency HLS (LL-HLS)** playback:
+The platform supports ultra-low latency **WebRTC (WHEP)** playback for both H.264 and H.265 camera streams, with an automated fallback to **Low-Latency HLS (LL-HLS)**:
 
-### Step 6.1: WebRTC (H264 Cameras)
-- Active H264 camera streams are played via WebRTC.
+### Step 6.1: WebRTC (H264/H265 Cameras)
+- **H.264 Streams**: Played directly via WebRTC using MediaMTX.
+- **H.265 Streams**: Since web browsers do not natively support H.265 playback over WebRTC, the platform implements an **On-Demand Transcoding Engine**.
+  - When a viewer requests playback of an H.265 camera stream, the backend intercepts the WebRTC WHEP signaling.
+  - It automatically spawns a shared, on-demand FFmpeg process to transcode the stream from H.265 to H.264.
+  - The transcoded stream is published to a temporary path in MediaMTX (`{stream_id}_h264`), and the client is transparently routed to this path.
+  - **Viewer-Based Lifecycle**: If additional viewers watch the same stream, they share the single running FFmpeg transcoder. When the last viewer disconnects, a 60-second grace period is triggered. If no new viewers connect, the transcoder process is terminated to save CPU resources.
+  - **Failover & Watchdog**: A background scheduler watchdog monitors the transcoders and automatically restarts any crashed processes if active viewers are still waiting.
+  - **Capacity Protection**: To protect the server CPU, the backend limits the maximum number of concurrent transcoders (default: 10).
+  - **Untouched Recordings**: Raw H.265 video is recorded directly from the camera stream to save storage and disk write IO; only live view utilizes the transcoder.
 - The backend API (`/api/webrtc/ice-servers`) dynamically resolves the correct TURN candidate IP for the client browser. It inspects browser headers (`Referer`, `Origin`, and `X-Forwarded-Host`) to automatically retrieve the server's public IP address, bypassing any localhost/loopback proxy issues.
 - MediaMTX serves WebRTC traffic on UDP port `8189`.
 
-### Step 6.2: LL-HLS Fallback (H265 Cameras)
-- WebRTC does not support H265 streams in most browsers and is not supported by MediaMTX WebRTC.
-- The player automatically falls back to **LL-HLS** when WebRTC fails (e.g. for all H265 cameras like `ENR1001C9_NORMAL`).
+### Step 6.2: H.265 Transcoding Configuration
+You can configure the H.265 transcoding settings in the `.env` file or environment variables:
+- `MAX_ACTIVE_TRANSCODERS`: Maximum number of concurrent transcoder processes (default: `10`).
+- `TRANSCODER_VCODEC`: Video codec to use for transcoding. Set to `libx264` (default, CPU-based) or a hardware-accelerated encoder such as `h264_nvenc` (NVIDIA GPUs) or `h264_qsv` (Intel QuickSync).
+- `TRANSCODER_PRESET`: Preset for encoding speed/compression (default: `ultrafast`).
+- `TRANSCODER_GRACE_PERIOD_SECONDS`: Time in seconds to wait before stopping a transcoder after the last viewer disconnects (default: `60`).
+
+### Step 6.3: LL-HLS Fallback
+- If WebRTC signaling fails or the transcoding capacity limit is hit, the player automatically falls back to **LL-HLS**.
 - The HLS playlist (`index.m3u8`) is served by the MediaMTX HLS muxer on port `8080` and proxied through the FastAPI backend.
 - **Troubleshooting Muxer Destruction**: If HLS playback returns a `404 Not Found` in your logs, ensure that `hlsSegmentCount` is set to `8` or higher in `/opt/mediamtx/mediamtx.yml`.
 
