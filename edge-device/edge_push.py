@@ -33,8 +33,6 @@ import argparse
 import logging
 import sys
 import os
-import urllib.request
-import urllib.error
 
 # ──────────────────────────────────────────────
 #  Logging
@@ -376,144 +374,6 @@ class EdgePushClient:
 
 
 # ──────────────────────────────────────────────
-#  Edge Backlog Recovery Framework (Strategy B)
-# ──────────────────────────────────────────────
-
-def upload_file(cam_id: str, push_host: str, file_path: str) -> bool:
-    """
-    Upload a completed backlog segment file to the VMS server over HTTP.
-    Uses Python's built-in urllib library to avoid external dependencies.
-    """
-    url = f"http://{push_host}:8000/api/edge/upload"
-    filename = os.path.basename(file_path)
-    boundary = "----WebKitFormBoundaryEdgePushUploader"
-
-    try:
-        with open(file_path, "rb") as f:
-            file_content = f.read()
-    except Exception as read_err:
-        log.error(f"[{cam_id}] Failed to read backlog file {filename}: {read_err}")
-        return False
-
-    # Construct multipart/form-data payload
-    parts = [
-        f"--{boundary}".encode(),
-        f'Content-Disposition: form-data; name="stream_id"'.encode(),
-        b"",
-        cam_id.encode(),
-        f"--{boundary}".encode(),
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode(),
-        b"Content-Type: video/mp4",
-        b"",
-        file_content,
-        f"--{boundary}--".encode(),
-        b""
-    ]
-    body = b"\r\n".join(parts)
-
-    req = urllib.request.Request(url, data=body)
-    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    req.add_header("Content-Length", str(len(body)))
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            resp_body = response.read().decode()
-            resp_data = json.loads(resp_body)
-            if resp_data.get("status") in ("success", "already_indexed"):
-                return True
-    except urllib.error.HTTPError as http_err:
-        try:
-            err_data = json.loads(http_err.read().decode())
-            if err_data.get("status") == "already_indexed":
-                return True
-        except Exception:
-            pass
-        log.error(f"[{cam_id}] HTTP error uploading {filename}: {http_err.code} - {http_err.reason}")
-    except Exception as e:
-        log.error(f"[{cam_id}] Connection error uploading {filename}: {e}")
-
-    return False
-
-
-def backlog_segmenter_loop(rtsp_url: str, backlog_dir: str, stop_event: threading.Event, cam_id: str):
-    """
-    Runs an independent FFmpeg process to continuously save 1-minute mp4 segments.
-    """
-    os.makedirs(backlog_dir, exist_ok=True)
-    while not stop_event.is_set():
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel", "warning",
-            "-rtsp_transport", "tcp",
-            "-i", rtsp_url,
-            "-an",
-            "-c:v", "copy",
-            "-f", "segment",
-            "-segment_time", "60",
-            "-segment_format", "mp4",
-            "-reset_timestamps", "1",
-            "-strftime", "1",
-            os.path.join(backlog_dir, "%Y%m%d_%H%M%S.mp4")
-        ]
-        log.info(f"[{cam_id}] Starting local backlog segmenter for {rtsp_url}")
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            while not stop_event.is_set():
-                if proc.poll() is not None:
-                    break
-                stop_event.wait(2)
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except Exception:
-                    proc.kill()
-        except Exception as e:
-            log.error(f"[{cam_id}] Error in backlog segmenter: {e}")
-        stop_event.wait(5)
-
-
-def backlog_uploader_loop(cam_id: str, push_host: str, backlog_dir: str, stop_event: threading.Event):
-    """
-    Scans the backlog directory and uploads completed segments to the VMS server.
-    """
-    os.makedirs(backlog_dir, exist_ok=True)
-    while not stop_event.is_set():
-        try:
-            # 1. Clean up old files (> 24 hours) to protect disk space
-            now = time.time()
-            for f in os.listdir(backlog_dir):
-                fp = os.path.join(backlog_dir, f)
-                if os.path.isfile(fp) and f.endswith(".mp4"):
-                    if now - os.path.getmtime(fp) > 24 * 3600:
-                        try:
-                            os.remove(fp)
-                            log.info(f"[{cam_id}] Cleaned up stale backlog file: {f}")
-                        except Exception:
-                            pass
-
-            # 2. Find completed files (sort and omit the newest active one)
-            files = sorted([f for f in os.listdir(backlog_dir) if f.endswith(".mp4")])
-            if len(files) > 1:
-                completed_files = files[:-1]
-                for f in completed_files:
-                    if stop_event.is_set():
-                        break
-                    fp = os.path.join(backlog_dir, f)
-                    if upload_file(cam_id, push_host, fp):
-                        try:
-                            os.remove(fp)
-                            log.info(f"[{cam_id}] Successfully uploaded and removed backlog segment: {f}")
-                        except Exception as delete_err:
-                            log.error(f"[{cam_id}] Failed to delete uploaded file {f}: {delete_err}")
-        except Exception as e:
-            log.error(f"[{cam_id}] Error in backlog uploader loop: {e}")
-
-        stop_event.wait(30)
-
-
-# ──────────────────────────────────────────────
 #  Camera Worker Thread
 # ──────────────────────────────────────────────
 
@@ -597,40 +457,16 @@ def main():
     log.info(f"Starting edge push for {len(cameras)} camera(s) …")
 
     threads = []
-    stop_events = []
     for cam in cameras:
-        cam_id = cam["cameraId"]
-        rtsp_url = cam["rtspUrl"]
-        push_host = cam["pushHost"]
-
-        # Local backlog path
-        backlog_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backlog", cam_id)
-        stop_event = threading.Event()
-        stop_events.append(stop_event)
-
-        # 1. Live stream worker thread
-        t_live = threading.Thread(target=camera_worker, args=(cam,), daemon=True, name=f"{cam_id}-live")
-        t_live.start()
-        threads.append(t_live)
-
-        # 2. Local segmenter thread
-        t_seg = threading.Thread(target=backlog_segmenter_loop, args=(rtsp_url, backlog_dir, stop_event, cam_id), daemon=True, name=f"{cam_id}-seg")
-        t_seg.start()
-        threads.append(t_seg)
-
-        # 3. HTTP uploader thread
-        t_upload = threading.Thread(target=backlog_uploader_loop, args=(cam_id, push_host, backlog_dir, stop_event), daemon=True, name=f"{cam_id}-upload")
-        t_upload.start()
-        threads.append(t_upload)
+        t = threading.Thread(target=camera_worker, args=(cam,), daemon=True, name=cam["cameraId"])
+        t.start()
+        threads.append(t)
 
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
         log.info("Shutting down …")
-        for s in stop_events:
-            s.set()
-        time.sleep(2)
 
 
 if __name__ == "__main__":

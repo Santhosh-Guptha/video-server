@@ -76,6 +76,10 @@ async def startup():
             await conn.execute(text("ALTER TABLE cameras ADD COLUMN synced_from_api BOOLEAN DEFAULT FALSE NOT NULL;"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("UPDATE cameras SET synced_from_api = TRUE;"))
+        except Exception:
+            pass
 
     try:
         async with db.engine.begin() as conn:
