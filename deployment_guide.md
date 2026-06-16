@@ -37,10 +37,15 @@ sudo ufw enable
 ## 2. Step-by-Step Installation
 
 ### Step 2.1: Install System Dependencies
-Install git, python, nodejs, npm, redis-server, and ffmpeg:
+Install git, python, nodejs, redis-server, ffmpeg, and sqlite3:
 ```bash
 sudo apt update
-sudo apt install -y git python3-pip python3-venv nodejs npm redis-server ffmpeg sqlite3
+# NOTE: If using NodeSource for Node.js (recommended), npm is already bundled.
+# Do not specify npm in the apt command as it causes dependency conflicts.
+sudo apt install -y git python3-pip python3-venv nodejs redis-server ffmpeg sqlite3
+
+# If Node.js was installed from default Ubuntu repositories (not NodeSource), you may need npm:
+# sudo apt install -y npm
 ```
 Ensure Redis is running:
 ```bash
