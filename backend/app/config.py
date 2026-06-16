@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     edge_receiver_enabled: bool = True
     allow_unknown_edge_devices: bool = False
 
+    # H.265 on-demand transcoder settings
+    max_active_transcoders: int = 10
+    transcoder_vcodec: str = "libx264"  # "h264_nvenc" for NVIDIA, "h264_qsv" for Intel QSV
+    transcoder_preset: str = "ultrafast"
+    transcoder_grace_period_seconds: int = 60
+
     class Config:
         env_file = ".env"
 

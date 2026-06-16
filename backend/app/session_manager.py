@@ -70,11 +70,45 @@ async def webrtc_session_watchdog_cleanup(db_session: AsyncSession):
                 )
                 db_sessions = res.scalars().all()
                 
+                # Collect stream IDs of pruned H.265 sessions for transcoder disconnect
+                h265_disconnect_streams = set()
+                
                 for db_s in db_sessions:
                     if db_s.session_id not in active_mediamtx_ids:
                         print(f"[session_manager] Watchdog found dead session {db_s.session_id} in DB. Pruning.")
                         db_s.status = "CLOSED"
                         db_s.ended_at = datetime.utcnow()
+                        
+                        # Clean up Redis viewer tracking
+                        try:
+                            from .redis_viewer_tracker import RedisViewerTracker
+                            await RedisViewerTracker.remove_viewer_session(db_s.stream_id, db_s.session_id)
+                        except Exception as e:
+                            print(f"[session_manager] Error cleaning viewer tracking for {db_s.session_id}: {e}")
+                        
+                        # Check if this stream is H.265 for transcoder disconnect
+                        try:
+                            from .models import CameraStream
+                            stream_res = await db_session.execute(
+                                select(CameraStream).where(CameraStream.stream_id == db_s.stream_id)
+                            )
+                            cam_stream = stream_res.scalar_one_or_none()
+                            if cam_stream and cam_stream.codec and cam_stream.codec.upper() == "H265":
+                                h265_disconnect_streams.add(db_s.stream_id)
+                        except Exception as e:
+                            print(f"[session_manager] Error checking codec for {db_s.stream_id}: {e}")
+                
                 await db_session.commit()
+                
+                # Notify TranscoderManager for H.265 streams that lost sessions
+                if h265_disconnect_streams:
+                    from .transcoder import TranscoderManager
+                    for sid in h265_disconnect_streams:
+                        try:
+                            await TranscoderManager.register_viewer_disconnect(sid, db_session)
+                        except Exception as e:
+                            print(f"[session_manager] Error notifying transcoder disconnect for {sid}: {e}")
+                            
         except Exception as e:
             print(f"[session_manager] Error running session watchdog cleanup: {e}")
+

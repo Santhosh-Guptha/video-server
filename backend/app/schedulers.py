@@ -533,3 +533,19 @@ async def webrtc_session_watchdog_loop():
             print(f"[scheduler] Error in WebRTC session watchdog: {e}")
         await asyncio.sleep(10)
 
+
+async def transcoder_watchdog_loop():
+    """
+    Background watchdog that periodically checks if any H.265 transcoder processes
+    have crashed while viewers are still connected, and auto-restarts them.
+    Runs every 15 seconds.
+    """
+    print("[scheduler] Starting transcoder watchdog loop...")
+    from .transcoder import TranscoderManager
+    while True:
+        try:
+            async for session in get_session():
+                await TranscoderManager.watchdog_check(session)
+        except Exception as e:
+            print(f"[scheduler] Error in transcoder watchdog: {e}")
+        await asyncio.sleep(15)

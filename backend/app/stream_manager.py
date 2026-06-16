@@ -149,6 +149,14 @@ class StreamManager:
                 except Exception as e:
                     print(f"[stream_manager] Error deleting path {path_name}: {e}")
 
+            # 3. Stop any running transcoder for H.265 streams
+            if stream.codec and stream.codec.upper() == "H265":
+                try:
+                    from .transcoder import TranscoderManager
+                    await TranscoderManager.stop_transcoder(path_name)
+                except Exception as e:
+                    print(f"[stream_manager] Error stopping transcoder for {path_name}: {e}")
+
             await self.set_stream_state(session, stream, StreamState.OFFLINE)
         finally:
             await RedisManager.release_lock(lock_name)

@@ -188,3 +188,14 @@ class EdgeConnection(Base):
     status: Mapped[str] = mapped_column(String(32), default="CONNECTED", nullable=False)
     client_ip: Mapped[str] = mapped_column(String(64), nullable=False)
 
+
+class StreamTranscoder(Base):
+    __tablename__ = "stream_transcoders"
+
+    stream_id: Mapped[str] = mapped_column(String(128), primary_key=True, nullable=False)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="INACTIVE", nullable=False)  # ACTIVE, INACTIVE, CRASHED, STARTING
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    viewer_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

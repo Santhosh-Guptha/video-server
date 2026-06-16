@@ -15,6 +15,7 @@ from .models import WebRTCSession, StreamMetricHistory, CameraStream, StreamStat
 from .redis_client import RedisManager
 from .redis_viewer_tracker import RedisViewerTracker
 from .session_manager import create_db_session, close_db_session
+from .transcoder import TranscoderManager, TranscoderCapacityError
 
 router = APIRouter(prefix="/api/webrtc", tags=["webrtc"])
 streams_router = APIRouter(prefix="/api/streams", tags=["streams"])
@@ -239,8 +240,33 @@ async def proxy_signaling_session(
                 detail="Active session limit exceeded for this user"
             )
 
+    # 3. Detect H.265 stream codec and route through transcoder if needed
+    mediamtx_stream_id = stream_id  # Default: proxy directly to the stream
+    is_h265 = False
+    try:
+        res = await db_session.execute(
+            select(CameraStream).where(CameraStream.stream_id == stream_id)
+        )
+        cam_stream = res.scalar_one_or_none()
+        if cam_stream and cam_stream.codec and cam_stream.codec.upper() == "H265":
+            is_h265 = True
+            try:
+                mediamtx_stream_id = await TranscoderManager.ensure_transcoder(
+                    stream_id, db_session
+                )
+                print(f"[webrtc] H.265 stream {stream_id} -> routing to {mediamtx_stream_id}")
+            except TranscoderCapacityError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=str(e)
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[webrtc] Error checking stream codec for {stream_id}: {e}")
+
     body_bytes = await request.body()
-    url = f"{settings.mediamtx_webrtc_url}/{stream_id}/{protocol}"
+    url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}"
     
     async with httpx.AsyncClient() as client:
         try:
@@ -268,16 +294,18 @@ async def proxy_signaling_session(
             session_id = location.rstrip("/").split("/")[-1]
             client_ip = request.client.host if request.client else "unknown"
             
-            # Create DB session and register in viewer tracker
+            # Create DB session and register in viewer tracker under the ORIGINAL stream_id
             await create_db_session(session_id, stream_id, protocol.upper(), client_ip, db_session, user_id)
             await RedisViewerTracker.add_viewer_session(stream_id, session_id, {
                 "user_id": str(user_id) if user_id else None,
                 "client_ip": client_ip,
                 "protocol": protocol.upper(),
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.utcnow().isoformat(),
+                "is_h265": is_h265
             })
             
-            # Rewrite Location header dynamically based on the incoming request route prefix
+            # Rewrite Location header to refer to the ORIGINAL stream_id
+            # (transcoding is transparent to the client)
             if "/api/webrtc" in request.url.path:
                 response.headers["Location"] = f"/api/webrtc/play/{stream_id}/{session_id}"
             else:
@@ -302,9 +330,23 @@ async def proxy_signaling_action(
 
     if request.method == "OPTIONS":
         return Response(status_code=204)
-        
+
+    # Detect H.265 stream to route MediaMTX actions to the transcoded path
+    mediamtx_stream_id = stream_id
+    is_h265 = False
+    try:
+        res = await db_session.execute(
+            select(CameraStream).where(CameraStream.stream_id == stream_id)
+        )
+        cam_stream = res.scalar_one_or_none()
+        if cam_stream and cam_stream.codec and cam_stream.codec.upper() == "H265":
+            is_h265 = True
+            mediamtx_stream_id = f"{stream_id}_h264"
+    except Exception as e:
+        print(f"[webrtc] Error checking stream codec for action on {stream_id}: {e}")
+
     body_bytes = await request.body()
-    url = f"{settings.mediamtx_webrtc_url}/{stream_id}/{protocol}/{session_id}"
+    url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}/{session_id}"
     
     async with httpx.AsyncClient() as client:
         try:
@@ -330,6 +372,13 @@ async def proxy_signaling_action(
     if request.method == "DELETE" and mtx_resp.status_code in (200, 204):
         await close_db_session(session_id, db_session)
         await RedisViewerTracker.remove_viewer_session(stream_id, session_id)
+        
+        # Notify TranscoderManager of viewer disconnect for H.265 streams
+        if is_h265:
+            try:
+                await TranscoderManager.register_viewer_disconnect(stream_id, db_session)
+            except Exception as e:
+                print(f"[webrtc] Error notifying transcoder disconnect for {stream_id}: {e}")
         
     return Response(
         content=mtx_resp.content,

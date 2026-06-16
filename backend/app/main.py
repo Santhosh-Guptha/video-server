@@ -119,7 +119,8 @@ async def startup():
         camera_scheduler_loop,
         camera_gap_recovery_loop,
         camera_archive_cleanup_loop,
-        webrtc_session_watchdog_loop
+        webrtc_session_watchdog_loop,
+        transcoder_watchdog_loop
     )
     from .health_monitor import health_monitor_loop
     asyncio.create_task(upstream_sync_loop())
@@ -128,10 +129,17 @@ async def startup():
     asyncio.create_task(camera_archive_cleanup_loop())
     asyncio.create_task(webrtc_session_watchdog_loop())
     asyncio.create_task(health_monitor_loop())
+    asyncio.create_task(transcoder_watchdog_loop())
 
     if settings.edge_receiver_enabled:
         from .edge_receiver import start_edge_receiver
         asyncio.create_task(start_edge_receiver())
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Clean up all active transcoders on server shutdown."""
+    from .transcoder import TranscoderManager
+    await TranscoderManager.stop_all()
 
 class SegmentCompletePayload(BaseModel):
     stream_id: str
