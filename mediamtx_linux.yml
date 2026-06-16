@@ -39,8 +39,7 @@ pathDefaults:
   recordFormat: fmp4
   recordPartDuration: 1s
   recordSegmentDuration: 60s
-  runOnRecordSegmentComplete: |
-    cd /opt/video-server/backend && /opt/video-backend-venv/bin/python3 -m app.record_complete "${MTX_PATH:-$RTSP_PATH}" "${MTX_SEGMENT_PATH:-$RECORD_PATH}"
+  runOnRecordSegmentComplete: /bin/bash /opt/video-server/backend/app/segment_hook.sh "$MTX_PATH" "$MTX_SEGMENT_PATH"
 
 # Configuration for paths
 paths:
