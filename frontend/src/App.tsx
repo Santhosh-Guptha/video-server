@@ -5,6 +5,7 @@ import { Player } from './components/Player'
 import { Dashboard } from './pages/Dashboard'
 import { CameraDetails } from './pages/CameraDetails'
 import { Playback } from './pages/Playback'
+import { EdgePushPage } from './pages/EdgePush'
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
 import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2, ChevronDown, Search } from 'lucide-react'
 
@@ -28,15 +29,25 @@ export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selected, setSelected] = useState<Camera | undefined>()
 
+  const isEdgeCamera = (cam: Camera) => !cam.rtsp_url || cam.rtsp_url.trim() === "" || !cam.rtsp_url.trim().toLowerCase().startsWith("rtsp://");
+
+  const standardCameras = useMemo(() => {
+    return cameras.filter(cam => !isEdgeCamera(cam))
+  }, [cameras])
+
+  const edgeCameras = useMemo(() => {
+    return cameras.filter(cam => isEdgeCamera(cam))
+  }, [cameras])
+
   const [selectedStreams, setSelectedStreams] = useState<Camera[]>([])
 
   const [layout, setLayout] = useState(() => {
     const stored = localStorage.getItem('vms_layout')
     return stored ? parseInt(stored, 10) : 4
   }) 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback'>(() => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush'>(() => {
     const stored = localStorage.getItem('vms_active_tab')
-    return (stored === 'dashboard' || stored === 'live' || stored === 'playback') ? stored : 'dashboard'
+    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush') ? stored : 'dashboard'
   })
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
@@ -108,12 +119,12 @@ export default function App() {
   }, [])
 
   const filteredLiveCameras = useMemo(() => {
-    return cameras.filter(
+    return standardCameras.filter(
       (cam) =>
         cam.name.toLowerCase().includes(liveSearchQuery.toLowerCase()) ||
         cam.stream_id.toLowerCase().includes(liveSearchQuery.toLowerCase())
     )
-  }, [cameras, liveSearchQuery])
+  }, [standardCameras, liveSearchQuery])
 
   async function loadCameras() {
     setLoading(true)
@@ -138,12 +149,14 @@ export default function App() {
       const storedFocusedId = localStorage.getItem('vms_focused_stream_id')
       const restoredFocused = restoredStreams.find((c) => c.stream_id === storedFocusedId)
 
-      if (restoredStreams.length > 0) {
-        setSelectedStreams(restoredStreams)
-        setSelected(restoredFocused || restoredStreams[0])
-      } else if (data.length > 0) {
-        setSelected(data[0])
-        setSelectedStreams([data[0]])
+      const standardData = data.filter(c => !isEdgeCamera(c))
+      const restoredStandardStreams = restoredStreams.filter(c => !isEdgeCamera(c))
+      if (restoredStandardStreams.length > 0) {
+        setSelectedStreams(restoredStandardStreams)
+        setSelected(restoredFocused && !isEdgeCamera(restoredFocused) ? restoredFocused : restoredStandardStreams[0])
+      } else if (standardData.length > 0) {
+        setSelected(standardData[0])
+        setSelectedStreams([standardData[0]])
       }
     } catch (e) {
       setStatusText(e instanceof Error ? e.message : 'Failed to load cameras')
@@ -161,7 +174,7 @@ export default function App() {
     fetchRecordings(selected.stream_id).then(setRecordings).catch(() => setRecordings([]))
   }, [selected?.stream_id])
 
-  const liveCount = useMemo(() => cameras.filter((c) => c.active).length, [cameras])
+  const liveCount = useMemo(() => standardCameras.filter((c) => c.active).length, [standardCameras])
 
   async function handleSync() {
     setStatusText('Syncing with camera API...')
@@ -246,11 +259,11 @@ export default function App() {
     <div className="appShell">
       <Sidebar
         onRefresh={handleSync}
-        totalCameras={cameras.length}
+        totalCameras={standardCameras.length}
         liveCameras={liveCount}
         lastSyncText={lastSync}
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={setActiveTab as (tab: string) => void}
       />
 
       <main className="mainPanel">
@@ -267,7 +280,7 @@ export default function App() {
         <div className="workspace singleTab">
           {activeTab === 'dashboard' && (
             <Dashboard
-              cameras={cameras}
+              cameras={standardCameras}
               query={query}
               setQuery={setQuery}
               selectedStreamIds={selectedStreams.map((c) => c.stream_id)}
@@ -485,9 +498,15 @@ export default function App() {
               <Playback
                 streamId={selected?.stream_id}
                 cameraName={selected?.name}
-                cameras={cameras}
+                cameras={standardCameras}
                 onSelectCamera={(cam) => setSelected(cam)}
               />
+            </div>
+          )}
+
+          {activeTab === 'edgepush' && (
+            <div className="streamArea">
+              <EdgePushPage edgeCameras={edgeCameras} />
             </div>
           )}
         </div>

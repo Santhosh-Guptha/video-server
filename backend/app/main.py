@@ -817,6 +817,151 @@ async def get_edge_connections(session: Annotated[AsyncSession, Depends(get_sess
     return result
 
 
+@app.get("/api/edge/unregistered")
+async def get_unregistered_edge_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
+    """
+    Returns camera IDs that are actively pushing via TCP (connected or recently seen)
+    but have NO matching CameraStream record in the local database.
+    These are cameras pushing from the field that are not registered in UAT1.
+    """
+    from .edge_receiver import active_connections, unregistered_attempts
+    from .models import EdgeConnection
+
+    # Get all distinct camera_ids that have ever connected via edge push
+    stmt = select(EdgeConnection.camera_id).distinct()
+    res = await session.execute(stmt)
+    all_edge_cam_ids = {row[0] for row in res.fetchall()}
+
+    # Also include any currently active in-memory connections or unauthorized attempts
+    all_edge_cam_ids.update(active_connections.keys())
+    all_edge_cam_ids.update(unregistered_attempts.keys())
+
+    if not all_edge_cam_ids:
+        return []
+
+    # Get all registered stream_ids from the DB
+    stmt2 = select(CameraStream.stream_id)
+    res2 = await session.execute(stmt2)
+    registered_ids = {row[0] for row in res2.fetchall()}
+
+    # Unregistered = pushed but not in DB
+    unregistered = all_edge_cam_ids - registered_ids
+
+    result = []
+    for cam_id in unregistered:
+        # Get latest connection record
+        stmt3 = (
+            select(EdgeConnection)
+            .where(EdgeConnection.camera_id == cam_id)
+            .order_by(EdgeConnection.connected_at.desc())
+            .limit(1)
+        )
+        res3 = await session.execute(stmt3)
+        latest = res3.scalar_one_or_none()
+
+        is_active = cam_id in active_connections
+        mem = active_connections.get(cam_id, {})
+        unreg_info = unregistered_attempts.get(cam_id, {})
+
+        client_ip = mem.get("client_ip") or unreg_info.get("client_ip") or (latest.client_ip if latest else None)
+        
+        last_seen = None
+        if mem.get("last_frame_ts"):
+            last_seen = mem.get("last_frame_ts").isoformat()
+        elif unreg_info.get("last_seen"):
+            last_seen = unreg_info.get("last_seen").isoformat()
+        elif latest and latest.last_frame_ts:
+            last_seen = latest.last_frame_ts.isoformat()
+
+        bytes_received = mem.get("bytes_received") or unreg_info.get("bytes_received") or (latest.bytes_received if latest else 0)
+        
+        first_seen = None
+        if unreg_info.get("first_seen"):
+            first_seen = unreg_info.get("first_seen").isoformat()
+        elif latest and latest.connected_at:
+            first_seen = latest.connected_at.isoformat()
+
+        status = "CONNECTED" if is_active else (unreg_info.get("status") or (latest.status if latest else "UNKNOWN"))
+
+        result.append({
+            "camera_id": cam_id,
+            "is_active": is_active,
+            "client_ip": client_ip,
+            "last_seen": last_seen,
+            "bytes_received": bytes_received,
+            "first_seen": first_seen,
+            "status": status,
+        })
+
+    # Sort: active first, then by last_seen desc
+    result.sort(key=lambda x: (not x["is_active"], x["last_seen"] or ""), reverse=True)
+    return result
+
+
+@app.post("/api/edge/register/{camera_id}")
+async def register_edge_camera(
+    camera_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    name: str = None,
+):
+    """
+    Manually register an unregistered edge-push camera into the local DB.
+    Creates a parent Camera and child CameraStream record so the server
+    will accept future connections from this camera_id.
+    """
+    # Check if already registered
+    stmt = select(CameraStream).where(CameraStream.stream_id == camera_id)
+    res = await session.execute(stmt)
+    existing = res.scalar_one_or_none()
+    if existing:
+        return {"status": "already_registered", "stream_id": camera_id}
+
+    # Generate a unique source_camera_id
+    from sqlalchemy import func
+    max_id_stmt = select(func.max(Camera.source_camera_id))
+    max_id_res = await session.execute(max_id_stmt)
+    max_id = max_id_res.scalar() or 0
+    new_source_id = max(max_id + 1, 900000)
+
+    # 1. Create parent Camera
+    camera = Camera(
+        source_camera_id=new_source_id,
+        name=name or camera_id,
+        active=True
+    )
+    session.add(camera)
+    await session.flush()
+
+    # 2. Create child CameraStream
+    new_stream = CameraStream(
+        camera_id=camera.id,
+        stream_id=camera_id,
+        profile_type=ProfileType.MAIN,
+        resolution="1920x1080",
+        fps=15,
+        codec="H264",
+        stream_url="",  # empty means publisher edge-push stream
+        status=StreamState.REGISTERED,
+        always_on=True,
+    )
+    session.add(new_stream)
+    await session.flush()
+
+    # Add stream to MediaMTX config
+    await stream_manager.add_stream(session, new_stream)
+    await session.commit()
+
+    # Clean up from unregistered_attempts in memory
+    from .edge_receiver import unregistered_attempts
+    unregistered_attempts.pop(camera_id, None)
+
+    return {
+        "status": "registered",
+        "stream_id": camera_id,
+        "message": f"Camera '{camera_id}' registered successfully as EDGE_PUSH. It will be accepted on next connection."
+    }
+
+
 @app.get("/")
 async def root():
     return {"message": "Enterprise VMS FastAPI backend is running"}

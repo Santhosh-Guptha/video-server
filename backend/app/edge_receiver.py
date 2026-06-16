@@ -31,6 +31,7 @@ metrics = {
 
 # Real-time memory registry for active connections: camera_id -> connection dict
 active_connections = {}
+unregistered_attempts = {}
 
 
 async def cleanup_ffmpeg(proc):
@@ -156,6 +157,23 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                         if not stream:
                             print(f"[edge_receiver] Unauthorized camera ID registration attempt: {camera_id}")
                             metrics["packet_parse_errors"] += 1
+                            
+                            # Track this unregistered push attempt in memory
+                            now_time = datetime.utcnow()
+                            if camera_id in unregistered_attempts:
+                                unregistered_attempts[camera_id]["last_seen"] = now_time
+                                unregistered_attempts[camera_id]["bytes_received"] += bytes_received_session
+                                unregistered_attempts[camera_id]["client_ip"] = client_ip
+                            else:
+                                unregistered_attempts[camera_id] = {
+                                    "camera_id": camera_id,
+                                    "client_ip": client_ip,
+                                    "first_seen": now_time,
+                                    "last_seen": now_time,
+                                    "bytes_received": bytes_received_session,
+                                    "status": "UNAUTHORIZED"
+                                }
+                            
                             writer.close()
                             return
 
@@ -173,6 +191,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                         rtsp_target = f"rtsp://localhost:8554/{camera_id}"
                         cmd = [
                             settings.ffmpeg_path,
+                            "-use_wallclock_as_timestamps", "1",
                             "-f", codec_fmt,
                             "-i", "pipe:0",
                             "-c:v", "copy",

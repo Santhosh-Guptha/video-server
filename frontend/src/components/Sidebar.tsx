@@ -1,12 +1,12 @@
-import { Camera, RefreshCw, Radar, Clock3 } from 'lucide-react'
+import { Camera, RefreshCw, Radar, Clock3, Wifi } from 'lucide-react'
 
 type SidebarProps = {
   onRefresh: () => void
   totalCameras: number
   liveCameras: number
   lastSyncText: string
-  activeTab: 'dashboard' | 'live' | 'playback'
-  setActiveTab: (tab: 'dashboard' | 'live' | 'playback') => void
+  activeTab: string
+  setActiveTab: (tab: string) => void
 }
 
 export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, activeTab, setActiveTab }: SidebarProps) {
@@ -66,6 +66,14 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, ac
           style={{ textAlign: 'left', width: '100%' }}
         >
           Playback
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'edgepush' ? 'active' : ''}`}
+          onClick={() => setActiveTab('edgepush')}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Wifi size={14} /> Edge Push
         </button>
       </nav>
 
