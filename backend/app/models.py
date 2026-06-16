@@ -65,6 +65,8 @@ class Camera(Base):
     source_camera_id: Mapped[int] = mapped_column(Integer, unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    make: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    synced_from_api: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow, onupdate=datetime.utcnow)
 

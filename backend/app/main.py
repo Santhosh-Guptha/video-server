@@ -2,10 +2,10 @@ import json
 import time
 from pathlib import Path
 from typing import Annotated
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import asyncio
@@ -66,9 +66,21 @@ async def upstream_sync_loop():
 async def startup():
     # Attempt to auto-create PostgreSQL tables on start (fallback logic)
     from . import db
+    
+    async def apply_dynamic_schema_upgrades(conn):
+        try:
+            await conn.execute(text("ALTER TABLE cameras ADD COLUMN make VARCHAR(128);"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE cameras ADD COLUMN synced_from_api BOOLEAN DEFAULT FALSE NOT NULL;"))
+        except Exception:
+            pass
+
     try:
         async with db.engine.begin() as conn:
             await conn.run_sync(db.Base.metadata.create_all)
+            await apply_dynamic_schema_upgrades(conn)
     except Exception as e:
         print(f"[startup] PostgreSQL connection/migration failed: {e}. Falling back to local SQLite.")
         from .db import reset_db_engine
@@ -78,6 +90,7 @@ async def startup():
         # Create SQLite tables
         async with db.engine.begin() as conn:
             await conn.run_sync(db.Base.metadata.create_all)
+            await apply_dynamic_schema_upgrades(conn)
 
     Path(settings.recording_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.hls_dir).mkdir(parents=True, exist_ok=True)
@@ -247,17 +260,26 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
         active = bool(raw.get("active", True))
 
         # 1. Sync Camera Parent Row
+        make = raw.get("make")
         res = await session.execute(
             select(Camera).where(Camera.source_camera_id == source_id)
         )
         camera = res.scalar_one_or_none()
         if not camera:
-            camera = Camera(source_camera_id=source_id, name=name, active=active)
+            camera = Camera(
+                source_camera_id=source_id,
+                name=name,
+                active=active,
+                make=make,
+                synced_from_api=True
+            )
             session.add(camera)
             await session.flush()
         else:
             camera.name = name
             camera.active = active
+            camera.make = make
+            camera.synced_from_api = True
             await session.flush()
 
         # 2. Sync CameraStream Child Row
@@ -960,6 +982,161 @@ async def register_edge_camera(
         "stream_id": camera_id,
         "message": f"Camera '{camera_id}' registered successfully as EDGE_PUSH. It will be accepted on next connection."
     }
+
+
+@app.post("/api/edge/upload")
+async def upload_edge_backlog(
+    stream_id: str = Form(...),
+    file: UploadFile = File(...),
+    start_ts: float = Form(None),
+    end_ts: float = Form(None),
+    session: Annotated[AsyncSession, Depends(get_session)] = None,
+):
+    from datetime import datetime
+    import re
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy import func
+
+    # 1. Validation & Acceptance Policy
+    stmt = (
+        select(CameraStream)
+        .options(selectinload(CameraStream.camera))
+        .where(CameraStream.stream_id == stream_id)
+    )
+    res = await session.execute(stmt)
+    stream = res.scalar_one_or_none()
+
+    if not stream:
+        if not settings.allow_unknown_edge_devices:
+            raise HTTPException(status_code=403, detail="Forbidden: Unknown edge stream ID")
+        
+        # Auto-registration in development mode
+        max_id_stmt = select(func.max(Camera.source_camera_id))
+        max_id_res = await session.execute(max_id_stmt)
+        max_id = max_id_res.scalar() or 0
+        new_source_id = max(max_id + 1, 900000)
+
+        # Create camera
+        camera = Camera(
+            source_camera_id=new_source_id,
+            name=stream_id,
+            active=True,
+            make="Generic",
+            synced_from_api=False
+        )
+        session.add(camera)
+        await session.flush()
+
+        # Create stream
+        stream = CameraStream(
+            camera_id=camera.id,
+            stream_id=stream_id,
+            profile_type=ProfileType.MAIN,
+            resolution="1920x1080",
+            fps=15,
+            codec="H264",
+            stream_url="",
+            status=StreamState.REGISTERED,
+            always_on=True,
+        )
+        session.add(stream)
+        await session.flush()
+        await stream_manager.add_stream(session, stream)
+        await session.commit()
+    else:
+        # Check active and synced_from_api
+        camera = stream.camera
+        if not settings.allow_unknown_edge_devices:
+            if not camera or not camera.active or not camera.synced_from_api:
+                raise HTTPException(status_code=403, detail="Forbidden: Device is inactive or not synchronized from Video Server API")
+
+    # 2. Timestamp Extraction
+    parsed_start_ts = start_ts
+    if parsed_start_ts is None:
+        filename = file.filename or ""
+        # Try YYYYMMDD_HHMMSS
+        match = re.search(r"(\d{8})_(\d{6})", filename)
+        if match:
+            try:
+                date_str, time_str = match.groups()
+                dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                parsed_start_ts = dt.timestamp()
+            except Exception:
+                pass
+        # Try 10-digit unix timestamp
+        if parsed_start_ts is None:
+            match_unix = re.search(r"(\d{10})", filename)
+            if match_unix:
+                try:
+                    parsed_start_ts = float(match_unix.group(1))
+                except Exception:
+                    pass
+
+    if parsed_start_ts is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Bad Request: Could not determine start timestamp from filename or parameters."
+        )
+
+    # 3. File Processing & Saving
+    dt_start = datetime.fromtimestamp(parsed_start_ts)
+    day_str = dt_start.strftime("%Y-%m-%d")
+    target_dir = Path(settings.recording_dir) / stream_id / day_str
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Format the filename in a standardized way to ensure consistent recovery parsing
+    safe_filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
+    file_path = target_dir / safe_filename
+
+    # Save incoming stream
+    try:
+        with open(file_path, "wb") as buffer:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                buffer.write(chunk)
+    except Exception as io_err:
+        if file_path.exists():
+            file_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Failed to write file: {io_err}")
+
+    # Determine end_ts
+    parsed_end_ts = end_ts
+    if parsed_end_ts is None:
+        duration = get_file_duration(str(file_path), settings.ffmpeg_path)
+        parsed_end_ts = parsed_start_ts + duration
+
+    # 4. Duplicate Handling
+    # Check if this exact file path is already indexed
+    stmt_check = select(RecordingSegment).where(
+        RecordingSegment.stream_id == stream_id,
+        RecordingSegment.file_path == str(file_path)
+    )
+    res_check = await session.execute(stmt_check)
+    existing_seg = res_check.scalar_one_or_none()
+    if existing_seg:
+        if file_path.exists():
+            file_path.unlink()
+        return {"status": "already_indexed", "message": "Duplicate upload ignored."}
+
+    # Insert recording segment
+    new_segment = RecordingSegment(
+        stream_id=stream_id,
+        file_path=str(file_path),
+        start_ts=parsed_start_ts,
+        end_ts=parsed_end_ts
+    )
+    session.add(new_segment)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if file_path.exists():
+            file_path.unlink()
+        return {"status": "already_indexed", "message": "Duplicate upload ignored."}
+
+    return {"status": "success", "file_path": str(file_path), "start_ts": parsed_start_ts, "end_ts": parsed_end_ts}
 
 
 @app.get("/")

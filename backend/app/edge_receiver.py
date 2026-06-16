@@ -6,9 +6,10 @@ import time
 import uuid
 from datetime import datetime
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from .config import settings
 from .db import get_session
-from .models import CameraStream, StreamState, EdgeConnection
+from .models import CameraStream, StreamState, EdgeConnection, Camera, ProfileType
 from .stream_manager import stream_manager
 
 # ================= PROTOCOL CONSTANTS =================
@@ -150,12 +151,64 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
                     # Validate camera ID in database
                     async for db_session in get_session():
-                        stmt = select(CameraStream).where(CameraStream.stream_id == camera_id)
+                        stmt = (
+                            select(CameraStream)
+                            .options(selectinload(CameraStream.camera))
+                            .where(CameraStream.stream_id == camera_id)
+                        )
                         res = await db_session.execute(stmt)
                         stream = res.scalar_one_or_none()
 
-                        if not stream:
-                            print(f"[edge_receiver] Unauthorized camera ID registration attempt: {camera_id}")
+                        is_valid = False
+                        if stream:
+                            camera = stream.camera
+                            if settings.allow_unknown_edge_devices:
+                                is_valid = True
+                            elif camera and camera.active and camera.synced_from_api:
+                                is_valid = True
+                        else:
+                            # Stream does not exist
+                            if settings.allow_unknown_edge_devices:
+                                # Auto-register camera and stream
+                                try:
+                                    from sqlalchemy import func
+                                    max_id_stmt = select(func.max(Camera.source_camera_id))
+                                    max_id_res = await db_session.execute(max_id_stmt)
+                                    max_id = max_id_res.scalar() or 0
+                                    new_source_id = max(max_id + 1, 900000)
+
+                                    camera = Camera(
+                                        source_camera_id=new_source_id,
+                                        name=camera_id,
+                                        active=True,
+                                        make="Generic",
+                                        synced_from_api=False
+                                    )
+                                    db_session.add(camera)
+                                    await db_session.flush()
+
+                                    stream = CameraStream(
+                                        camera_id=camera.id,
+                                        stream_id=camera_id,
+                                        profile_type=ProfileType.MAIN,
+                                        resolution="1920x1080",
+                                        fps=15,
+                                        codec="H264",
+                                        stream_url="",
+                                        status=StreamState.REGISTERED,
+                                        always_on=True,
+                                    )
+                                    db_session.add(stream)
+                                    await db_session.flush()
+                                    await stream_manager.add_stream(db_session, stream)
+                                    await db_session.commit()
+                                    is_valid = True
+                                except Exception as auto_reg_err:
+                                    await db_session.rollback()
+                                    print(f"[edge_receiver] Auto-registration failed for {camera_id}: {auto_reg_err}")
+
+                        if not is_valid:
+                            print(f"[edge_receiver] Rejecting unauthorized camera connection: {camera_id}")
                             metrics["packet_parse_errors"] += 1
                             
                             # Track this unregistered push attempt in memory

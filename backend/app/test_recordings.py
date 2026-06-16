@@ -233,3 +233,119 @@ async def test_recovery_scanner_ignores_already_indexed(mock_db_session):
         
         # Verify no additions or commits happened
         mock_db_session.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_playback_recovery_providers():
+    from .providers import get_playback_recovery_provider, UNVProvider, GenericProvider, HikvisionProvider
+    
+    # Test factory mapping
+    assert isinstance(get_playback_recovery_provider("UNV"), UNVProvider)
+    assert isinstance(get_playback_recovery_provider("Uniview"), UNVProvider)
+    assert isinstance(get_playback_recovery_provider("Hikvision"), HikvisionProvider)
+    assert isinstance(get_playback_recovery_provider(None), GenericProvider)
+    assert isinstance(get_playback_recovery_provider("UnknownBrand"), GenericProvider)
+
+    # Mock stream objects
+    class MockCamera:
+        def __init__(self, name, make):
+            self.name = name
+            self.make = make
+
+    class MockStream:
+        def __init__(self, url, make=None):
+            self.stream_url = url
+            self.camera = MockCamera("test_cam", make)
+
+    # Test UNV Playback URL builder
+    unv_stream = MockStream("rtsp://admin:pass@192.168.1.100:554/unicast/c2/s1/live", "UNV")
+    unv_provider = get_playback_recovery_provider("UNV")
+    unv_url = unv_provider.build_playback_url(unv_stream, 1781280300.0, 1781280360.0)
+    assert unv_url == "rtsp://admin:pass@192.168.1.100:554/c2/b1781280300/e1781280360/replay/"
+
+    # Test Generic Playback URL builder
+    gen_stream = MockStream("rtsp://192.168.1.150/live", None)
+    gen_provider = get_playback_recovery_provider(None)
+    gen_url = gen_provider.build_playback_url(gen_stream, 1781280300.0, 1781280360.0)
+    assert "starttime=" in gen_url
+    assert "endtime=" in gen_url
+
+
+@pytest.mark.asyncio
+async def test_edge_upload_endpoint_unauthorized_policy(override_db):
+    """Test that unauthorized upload is rejected with 403 when allow_unknown_edge_devices is False."""
+    from .config import settings
+    # Setup policy to FALSE (default)
+    settings.allow_unknown_edge_devices = False
+
+    # Mock DB returns None for stream_id
+    mock_res = MagicMock()
+    mock_res.scalar_one_or_none.return_value = None
+    override_db.execute.return_value = mock_res
+
+    # Send file
+    file_payload = {"file": ("20260613_005534_recovered.mp4", b"dummy mp4 data", "video/mp4")}
+    form_payload = {"stream_id": "unknown_edge_stream"}
+
+    resp = client.post("/api/edge/upload", data=form_payload, files=file_payload)
+    assert resp.status_code == 403
+    assert "Forbidden" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_edge_upload_endpoint_success(override_db):
+    """Test successful edge backlog file upload with validation, saving, and DB recording."""
+    from .config import settings
+    settings.allow_unknown_edge_devices = False
+    
+    # Mock valid Camera and Stream
+    from .models import Camera
+    mock_camera = Camera(
+        source_camera_id=1234,
+        name="test_cam",
+        active=True,
+        make="UNV",
+        synced_from_api=True
+    )
+    mock_stream = CameraStream(
+        stream_id="valid_stream",
+        camera_id=uuid.uuid4(),
+        profile_type=ProfileType.MAIN,
+        resolution="1920x1080",
+        fps=15,
+        stream_url="rtsp://dummy",
+        status=StreamState.ONLINE
+    )
+    mock_stream.camera = mock_camera
+
+    # DB executes: 1. query stream/camera, 2. query duplicate check
+    mock_res_stream = MagicMock()
+    mock_res_stream.scalar_one_or_none.return_value = mock_stream
+    
+    mock_res_dup = MagicMock()
+    mock_res_dup.scalar_one_or_none.return_value = None # No duplicates
+    
+    override_db.execute.side_effect = [mock_res_stream, mock_res_dup]
+
+    with patch("pathlib.Path.mkdir"), \
+         patch("app.main.open", create=True) as mock_open, \
+         patch("app.main.get_file_duration", return_value=60.0):
+
+        file_payload = {"file": ("20260613_005530.mp4", b"data", "video/mp4")}
+        form_payload = {"stream_id": "valid_stream"}
+
+        resp = client.post("/api/edge/upload", data=form_payload, files=file_payload)
+        assert resp.status_code == 200
+        
+        res_json = resp.json()
+        assert res_json["status"] == "success"
+        # 20260613_005530 -> timestamp is 1781312130 (depending on timezone, let's verify it gets parsed)
+        assert res_json["start_ts"] is not None
+        assert res_json["end_ts"] == res_json["start_ts"] + 60.0
+        
+        # Verify db insert
+        override_db.add.assert_called_once()
+        added_segment = override_db.add.call_args[0][0]
+        assert isinstance(added_segment, RecordingSegment)
+        assert added_segment.stream_id == "valid_stream"
+        override_db.commit.assert_called_once()

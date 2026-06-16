@@ -57,11 +57,19 @@ async def test_edge_receiver_config_and_disconnect():
     ]
 
     # Mock DB session and camera lookup
+    from app.models import Camera
+    mock_camera = Camera(
+        source_camera_id=123,
+        name="test_cam",
+        active=True,
+        synced_from_api=True
+    )
     mock_stream = CameraStream(
         stream_id=camera_id,
         status=StreamState.REGISTERED,
         stream_url="publisher"
     )
+    mock_stream.camera = mock_camera
 
     mock_session = AsyncMock()
     mock_session.execute = AsyncMock()

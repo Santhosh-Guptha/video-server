@@ -7,10 +7,12 @@ from pathlib import Path
 from urllib.parse import quote
 import httpx
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from .config import settings
 from .db import get_session
 from .models import Camera, CameraStream, RecordingSegment, StreamState
+from .providers import get_playback_recovery_provider
 from .redis_client import RedisManager
 from .stream_manager import stream_manager
 
@@ -165,6 +167,7 @@ async def camera_gap_recovery_loop():
                 # Get all active streams that are currently ONLINE
                 res = await session.execute(
                     select(CameraStream)
+                    .options(selectinload(CameraStream.camera))
                     .join(Camera)
                     .where(Camera.active == True)
                     .where(CameraStream.status == StreamState.ONLINE)
@@ -207,10 +210,15 @@ async def camera_gap_recovery_loop():
                                 gap_key = (stream_id, int(temp_start))
                                 if gap_key not in attempted_gaps:
                                     attempted_gaps.add(gap_key)
+                                    
+                                    # Build recovery URL using vendor framework
+                                    make_val = stream.camera.make if stream.camera else None
+                                    provider = get_playback_recovery_provider(make_val)
+                                    recovery_url = provider.build_playback_url(stream, temp_start, temp_start + settings.segment_time_seconds)
+
                                     gaps_to_recover.append({
                                         "stream_id": stream_id,
-                                        "rtsp_url": rtsp_url,
-                                        "raw_json": stream.camera.name, # Using camera name or default
+                                        "recovery_url": recovery_url,
                                         "start_ts": temp_start,
                                         "end_ts": temp_start + settings.segment_time_seconds
                                     })
@@ -225,24 +233,9 @@ async def camera_gap_recovery_loop():
                 stream_id = task["stream_id"]
                 temp_start = task["start_ts"]
                 temp_end = task["end_ts"]
-                base_rtsp = task["rtsp_url"]
+                recovery_url = task["recovery_url"]
 
                 dt_start = datetime.fromtimestamp(temp_start)
-                dt_end = datetime.fromtimestamp(temp_end)
-
-                start_iso = dt_start.strftime("%Y%m%dT%H%M%SZ")
-                end_iso = dt_end.strftime("%Y%m%dT%H%M%SZ")
-                start_time_local = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
-                end_time_local = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
-
-                recovery_url = settings.recovery_rtsp_template.format(
-                    rtsp_url=base_rtsp,
-                    start_iso=start_iso,
-                    end_iso=end_iso,
-                    start_time_local=start_time_local,
-                    end_time_local=end_time_local
-                )
-
                 day_str = dt_start.strftime("%Y-%m-%d")
                 stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
                 stream_record_dir.mkdir(parents=True, exist_ok=True)
@@ -271,6 +264,27 @@ async def camera_gap_recovery_loop():
                         await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
                         if proc.returncode == 0:
                             print(f"[recovery] [{stream_id}] Successfully recovered gap segment: {filename}")
+                            # Index the recovered segment immediately
+                            try:
+                                async for insert_session in get_session():
+                                    stmt_check = select(RecordingSegment).where(
+                                        RecordingSegment.stream_id == stream_id,
+                                        RecordingSegment.file_path == str(output_path)
+                                    )
+                                    res_check = await insert_session.execute(stmt_check)
+                                    existing_seg = res_check.scalar_one_or_none()
+                                    if not existing_seg:
+                                        new_seg = RecordingSegment(
+                                            stream_id=stream_id,
+                                            file_path=str(output_path),
+                                            start_ts=temp_start,
+                                            end_ts=temp_end
+                                        )
+                                        insert_session.add(new_seg)
+                                        await insert_session.commit()
+                                        print(f"[recovery] [{stream_id}] Indexed recovered segment immediately: {filename}")
+                            except Exception as index_err:
+                                print(f"[recovery] [{stream_id}] Failed to index recovered segment: {index_err}")
                         else:
                             print(f"[recovery] [{stream_id}] FFmpeg failed with exit code {proc.returncode} for clip: {filename}")
                             if output_path.exists():

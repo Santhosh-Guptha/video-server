@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     edge_receiver_host: str = "0.0.0.0"
     edge_receiver_port: int = 9999
     edge_receiver_enabled: bool = True
+    allow_unknown_edge_devices: bool = False
 
     class Config:
         env_file = ".env"
