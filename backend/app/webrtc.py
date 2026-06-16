@@ -49,7 +49,9 @@ async def get_ice_servers(request: Request):
     if settings.turn_server_url:
         turn_url = settings.turn_server_url
         if "localhost" in turn_url or "127.0.0.1" in turn_url:
-            host = request.url.hostname or "localhost"
+            host = request.headers.get("x-forwarded-host") or request.url.hostname or "localhost"
+            if ":" in host:
+                host = host.split(":")[0]
             turn_url = turn_url.replace("localhost", host).replace("127.0.0.1", host)
             
         turn_config = {
