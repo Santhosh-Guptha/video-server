@@ -24,7 +24,15 @@ class GenericProvider(PlaybackRecoveryProvider):
         start_time_local = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
         end_time_local = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
 
-        return settings.recovery_rtsp_template.format(
+        # Dynamically determine the correct query delimiter to prevent double question marks
+        sep = "&" if "?" in base_rtsp else "?"
+        template = settings.recovery_rtsp_template
+        if template.startswith("{rtsp_url}?"):
+            template = "{rtsp_url}" + sep + template[len("{rtsp_url}?"):]
+        else:
+            template = template.replace("?", sep, 1) if "?" in base_rtsp else template
+
+        return template.format(
             rtsp_url=base_rtsp,
             start_iso=start_iso,
             end_iso=end_iso,

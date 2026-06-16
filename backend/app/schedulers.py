@@ -302,7 +302,19 @@ async def camera_gap_recovery_loop():
                         if output_path.exists():
                             output_path.unlink()
 
-            await asyncio.gather(*(download_task(task) for task in gaps_to_recover))
+            # Group tasks by stream_id to process them sequentially per camera (to prevent overloading the camera RTSP playback sessions)
+            tasks_by_stream = {}
+            for task in gaps_to_recover:
+                stream_id = task["stream_id"]
+                if stream_id not in tasks_by_stream:
+                    tasks_by_stream[stream_id] = []
+                tasks_by_stream[stream_id].append(task)
+
+            async def process_stream_queue(stream_tasks):
+                for task in stream_tasks:
+                    await download_task(task)
+
+            await asyncio.gather(*(process_stream_queue(stream_tasks) for stream_tasks in tasks_by_stream.values()))
 
         except Exception as e:
             print(f"[recovery] Error in gap recovery loop: {e}")
