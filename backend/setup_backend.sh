@@ -62,6 +62,7 @@ DATABASE_URL=sqlite+aiosqlite:///./data/app.db
 REDIS_URL=redis://localhost:6379/0
 MEDIAMTX_API_URL=http://localhost:9997
 MEDIAMTX_WEBRTC_URL=http://localhost:8889
+UPSTREAM_CAMERA_API_URL=https://iportal2.sronprem.scanalitix.com/api/cameras/camera-videoserver?vsName=STVS1
 EOF
 fi
 
