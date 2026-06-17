@@ -176,6 +176,9 @@ async def camera_scheduler_loop():
                     # Remove decommissioned paths from MediaMTX config
                     for path_name in mediamtx_paths:
                         if path_name != "all_others" and path_name not in active_stream_ids:
+                            # Skip transcoder helper paths
+                            if path_name.endswith("_h264"):
+                                continue
                             print(f"[scheduler] Decommissioning inactive path: {path_name}")
                             try:
                                 await client.delete(f"{settings.mediamtx_api_url}/v3/config/paths/delete/{path_name}")
