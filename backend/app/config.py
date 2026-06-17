@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     turn_server_username: str = "vms_user"
     turn_server_credential: str = "vms_turn_password"
     
-    upstream_camera_api_url: str = "https://iportal2.sronprem.scanalitix.com/api/cameras/camera-videoserver?vsName=STVS1"
+    upstream_camera_api_url: str = ""
     upstream_timeout_seconds: float = 10.0
     ffmpeg_path: str = "ffmpeg"
     recording_dir: str = "./data/recordings"
