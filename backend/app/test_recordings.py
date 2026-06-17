@@ -19,11 +19,15 @@ def mock_db_session():
 @pytest.fixture
 def override_db(mock_db_session):
     from .db import get_session
+    from .config import settings
+    old_val = settings.strict_camera_validation
+    settings.strict_camera_validation = False
     async def override():
         yield mock_db_session
     app.dependency_overrides[get_session] = override
     yield mock_db_session
     app.dependency_overrides.clear()
+    settings.strict_camera_validation = old_val
 
 @pytest.mark.asyncio
 async def test_webhook_successful_registration(override_db):

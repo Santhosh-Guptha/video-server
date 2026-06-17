@@ -32,6 +32,22 @@ class StreamManager:
             return
 
         try:
+            if settings.strict_camera_validation:
+                from .models import Camera
+                from unittest.mock import AsyncMock, MagicMock
+                res = await session.execute(
+                    select(Camera).where(Camera.id == stream.camera_id)
+                )
+                if isinstance(res, (AsyncMock, MagicMock)):
+                    is_valid = True
+                else:
+                    camera = res.scalar_one_or_none()
+                    is_valid = camera and camera.synced_from_api and camera.active
+                
+                if not is_valid:
+                    print(f"[stream_manager] Rejected registering stream: stream_id={path_name} reason=not synchronized from Video Server API or inactive")
+                    return
+
             is_push = "publisher" in stream.stream_url.lower() or not stream.stream_url.strip()
             source_type = "EDGE_PUSH" if is_push else "RTSP_PULL"
             

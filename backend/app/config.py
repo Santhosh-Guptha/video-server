@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     edge_receiver_port: int = 9999
     edge_receiver_enabled: bool = True
     allow_unknown_edge_devices: bool = False
+    strict_camera_validation: bool = True
 
     # H.265 on-demand transcoder settings
     max_active_transcoders: int = 10

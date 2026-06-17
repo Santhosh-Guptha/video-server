@@ -56,7 +56,16 @@ async def index_recordings(session, recording_dir):
         await session.commit()
 
     # 4. Fetch registered camera stream_ids to satisfy Foreign Key constraints
-    stream_res = await session.execute(select(CameraStream.stream_id))
+    if settings.strict_camera_validation:
+        from .models import Camera
+        stream_res = await session.execute(
+            select(CameraStream.stream_id)
+            .join(Camera)
+            .where(Camera.active == True)
+            .where(Camera.synced_from_api == True)
+        )
+    else:
+        stream_res = await session.execute(select(CameraStream.stream_id))
     registered_streams = set(stream_res.scalars().all())
 
     # 5. Insert new recording segments

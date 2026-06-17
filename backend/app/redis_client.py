@@ -93,6 +93,30 @@ class RedisManager:
                 
         RedisManager._memory_cache.pop(f"vms:lock:{lock_name}", None)
 
+    @staticmethod
+    async def increment_counter(name: str) -> int:
+        if redis_client:
+            try:
+                return await redis_client.incr(f"vms:counter:{name}")
+            except Exception as e:
+                print(f"[redis] Connection error incrementing counter: {e}. Writing to memory cache.")
+        
+        current = int(RedisManager._memory_cache.get(f"vms:counter:{name}", 0))
+        new_val = current + 1
+        RedisManager._memory_cache[f"vms:counter:{name}"] = str(new_val)
+        return new_val
+
+    @staticmethod
+    async def get_counter(name: str) -> int:
+        if redis_client:
+            try:
+                val = await redis_client.get(f"vms:counter:{name}")
+                return int(val) if val else 0
+            except Exception as e:
+                print(f"[redis] Connection error getting counter: {e}. Reading from memory cache.")
+                
+        return int(RedisManager._memory_cache.get(f"vms:counter:{name}", 0))
+
 def datetime_now_iso() -> str:
     from datetime import datetime
     return datetime.utcnow().isoformat()

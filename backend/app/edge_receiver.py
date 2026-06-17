@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 import struct
 import json
 import base64
@@ -161,15 +162,19 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                         stream = res.scalar_one_or_none()
 
                         is_valid = False
-                        if stream:
-                            camera = stream.camera
-                            if settings.allow_unknown_edge_devices:
-                                is_valid = True
-                            elif camera and camera.active and camera.synced_from_api:
-                                is_valid = True
+                        if settings.strict_camera_validation:
+                            if stream:
+                                camera = stream.camera
+                                if camera and camera.active and camera.synced_from_api:
+                                    is_valid = True
+                            if not is_valid:
+                                print(f"[edge_receiver] Rejected camera: camera_id={camera_id} reason=not synchronized from Video Server API")
+                                await RedisManager.increment_counter("rejected_edge_connections")
                         else:
-                            # Stream does not exist
-                            if settings.allow_unknown_edge_devices:
+                            # Open/Development Mode
+                            if stream:
+                                is_valid = True
+                            else:
                                 # Auto-register camera and stream
                                 try:
                                     from sqlalchemy import func
@@ -239,6 +244,26 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                 old_conn["writer"].close()
                             except Exception:
                                 pass
+
+                        # Dynamically patch MediaMTX path config to publisher to accept edge push relayer
+                        async with httpx.AsyncClient() as client:
+                            url = f"{settings.mediamtx_api_url}/v3/config/paths/patch/{camera_id}"
+                            payload = {
+                                "source": "publisher",
+                                "sourceOnDemand": False,
+                                "record": True
+                            }
+                            try:
+                                resp = await client.patch(url, json=payload, timeout=5.0)
+                                if resp.status_code in (200, 201):
+                                    print(f"[edge_receiver] Patched MediaMTX path {camera_id} config to source=publisher.")
+                                else:
+                                    # Try adding path if not exists (although it should exist)
+                                    add_url = f"{settings.mediamtx_api_url}/v3/config/paths/add/{camera_id}"
+                                    await client.post(add_url, json=payload, timeout=5.0)
+                                    print(f"[edge_receiver] Added MediaMTX path {camera_id} with source=publisher.")
+                            except Exception as e:
+                                print(f"[edge_receiver] Error patching MediaMTX path config for {camera_id}: {e}")
 
                         # Initialize and spawn FFmpeg relayer
                         codec_fmt = "hevc" if encoder_type == 10 else "h264"
@@ -478,8 +503,13 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     res = await db_session.execute(stmt)
                     stream = res.scalar_one_or_none()
                     if stream:
-                        # Revert status to OFFLINE
-                        await stream_manager.set_stream_state(db_session, stream, StreamState.OFFLINE, "Edge push client disconnected")
+                        is_push = "publisher" in stream.stream_url.lower() or not stream.stream_url.strip()
+                        if not is_push:
+                            # Revert MediaMTX path config back to RTSP Pull (pull mode)
+                            print(f"[edge_receiver] Reverting MediaMTX path {camera_id} back to RTSP pull: {stream.stream_url}")
+                            await stream_manager.add_stream(db_session, stream)
+                        else:
+                            await stream_manager.set_stream_state(db_session, stream, StreamState.OFFLINE, "Edge push client disconnected")
                     break
 
             # Update database connection history log
