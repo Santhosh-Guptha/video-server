@@ -118,6 +118,17 @@ def configure_mediamtx_paths_dynamically():
             modified = True
             print(f"[startup] MediaMTX recordPath updated to: {target_record_path}")
             
+    # Replace recordSegmentDuration
+    segment_dur_pattern = r"(^\s*recordSegmentDuration:\s*)[^\n]+"
+    match_sd = re.search(segment_dur_pattern, content, re.MULTILINE)
+    if match_sd:
+        current_line = match_sd.group(0)
+        new_line = f"{match_sd.group(1)}\"{settings.segment_time_seconds}s\""
+        if current_line.strip() != new_line.strip():
+            content = re.sub(segment_dur_pattern, new_line, content, flags=re.MULTILINE)
+            modified = True
+            print(f"[startup] MediaMTX recordSegmentDuration updated to: {settings.segment_time_seconds}s")
+            
     # Replace runOnRecordSegmentComplete
     hook_pattern = r"(^\s*runOnRecordSegmentComplete:\s*)[^\n]+"
     match_hook = re.search(hook_pattern, content, re.MULTILINE)
@@ -866,6 +877,8 @@ async def ws_status(ws: WebSocket):
                         "streams": stream_list,
                     }
                     await ws.send_json(payload)
+                except WebSocketDisconnect:
+                    raise
                 except Exception as ex:
                     print(f"[ws] Status compile error: {ex}")
                 break # Close the async generator loop cleanly
@@ -876,6 +889,11 @@ async def ws_status(ws: WebSocket):
                 await asyncio.wait_for(ws.receive_text(), timeout=0.1)
             except asyncio.TimeoutError:
                 pass
+            except WebSocketDisconnect:
+                break
+            except (RuntimeError, Exception) as e:
+                print(f"[ws] WebSocket connection closed or invalid: {e}")
+                break
     except WebSocketDisconnect:
         return
 

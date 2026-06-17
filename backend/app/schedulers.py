@@ -246,9 +246,9 @@ async def camera_gap_recovery_loop():
                         gap_end = next_seg.start_ts
                         gap_duration = gap_end - gap_start
 
-                        if gap_duration >= (1.2 * settings.segment_time_seconds):
+                        if gap_duration >= 5.0:
                             temp_start = gap_start
-                            while temp_start + settings.segment_time_seconds <= gap_end:
+                            while temp_start < gap_end:
                                 gap_key = (stream_id, int(temp_start))
                                 if gap_key not in attempted_gaps:
                                     attempted_gaps.add(gap_key)
@@ -256,13 +256,14 @@ async def camera_gap_recovery_loop():
                                     # Build recovery URL using vendor framework
                                     make_val = stream.camera.make if stream.camera else None
                                     provider = get_playback_recovery_provider(make_val)
-                                    recovery_url = provider.build_playback_url(stream, temp_start, temp_start + settings.segment_time_seconds)
+                                    next_end = temp_start + settings.segment_time_seconds
+                                    recovery_url = provider.build_playback_url(stream, temp_start, next_end)
 
                                     gaps_to_recover.append({
                                         "stream_id": stream_id,
                                         "recovery_url": recovery_url,
                                         "start_ts": temp_start,
-                                        "end_ts": temp_start + settings.segment_time_seconds
+                                        "end_ts": next_end
                                     })
                                 temp_start += settings.segment_time_seconds
 
