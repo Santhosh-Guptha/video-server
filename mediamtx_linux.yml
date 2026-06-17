@@ -27,7 +27,7 @@ hlsPartDuration: 200ms
 # WebRTC server settings (WHEP / WHIP live viewing)
 webrtc: yes
 webrtcAddress: :8889
-webrtcAdditionalHosts: [localhost]
+webrtcAdditionalHosts: [172.20.100.235]
 webrtcICEServers2:
   - url: "stun:stun.l.google.com:19302"
 
