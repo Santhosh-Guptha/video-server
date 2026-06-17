@@ -33,7 +33,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   }>({ timestamp: 0, bytesReceived: 0, framesDecoded: 0 });
 
   const reconnectCountRef = useRef(0);
-  const maxReconnectAttempts = 5;
+  const maxReconnectAttempts = 1;
 
   useEffect(() => {
     startWebRTC();
@@ -90,11 +90,11 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
     setHealth('CONNECTING');
     setErrorMessage(null);
 
-    // Initial connection timeout (falls back to HLS if WebRTC fails to connect in 8 seconds)
+    // Initial connection timeout (falls back to HLS if WebRTC fails to connect in 3 seconds)
     connectionTimeoutRef.current = window.setTimeout(() => {
       console.warn(`[WebRTCPlayer:${streamId}] WebRTC connection timed out. Falling back to HLS.`);
       onFallbackToHls();
-    }, 8000);
+    }, 3000);
 
     try {
       // 1. Fetch ICE servers
@@ -310,9 +310,20 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   };
 
   const uuidv4 = () => {
-    return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c: any) =>
-      (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
-    );
+    if (typeof window !== 'undefined' && window.crypto && typeof window.crypto.getRandomValues === 'function') {
+      try {
+        return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c: any) =>
+          (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+        );
+      } catch (e) {
+        console.warn('crypto.getRandomValues failed, falling back to Math.random', e);
+      }
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
   };
 
   return (

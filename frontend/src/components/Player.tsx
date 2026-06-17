@@ -122,15 +122,34 @@ function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: H
         lowLatencyMode: true,
         backBufferLength: 30,
         liveDurationInfinity: true,
-        liveSyncDuration: 1.5,
-        liveMaxLatencyDuration: 3,
-        maxBufferLength: 4,
-        maxMaxBufferLength: 8
+        liveSyncDuration: 3.0,
+        liveMaxLatencyDuration: 6.0,
+        maxBufferLength: 10,
+        maxMaxBufferLength: 20
       })
       hlsRef.current = hls
       hls.loadSource(src)
       hls.attachMedia(video)
       hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}))
+      
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.warn('[HLSPlayer] Fatal network error, trying to recover...', data);
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.warn('[HLSPlayer] Fatal media error, trying to recover...', data);
+              hls.recoverMediaError();
+              break;
+            default:
+              console.error('[HLSPlayer] Unrecoverable error:', data);
+              hls.destroy();
+              break;
+          }
+        }
+      })
     }
 
     return () => {
