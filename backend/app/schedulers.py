@@ -247,7 +247,8 @@ async def camera_gap_recovery_loop():
                         gap_duration = gap_end - gap_start
 
                         if gap_duration >= 5.0:
-                            temp_start = gap_start
+                            # Align temp_start to the start of the minute boundary (e.g., XX:XX:00)
+                            temp_start = (gap_start // settings.segment_time_seconds) * settings.segment_time_seconds
                             while temp_start < gap_end:
                                 gap_key = (stream_id, int(temp_start))
                                 if gap_key not in attempted_gaps:
