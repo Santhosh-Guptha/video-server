@@ -56,11 +56,12 @@ class MediaMTXClient:
                 resp = await client.post(url, json=payload, timeout=5.0)
                 if resp.status_code in (200, 201):
                     return True
-                # If already exists, we attempt an edit update
+                # If already exists, we attempt an edit update (via delete & re-add)
                 if "already exists" in resp.text or resp.status_code == 400:
-                    edit_url = f"{self.api_url}/v3/config/paths/patch/{path_name}"
-                    edit_resp = await client.patch(edit_url, json=payload, timeout=5.0)
-                    return edit_resp.status_code in (200, 201)
+                    delete_url = f"{self.api_url}/v3/config/paths/delete/{path_name}"
+                    await client.delete(delete_url, timeout=5.0)
+                    resp = await client.post(url, json=payload, timeout=5.0)
+                    return resp.status_code in (200, 201)
             except Exception as e:
                 print(f"[mediamtx_client] Error adding path {path_name}: {e}")
         return False

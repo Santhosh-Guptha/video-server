@@ -123,24 +123,35 @@ async def test_add_stream_mediamtx_push():
 @pytest.mark.asyncio
 async def test_recording_provider_toggles():
     """Test standard interfaces in the RecordingProvider Abstraction Layer."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"record": True}
+    mock_get_response = MagicMock()
+    mock_get_response.status_code = 200
+    mock_get_response.json.return_value = {"record": True}
     
-    with patch("httpx.AsyncClient.patch", new_callable=AsyncMock, return_value=mock_response) as mock_patch, \
-         patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response) as mock_get:
+    mock_delete_response = MagicMock()
+    mock_delete_response.status_code = 200
+    
+    mock_post_response = MagicMock()
+    mock_post_response.status_code = 200
+    
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_get_response) as mock_get, \
+         patch("httpx.AsyncClient.delete", new_callable=AsyncMock, return_value=mock_delete_response) as mock_delete, \
+         patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_post_response) as mock_post:
         
         # 1. Start recording
         await recording_provider.start_recording("test_stream_main")
-        mock_patch.assert_called_with(
-            "http://localhost:9997/v3/config/paths/patch/test_stream_main",
+        mock_get.assert_called_with("http://localhost:9997/v3/config/paths/get/test_stream_main")
+        mock_delete.assert_called_with("http://localhost:9997/v3/config/paths/delete/test_stream_main")
+        mock_post.assert_called_with(
+            "http://localhost:9997/v3/config/paths/add/test_stream_main",
             json={"record": True}
         )
         
         # 2. Stop recording
         await recording_provider.stop_recording("test_stream_main")
-        mock_patch.assert_called_with(
-            "http://localhost:9997/v3/config/paths/patch/test_stream_main",
+        mock_get.assert_called_with("http://localhost:9997/v3/config/paths/get/test_stream_main")
+        mock_delete.assert_called_with("http://localhost:9997/v3/config/paths/delete/test_stream_main")
+        mock_post.assert_called_with(
+            "http://localhost:9997/v3/config/paths/add/test_stream_main",
             json={"record": False}
         )
         

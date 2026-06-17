@@ -24,21 +24,49 @@ class MediaMTXRecordingProvider(RecordingProvider):
 
     async def start_recording(self, stream_id: str) -> None:
         async with httpx.AsyncClient() as client:
-            url = f"{self.api_url}/v3/config/paths/patch/{stream_id}"
+            get_url = f"{self.api_url}/v3/config/paths/get/{stream_id}"
             try:
-                response = await client.patch(url, json={"record": True})
-                if response.status_code not in (200, 201):
-                    print(f"[recording] Failed to start MediaMTX recording for {stream_id}: {response.text}")
+                get_resp = await client.get(get_url)
+                if get_resp.status_code == 200:
+                    config = get_resp.json().copy()
+                    config["record"] = True
+                    # Delete path
+                    del_url = f"{self.api_url}/v3/config/paths/delete/{stream_id}"
+                    await client.delete(del_url)
+                    # Add path fresh
+                    add_url = f"{self.api_url}/v3/config/paths/add/{stream_id}"
+                    add_resp = await client.post(add_url, json=config)
+                    if add_resp.status_code in (200, 201):
+                        return
+                    print(f"[recording] Failed to re-add path on start_recording for {stream_id}: {add_resp.text}")
+                else:
+                    # Fallback to direct patch
+                    url = f"{self.api_url}/v3/config/paths/patch/{stream_id}"
+                    await client.patch(url, json={"record": True})
             except Exception as e:
                 print(f"[recording] Connection error starting MediaMTX recording for {stream_id}: {e}")
 
     async def stop_recording(self, stream_id: str) -> None:
         async with httpx.AsyncClient() as client:
-            url = f"{self.api_url}/v3/config/paths/patch/{stream_id}"
+            get_url = f"{self.api_url}/v3/config/paths/get/{stream_id}"
             try:
-                response = await client.patch(url, json={"record": False})
-                if response.status_code not in (200, 201):
-                    print(f"[recording] Failed to stop MediaMTX recording for {stream_id}: {response.text}")
+                get_resp = await client.get(get_url)
+                if get_resp.status_code == 200:
+                    config = get_resp.json().copy()
+                    config["record"] = False
+                    # Delete path
+                    del_url = f"{self.api_url}/v3/config/paths/delete/{stream_id}"
+                    await client.delete(del_url)
+                    # Add path fresh
+                    add_url = f"{self.api_url}/v3/config/paths/add/{stream_id}"
+                    add_resp = await client.post(add_url, json=config)
+                    if add_resp.status_code in (200, 201):
+                        return
+                    print(f"[recording] Failed to re-add path on stop_recording for {stream_id}: {add_resp.text}")
+                else:
+                    # Fallback to direct patch
+                    url = f"{self.api_url}/v3/config/paths/patch/{stream_id}"
+                    await client.patch(url, json={"record": False})
             except Exception as e:
                 print(f"[recording] Connection error stopping MediaMTX recording for {stream_id}: {e}")
 

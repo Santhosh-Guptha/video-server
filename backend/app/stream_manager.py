@@ -117,10 +117,11 @@ class StreamManager:
                         await self.set_stream_state(session, stream, StreamState.CONNECTING)
                     else:
                         if "already exists" in response.text or response.status_code == 400:
-                            edit_url = f"{self.api_url}/v3/config/paths/patch/{path_name}"
-                            edit_resp = await client.patch(edit_url, json=payload)
-                            if edit_resp.status_code in (200, 201):
-                                print(f"[stream_manager] Path {path_name} already existed. Updated config. On-demand: {source_on_demand}")
+                            delete_url = f"{self.api_url}/v3/config/paths/delete/{path_name}"
+                            await client.delete(delete_url)
+                            response = await client.post(url, json=payload)
+                            if response.status_code in (200, 201):
+                                print(f"[stream_manager] Re-registered path {path_name} in MediaMTX after deletion. On-demand: {source_on_demand}")
                                 await self.set_stream_state(session, stream, StreamState.CONNECTING)
                                 return
                         print(f"[stream_manager] Failed to register path {path_name}: {response.text}")
