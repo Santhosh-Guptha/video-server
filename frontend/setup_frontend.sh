@@ -43,7 +43,13 @@ log_info "Frontend directory identified: $FRONTEND_DIR"
 # 2. System Dependencies
 log_info "Installing system dependencies..."
 apt-get update -y
-apt-get install -y nodejs npm git
+apt-get install -y nodejs git
+
+# Install npm separately only if not already bundled (e.g. on non-NodeSource environments)
+if ! command -v npm &> /dev/null; then
+    log_info "npm not found. Installing standalone npm..."
+    apt-get install -y npm || log_warn "Failed to install standalone npm, proceeding..."
+fi
 
 # 3. Install NPM Dependencies
 log_info "Installing npm dependencies in frontend..."
