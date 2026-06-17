@@ -63,6 +63,7 @@ class MediaMTXClient:
         url = f"{self.api_url}/v3/config/paths/add/{path_name}"
         payload = {
             "source": source_url,
+            "sourceProtocol": "tcp",
             "sourceOnDemand": False if source_url == "publisher" else source_on_demand,
             "record": True,
             "runOnDemand": "",

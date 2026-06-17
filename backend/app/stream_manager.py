@@ -119,6 +119,7 @@ class StreamManager:
 
             payload = {
                 "source": "publisher" if is_push else stream.stream_url,
+                "sourceProtocol": "tcp",
                 "sourceOnDemand": False if is_push else source_on_demand,
                 "record": True,
                 "runOnDemand": "",
