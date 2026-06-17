@@ -6,6 +6,7 @@ import { Dashboard } from './pages/Dashboard'
 import { CameraDetails } from './pages/CameraDetails'
 import { Playback } from './pages/Playback'
 import { EdgePushPage } from './pages/EdgePush'
+import { LiveWall } from './pages/LiveWall'
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
 import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2, ChevronDown, Search } from 'lucide-react'
 
@@ -57,6 +58,7 @@ export default function App() {
   const [liveLoading, setLiveLoading] = useState(false)
   const [lastSync, setLastSync] = useState('Never')
   const [isFullView, setIsFullView] = useState(false)
+  const [liveSubTab, setLiveSubTab] = useState<'manual' | 'wall'>('manual')
 
   const [liveDropdownOpen, setLiveDropdownOpen] = useState(false)
   const [liveSearchQuery, setLiveSearchQuery] = useState('')
@@ -307,189 +309,212 @@ export default function App() {
           )}
 
           {activeTab === 'live' && (
-            <div className="streamArea">
-              <div className="controlsBar">
-                <div className="controlGroup">
-                  <span className="controlLabel">Layout Grid</span>
-                  <div className="btnToggleGroup">
-                    {[1, 2, 4, 9].map((size) => (
-                      <button
-                        key={size}
-                        className={`toggleBtn ${layout === size ? 'active' : ''}`}
-                        onClick={() => {
-                          setLayout(size)
-                          if (selectedStreams.length > size) {
-                            const truncated = selectedStreams.slice(0, size)
-                            setSelectedStreams(truncated)
-                            if (selected && !truncated.some(s => s.stream_id === selected.stream_id)) {
-                              setSelected(truncated[0] || undefined)
-                            }
-                          }
-                        }}
-                      >
-                        {size === 1 ? '1x1' : size === 2 ? '1x2' : size === 4 ? '2x2' : '3x3'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+            <div className="streamArea" style={{ display: 'flex', flexDirection: 'column' }}>
+              <div className="liveSubTabs">
+                <button
+                  type="button"
+                  className={`liveSubTab ${liveSubTab === 'manual' ? 'active' : ''}`}
+                  onClick={() => setLiveSubTab('manual')}
+                >
+                  Manual Grid
+                </button>
+                <button
+                  type="button"
+                  className={`liveSubTab ${liveSubTab === 'wall' ? 'active' : ''}`}
+                  onClick={() => setLiveSubTab('wall')}
+                >
+                  Live Camera Wall
+                </button>
+              </div>
 
-                <div className="controlGroup">
-                  <span className="controlLabel">Select Feeds</span>
-                  <div className="dropdownContainer" ref={liveDropdownRef}>
-                    <button
-                      type="button"
-                      className="dropdownTrigger"
-                      onClick={() => setLiveDropdownOpen(!liveDropdownOpen)}
-                      style={{ minWidth: '200px' }}
-                    >
-                      <span>
-                        {selectedStreams.length === 0
-                          ? 'Select Cameras…'
-                          : `${selectedStreams.length}/${layout} selected`}
-                      </span>
-                      <ChevronDown size={14} style={{ opacity: 0.7 }} />
-                    </button>
-                    {liveDropdownOpen && (
-                      <div className="dropdownMenu">
-                        <div className="dropdownSearchWrapper">
-                          <input
-                            type="text"
-                            className="dropdownSearchInput"
-                            placeholder="Search cameras..."
-                            value={liveSearchQuery}
-                            onChange={(e) => setLiveSearchQuery(e.target.value)}
-                            autoFocus
-                          />
-                        </div>
-                        <div className="dropdownList">
-                          {filteredLiveCameras.length > 0 ? (
-                            filteredLiveCameras.map((cam) => {
-                              const isChecked = selectedStreams.some((x) => x.stream_id === cam.stream_id)
-                              return (
-                                <div
-                                  key={cam.stream_id}
-                                  className={`dropdownOption ${isChecked ? 'selected' : ''}`}
-                                  onClick={() => {
-                                    if (isChecked) {
-                                      const remaining = selectedStreams.filter((x) => x.stream_id !== cam.stream_id)
-                                      setSelectedStreams(remaining)
-                                      if (selected?.stream_id === cam.stream_id) {
-                                        setSelected(remaining[0] || undefined)
-                                      }
-                                    } else {
-                                      if (selectedStreams.length >= layout) {
-                                        setStatusText(`Max layout limit (${layout}) reached. Change layout grid to add more.`)
-                                        return
-                                      }
-                                      setSelectedStreams((prev) => [...prev, cam])
-                                      setSelected(cam)
-                                    }
-                                  }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    className="dropdownOptionCheckbox"
-                                    checked={isChecked}
-                                    readOnly
-                                  />
-                                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                    <span style={{ fontWeight: 600 }}>{cam.name}</span>
-                                    <span style={{ fontSize: '0.72rem', opacity: 0.6 }}>{cam.stream_id} ({cam.stream_type})</span>
-                                  </div>
-                                </div>
-                              )
-                            })
-                          ) : (
-                            <div style={{ padding: '8px', fontSize: '0.8rem', color: '#94a3b8', textAlign: 'center' }}>
-                              No cameras found
+              {liveSubTab === 'wall' ? (
+                <LiveWall allCameras={standardCameras} statusTextSetter={setStatusText} />
+              ) : (
+                <>
+                  <div className="controlsBar">
+                    <div className="controlGroup">
+                      <span className="controlLabel">Layout Grid</span>
+                      <div className="btnToggleGroup">
+                        {[1, 2, 4, 9].map((size) => (
+                          <button
+                            key={size}
+                            className={`toggleBtn ${layout === size ? 'active' : ''}`}
+                            onClick={() => {
+                              setLayout(size)
+                              if (selectedStreams.length > size) {
+                                const truncated = selectedStreams.slice(0, size)
+                                setSelectedStreams(truncated)
+                                if (selected && !truncated.some(s => s.stream_id === selected.stream_id)) {
+                                  setSelected(truncated[0] || undefined)
+                                }
+                              }
+                            }}
+                          >
+                            {size === 1 ? '1x1' : size === 2 ? '1x2' : size === 4 ? '2x2' : '3x3'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="controlGroup">
+                      <span className="controlLabel">Select Feeds</span>
+                      <div className="dropdownContainer" ref={liveDropdownRef}>
+                        <button
+                          type="button"
+                          className="dropdownTrigger"
+                          onClick={() => setLiveDropdownOpen(!liveDropdownOpen)}
+                          style={{ minWidth: '200px' }}
+                        >
+                          <span>
+                            {selectedStreams.length === 0
+                              ? 'Select Cameras…'
+                              : `${selectedStreams.length}/${layout} selected`}
+                          </span>
+                          <ChevronDown size={14} style={{ opacity: 0.7 }} />
+                        </button>
+                        {liveDropdownOpen && (
+                          <div className="dropdownMenu">
+                            <div className="dropdownSearchWrapper">
+                              <input
+                                type="text"
+                                className="dropdownSearchInput"
+                                placeholder="Search cameras..."
+                                value={liveSearchQuery}
+                                onChange={(e) => setLiveSearchQuery(e.target.value)}
+                                autoFocus
+                              />
                             </div>
-                          )}
-                        </div>
+                            <div className="dropdownList">
+                              {filteredLiveCameras.length > 0 ? (
+                                filteredLiveCameras.map((cam) => {
+                                  const isChecked = selectedStreams.some((x) => x.stream_id === cam.stream_id)
+                                  return (
+                                    <div
+                                      key={cam.stream_id}
+                                      className={`dropdownOption ${isChecked ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        if (isChecked) {
+                                          const remaining = selectedStreams.filter((x) => x.stream_id !== cam.stream_id)
+                                          setSelectedStreams(remaining)
+                                          if (selected?.stream_id === cam.stream_id) {
+                                            setSelected(remaining[0] || undefined)
+                                          }
+                                        } else {
+                                          if (selectedStreams.length >= layout) {
+                                            setStatusText(`Max layout limit (${layout}) reached. Change layout grid to add more.`)
+                                            return
+                                          }
+                                          setSelectedStreams((prev) => [...prev, cam])
+                                          setSelected(cam)
+                                        }
+                                      }}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="dropdownOptionCheckbox"
+                                        checked={isChecked}
+                                        readOnly
+                                      />
+                                      <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                        <span style={{ fontWeight: 600 }}>{cam.name}</span>
+                                        <span style={{ fontSize: '0.72rem', opacity: 0.6 }}>{cam.stream_id} ({cam.stream_type})</span>
+                                      </div>
+                                    </div>
+                                  )
+                                })
+                              ) : (
+                                <div style={{ padding: '8px', fontSize: '0.8rem', color: '#94a3b8', textAlign: 'center' }}>
+                                  No cameras found
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="controlGroup">
+                      <button
+                        className="batchBtn start"
+                        onClick={startAll}
+                        disabled={selectedStreams.length === 0}
+                      >
+                        <Play size={14} /> Start All
+                      </button>
+                      <button
+                        className="batchBtn stop"
+                        onClick={stopAll}
+                        disabled={selectedStreams.length === 0}
+                      >
+                        <Square size={14} /> Stop All
+                      </button>
+                      <button
+                        className="batchBtn"
+                        onClick={() => {
+                          setSelectedStreams([])
+                          setSelected(undefined)
+                        }}
+                        disabled={selectedStreams.length === 0}
+                      >
+                        Clear
+                      </button>
+                      <button
+                        className="batchBtn"
+                        onClick={() => setIsFullView(true)}
+                        disabled={selectedStreams.length === 0}
+                        style={{
+                          background: selectedStreams.length > 0 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(15, 23, 42, 0.5)',
+                          color: selectedStreams.length > 0 ? '#60a5fa' : '#cbd5e1',
+                          borderColor: selectedStreams.length > 0 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(148, 163, 184, 0.14)',
+                        }}
+                        title="View selected cameras in immersive fullscreen"
+                      >
+                        <Maximize2 size={14} /> Full View
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="playerWrap">
+                    {selectedStreams.length > 0 ? (
+                      <div className={`videoGrid layout-${layout}`}>
+                        {selectedStreams.map((cam) => (
+                          <Player
+                            key={cam.stream_id}
+                            src={`/api/streams/${encodeURIComponent(getStreamIdForLayout(cam, layout))}/live/index.m3u8`}
+                            posterLabel={`${cam.name} — ${cam.stream_type}`}
+                            isFocused={selected?.stream_id === cam.stream_id}
+                            onFocus={() => setSelected(cam)}
+                            onClose={() => {
+                              const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
+                              setSelectedStreams(remaining)
+                              if (selected?.stream_id === cam.stream_id) {
+                                setSelected(remaining[0] || undefined)
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="emptyStream">
+                        <ServerCrash size={42} />
+                        <h3>No camera selected</h3>
+                        <p>Go to the Dashboard tab on the left to select camera feeds.</p>
                       </div>
                     )}
+                    {liveLoading && <div className="liveLoading">Starting stream…</div>}
                   </div>
-                </div>
 
-                <div className="controlGroup">
-                  <button
-                    className="batchBtn start"
-                    onClick={startAll}
-                    disabled={selectedStreams.length === 0}
-                  >
-                    <Play size={14} /> Start All
-                  </button>
-                  <button
-                    className="batchBtn stop"
-                    onClick={stopAll}
-                    disabled={selectedStreams.length === 0}
-                  >
-                    <Square size={14} /> Stop All
-                  </button>
-                  <button
-                    className="batchBtn"
-                    onClick={() => {
-                      setSelectedStreams([])
-                      setSelected(undefined)
+                  <CameraDetails
+                    camera={selected}
+                    recordings={recordings}
+                    onStartLive={handleStartLive}
+                    onStopLive={handleStopLive}
+                    onOpenPlayback={() => {
+                      setActiveTab('playback')
                     }}
-                    disabled={selectedStreams.length === 0}
-                  >
-                    Clear
-                  </button>
-                  <button
-                    className="batchBtn"
-                    onClick={() => setIsFullView(true)}
-                    disabled={selectedStreams.length === 0}
-                    style={{
-                      background: selectedStreams.length > 0 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(15, 23, 42, 0.5)',
-                      color: selectedStreams.length > 0 ? '#60a5fa' : '#cbd5e1',
-                      borderColor: selectedStreams.length > 0 ? 'rgba(59, 130, 246, 0.3)' : 'rgba(148, 163, 184, 0.14)',
-                    }}
-                    title="View selected cameras in immersive fullscreen"
-                  >
-                    <Maximize2 size={14} /> Full View
-                  </button>
-                </div>
-              </div>
-
-              <div className="playerWrap">
-                {selectedStreams.length > 0 ? (
-                  <div className={`videoGrid layout-${layout}`}>
-                    {selectedStreams.map((cam) => (
-                      <Player
-                        key={cam.stream_id}
-                        src={`/api/streams/${encodeURIComponent(getStreamIdForLayout(cam, layout))}/live/index.m3u8`}
-                        posterLabel={`${cam.name} — ${cam.stream_type}`}
-                        isFocused={selected?.stream_id === cam.stream_id}
-                        onFocus={() => setSelected(cam)}
-                        onClose={() => {
-                          const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
-                          setSelectedStreams(remaining)
-                          if (selected?.stream_id === cam.stream_id) {
-                            setSelected(remaining[0] || undefined)
-                          }
-                        }}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="emptyStream">
-                    <ServerCrash size={42} />
-                    <h3>No camera selected</h3>
-                    <p>Go to the Dashboard tab on the left to select camera feeds.</p>
-                  </div>
-                )}
-                {liveLoading && <div className="liveLoading">Starting stream…</div>}
-              </div>
-
-              <CameraDetails
-                camera={selected}
-                recordings={recordings}
-                onStartLive={handleStartLive}
-                onStopLive={handleStopLive}
-                onOpenPlayback={() => {
-                  setActiveTab('playback')
-                }}
-              />
+                  />
+                </>
+              )}
             </div>
           )}
 
