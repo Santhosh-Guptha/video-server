@@ -5,7 +5,6 @@ import { ServerCrash, Users, Play, Square, Maximize2, Minimize2 } from 'lucide-r
 import { startLive, stopLive } from '../lib/api'
 
 type LiveWallProps = {
-  allCameras: Camera[]
   statusTextSetter: (txt: string) => void
 }
 
@@ -15,7 +14,8 @@ type StreamStatus = {
   subscribers: number
 }
 
-export function LiveWall({ allCameras, statusTextSetter }: LiveWallProps) {
+export function LiveWall({ statusTextSetter }: LiveWallProps) {
+  const [activeCameras, setActiveCameras] = useState<Camera[]>([])
   const [onlineStreamIds, setOnlineStreamIds] = useState<Set<string>>(new Set())
   const [streamViewers, setStreamViewers] = useState<Record<string, number>>({})
   const [wsConnected, setWsConnected] = useState(false)
@@ -27,12 +27,11 @@ export function LiveWall({ allCameras, statusTextSetter }: LiveWallProps) {
       const res = await fetch('/api/cameras/active')
       if (res.ok) {
         const activeCams = await res.json() as Camera[]
+        setActiveCameras(activeCams)
         const activeIds = new Set<string>()
         activeCams.forEach(cam => {
           cam.streams.forEach(s => {
-            if (s.status === 'ONLINE') {
-              activeIds.add(s.stream_id)
-            }
+            activeIds.add(s.stream_id)
           })
         })
         setOnlineStreamIds(activeIds)
@@ -74,7 +73,26 @@ export function LiveWall({ allCameras, statusTextSetter }: LiveWallProps) {
               viewers[s.stream_id] = s.subscribers
             })
 
-            setOnlineStreamIds(activeIds)
+            // Trigger full refresh only if set of online stream IDs changes
+            let hasChange = false
+            for (const id of activeIds) {
+              if (!onlineStreamIds.has(id)) {
+                hasChange = true
+                break
+              }
+            }
+            if (!hasChange) {
+              for (const id of onlineStreamIds) {
+                if (!activeIds.has(id)) {
+                  hasChange = true
+                  break
+                }
+              }
+            }
+
+            if (hasChange) {
+              fetchActiveList()
+            }
             setStreamViewers(viewers)
           }
         } catch (err) {
@@ -108,14 +126,7 @@ export function LiveWall({ allCameras, statusTextSetter }: LiveWallProps) {
       clearTimeout(reconnectTimeout)
       clearInterval(pollInterval)
     }
-  }, [wsConnected])
-
-  // Map only cameras that have at least one online stream
-  const activeCameras = useMemo(() => {
-    return allCameras.filter(cam => 
-      cam.streams && cam.streams.some(s => onlineStreamIds.has(s.stream_id))
-    )
-  }, [allCameras, onlineStreamIds])
+  }, [wsConnected, onlineStreamIds])
 
   // Get optimal grid columns count
   const gridCols = useMemo(() => {

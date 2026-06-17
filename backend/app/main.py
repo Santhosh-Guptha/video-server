@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from sqlalchemy import select, delete, text
+from sqlalchemy import select, delete, text, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import asyncio
@@ -510,6 +510,48 @@ async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
         select(Camera)
         .options(selectinload(Camera.streams))
         .order_by(Camera.name.asc())
+    )
+    return list(res.scalars().all())
+
+@app.get("/api/cameras/active", response_model=list[CameraOut])
+async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
+    active_stream_ids = set()
+
+    # 1. Query MediaMTX paths list for currently publishing feeds
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list")
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("items", []) if isinstance(data, dict) else []
+                for item in items:
+                    if item.get("ready") is True:
+                        active_stream_ids.add(item.get("name"))
+    except Exception as e:
+        print(f"[main] Failed to fetch active paths from MediaMTX: {e}")
+
+    # 2. Scan recordings directory for existing active directories
+    try:
+        rec_dir = Path(settings.recording_dir)
+        if rec_dir.exists():
+            for subdir in rec_dir.iterdir():
+                if subdir.is_dir():
+                    active_stream_ids.add(subdir.name)
+    except Exception as e:
+        print(f"[main] Failed to scan recordings directory: {e}")
+
+    # 3. Query matching Cameras from the DB
+    conditions = [CameraStream.status == StreamState.ONLINE]
+    if active_stream_ids:
+        conditions.append(CameraStream.stream_id.in_(list(active_stream_ids)))
+
+    res = await session.execute(
+        select(Camera)
+        .join(CameraStream)
+        .where(or_(*conditions))
+        .options(selectinload(Camera.streams))
+        .order_by(Camera.name.asc())
+        .distinct()
     )
     return list(res.scalars().all())
 

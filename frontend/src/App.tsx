@@ -328,7 +328,7 @@ export default function App() {
               </div>
 
               {liveSubTab === 'wall' ? (
-                <LiveWall allCameras={standardCameras} statusTextSetter={setStatusText} />
+                <LiveWall statusTextSetter={setStatusText} />
               ) : (
                 <>
                   <div className="controlsBar">
