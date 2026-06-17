@@ -118,7 +118,7 @@ class StreamManager:
                     source_on_demand = False
 
             payload = {
-                "source": "publisher" if is_push else double_escape_rtsp_url(stream.stream_url),
+                "source": "publisher" if is_push else stream.stream_url,
                 "sourceOnDemand": False if is_push else source_on_demand,
                 "record": True,
                 "runOnDemand": "",

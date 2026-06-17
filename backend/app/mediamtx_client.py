@@ -62,7 +62,7 @@ class MediaMTXClient:
         """Adds a path configuration on MediaMTX."""
         url = f"{self.api_url}/v3/config/paths/add/{path_name}"
         payload = {
-            "source": double_escape_rtsp_url(source_url),
+            "source": source_url,
             "sourceOnDemand": False if source_url == "publisher" else source_on_demand,
             "record": True,
             "runOnDemand": "",
