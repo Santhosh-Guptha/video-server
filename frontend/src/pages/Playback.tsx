@@ -446,7 +446,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
           </button>
 
           {dropdownOpen && (
-            <div className="dropdownMenu" style={{ right: 0, left: 'auto', width: '280px', zIndex: 100 }}>
+            <div className="dropdownMenu" style={{ right: 0, left: 'auto', width: '280px' }}>
               <div className="dropdownSearchWrapper">
                 <input
                   type="text"

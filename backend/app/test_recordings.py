@@ -52,7 +52,8 @@ async def test_webhook_successful_registration(override_db):
     # 2. Mock Path existence and size/mtime
     with patch("pathlib.Path.exists", return_value=True), \
          patch("pathlib.Path.stat") as mock_stat, \
-         patch("app.main.get_file_duration", return_value=12.0):
+         patch("app.main.get_file_duration", return_value=12.0), \
+         patch("app.main.PlaybackTimelineService.invalidate_cache_for_timestamp", new_callable=AsyncMock) as mock_invalidate:
              
         # Mock file size = 1000 bytes, mtime (end_ts) = 1781280363.0
         mock_stat_val = MagicMock()
@@ -333,7 +334,8 @@ async def test_edge_upload_endpoint_success(override_db):
 
     with patch("pathlib.Path.mkdir"), \
          patch("app.main.open", create=True) as mock_open, \
-         patch("app.main.get_file_duration", return_value=60.0):
+         patch("app.main.get_file_duration", return_value=60.0), \
+         patch("app.main.PlaybackTimelineService.invalidate_cache_for_timestamp", new_callable=AsyncMock) as mock_invalidate:
 
         file_payload = {"file": ("20260613_005530.mp4", b"data", "video/mp4")}
         form_payload = {"stream_id": "valid_stream"}

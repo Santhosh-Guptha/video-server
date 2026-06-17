@@ -74,7 +74,9 @@ async def test_add_stream_mediamtx_rtsp():
             json={
                 "source": "rtsp://camera_ip:554/h264",
                 "sourceOnDemand": False,
-                "record": True
+                "record": True,
+                "runOnDemand": "",
+                "runOnUnDemand": ""
             }
         )
         # Verify state transitioned to CONNECTING
@@ -112,7 +114,8 @@ async def test_add_stream_mediamtx_push():
                 "source": "publisher",
                 "sourceOnDemand": False,
                 "record": True,
-                "runOnDemand": "ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://localhost:8554/edge_camera_main"
+                "runOnDemand": "",
+                "runOnUnDemand": ""
             }
         )
         mock_state.assert_called_once_with(session, stream, StreamState.CONNECTING)
