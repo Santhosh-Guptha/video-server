@@ -259,7 +259,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                             payload = {
                                 "source": "publisher",
                                 "sourceOnDemand": False,
-                                "record": True
+                                "record": True,
+                                "runOnDemand": "",
+                                "runOnUnDemand": ""
                             }
                             try:
                                 resp = await client.patch(url, json=payload, timeout=5.0)

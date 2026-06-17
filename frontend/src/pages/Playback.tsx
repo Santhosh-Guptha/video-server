@@ -40,6 +40,8 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0)
   const [videoSrc, setVideoSrc] = useState<string>('')
   const [isPaused, setIsPaused] = useState(true)
+  const [downloadStart, setDownloadStart] = useState('00:00')
+  const [downloadEnd, setDownloadEnd] = useState('23:59')
 
   // Interactive Hover tooltip state
   const [hoverTime, setHoverTime] = useState<number | null>(null)
@@ -191,6 +193,20 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleDownload = () => {
+    if (!streamId || !selectedDate) return
+    const startIso = `${selectedDate}T${downloadStart}:00`
+    const endIso = `${selectedDate}T${downloadEnd}:59`
+    const url = `/api/recordings/download?stream_id=${encodeURIComponent(streamId)}&start_time=${encodeURIComponent(startIso)}&end_time=${encodeURIComponent(endIso)}`
+    
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${streamId}_${selectedDate}_${downloadStart.replace(':', '')}_to_${downloadEnd.replace(':', '')}.mp4`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }
 
   // Play a specific segment matching a timestamp
@@ -510,7 +526,8 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
           {/* Controls Bar */}
           <div className="controlsBar" style={{ margin: 0, padding: '14px 20px' }}>
             {availableDates.length > 0 ? (
-              <div className="controlGroup" style={{ flexWrap: 'wrap', gap: '14px', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
+              <>
+                <div className="controlGroup" style={{ flexWrap: 'wrap', gap: '14px', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
                   
                   {/* Date selection dropdown */}
@@ -598,6 +615,61 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                   )}
                 </div>
               </div>
+
+              {/* Export / Download segment option */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.06)', width: '100%' }}>
+                <span className="controlLabel" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#10b981', fontWeight: 600 }}>
+                  <Film size={14} /> Export / Download Footage:
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>From:</span>
+                  <input
+                    type="time"
+                    value={downloadStart}
+                    onChange={(e) => setDownloadStart(e.target.value)}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(148, 163, 184, 0.16)',
+                      background: 'rgba(2,6,23,0.5)',
+                      color: '#fff',
+                      fontSize: '0.82rem',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>To:</span>
+                  <input
+                    type="time"
+                    value={downloadEnd}
+                    onChange={(e) => setDownloadEnd(e.target.value)}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(148, 163, 184, 0.16)',
+                      background: 'rgba(2,6,23,0.5)',
+                      color: '#fff',
+                      fontSize: '0.82rem',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+                <button
+                  className="primaryBtn"
+                  onClick={handleDownload}
+                  style={{
+                    borderRadius: '8px',
+                    padding: '7px 14px',
+                    fontSize: '0.78rem',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    borderColor: 'rgba(16, 185, 129, 0.3)'
+                  }}
+                >
+                  Download Merged MP4
+                </button>
+              </div>
+              </>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8', fontSize: '0.9rem' }}>
                 <AlertCircle size={16} />

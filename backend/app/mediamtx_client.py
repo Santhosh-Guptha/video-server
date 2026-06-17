@@ -47,10 +47,10 @@ class MediaMTXClient:
         payload = {
             "source": source_url,
             "sourceOnDemand": False if source_url == "publisher" else source_on_demand,
-            "record": True
+            "record": True,
+            "runOnDemand": "",
+            "runOnUnDemand": ""
         }
-        if source_url == "publisher":
-            payload["runOnDemand"] = f"ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://localhost:8554/{path_name}"
         async with httpx.AsyncClient() as client:
             try:
                 resp = await client.post(url, json=payload, timeout=5.0)

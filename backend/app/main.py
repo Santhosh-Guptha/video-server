@@ -266,6 +266,119 @@ async def recording_file(path: str):
         raise HTTPException(404, "File not found")
     return FileResponse(p, media_type="video/mp4")
 
+@app.get("/api/recordings/download")
+async def download_recording(
+    stream_id: str,
+    start_time: str,
+    end_time: str,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    from fastapi import BackgroundTasks
+    import tempfile
+    import os
+    import subprocess
+    
+    # 1. Parse timestamps
+    try:
+        try:
+            start_ts = float(start_time)
+            end_ts = float(end_time)
+        except ValueError:
+            from datetime import datetime
+            start_ts = datetime.fromisoformat(start_time.replace("Z", "+00:00")).timestamp()
+            end_ts = datetime.fromisoformat(end_time.replace("Z", "+00:00")).timestamp()
+    except Exception as e:
+        raise HTTPException(400, f"Invalid start_time or end_time format: {e}")
+        
+    if start_ts >= end_ts:
+        raise HTTPException(400, "start_time must be before end_time")
+        
+    # 2. Query database for segments overlapping with this range
+    stmt = (
+        select(RecordingSegment)
+        .where(RecordingSegment.stream_id == stream_id)
+        .where(RecordingSegment.end_ts >= start_ts)
+        .where(RecordingSegment.start_ts <= end_ts)
+        .order_by(RecordingSegment.start_ts.asc())
+    )
+    res = await session.execute(stmt)
+    segments = list(res.scalars().all())
+    
+    if not segments:
+        raise HTTPException(404, "No recordings found for the specified range")
+        
+    valid_files = []
+    for seg in segments:
+        p = Path(seg.file_path)
+        if p.exists():
+            valid_files.append(p)
+            
+    if not valid_files:
+        raise HTTPException(404, "Recording files not found on disk")
+        
+    # Case 1: Exactly 1 file
+    if len(valid_files) == 1:
+        file_path = valid_files[0]
+        return FileResponse(
+            path=file_path,
+            media_type="video/mp4",
+            filename=f"{stream_id}_{int(start_ts)}_{int(end_ts)}.mp4"
+        )
+        
+    # Case 2: Multiple files -> Concatenate using ffmpeg
+    temp_dir = tempfile.gettempdir()
+    output_filename = f"{stream_id}_{int(start_ts)}_{int(end_ts)}_merged.mp4"
+    output_path = os.path.join(temp_dir, output_filename)
+    
+    list_file_path = os.path.join(temp_dir, f"{stream_id}_{int(start_ts)}_{int(end_ts)}_list.txt")
+    with open(list_file_path, "w", encoding="utf-8") as f:
+        for file_path in valid_files:
+            safe_path = str(file_path).replace("\\", "/")
+            f.write(f"file '{safe_path}'\n")
+            
+    try:
+        cmd = [
+            settings.ffmpeg_path,
+            "-f", "concat",
+            "-safe", "0",
+            "-i", list_file_path,
+            "-c", "copy",
+            "-y",
+            output_path
+        ]
+        print(f"[download] Running ffmpeg concat: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            print(f"[download] ffmpeg error: {result.stderr}")
+            raise HTTPException(500, f"FFmpeg concat failed: {result.stderr}")
+            
+        def cleanup():
+            try:
+                if os.path.exists(list_file_path):
+                    os.remove(list_file_path)
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+            except Exception as e:
+                print(f"[download] Cleanup error: {e}")
+                
+        background_tasks = BackgroundTasks()
+        background_tasks.add_task(cleanup)
+        
+        return FileResponse(
+            path=output_path,
+            media_type="video/mp4",
+            filename=output_filename,
+            background=background_tasks
+        )
+    except Exception as ex:
+        if os.path.exists(list_file_path):
+            os.remove(list_file_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        if isinstance(ex, HTTPException):
+            raise ex
+        raise HTTPException(500, f"Failed to merge segments: {ex}")
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}

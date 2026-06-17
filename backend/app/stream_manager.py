@@ -103,10 +103,10 @@ class StreamManager:
             payload = {
                 "source": "publisher" if is_push else stream.stream_url,
                 "sourceOnDemand": False if is_push else source_on_demand,
-                "record": True
+                "record": True,
+                "runOnDemand": "",
+                "runOnUnDemand": ""
             }
-            if is_push:
-                payload["runOnDemand"] = f"ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://localhost:8554/{path_name}"
 
             async with httpx.AsyncClient() as client:
                 url = f"{self.api_url}/v3/config/paths/add/{path_name}"
