@@ -62,8 +62,102 @@ async def upstream_sync_loop():
         except Exception as e:
             print("[upstream_sync] Periodic camera sync error:", e)
 
+def configure_mediamtx_paths_dynamically():
+    import subprocess
+    import os
+    import re
+    from pathlib import Path
+    
+    # 1. Determine the path to mediamtx.yml
+    candidate_paths = [
+        "/opt/mediamtx/mediamtx.yml",
+        "./backend/app/mediamtx.yml",
+        "./app/mediamtx.yml",
+        "./mediamtx.yml",
+        "../mediamtx_linux.yml"
+    ]
+    
+    config_path = None
+    for cp in candidate_paths:
+        p = Path(cp)
+        if p.exists():
+            config_path = p
+            break
+            
+    if not config_path:
+        print("[startup] No MediaMTX configuration file found to dynamically configure.")
+        return
+
+    print(f"[startup] Found MediaMTX configuration file at {config_path}")
+
+    # 2. Get absolute path of recordings directory
+    rec_dir = Path(settings.recording_dir).resolve().absolute()
+    backend_dir = Path(__file__).resolve().parent.parent
+    
+    target_record_path = f"{rec_dir}/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live"
+    target_hook_cmd = f"/bin/bash {backend_dir}/app/segment_hook.sh \"$MTX_PATH\" \"$MTX_SEGMENT_PATH\""
+    
+    # 3. Read configuration file
+    try:
+        content = config_path.read_text()
+    except Exception as e:
+        print(f"[startup] Failed to read MediaMTX config file: {e}")
+        return
+
+    # 4. Parse/replace settings in the configuration content
+    modified = False
+    
+    # Replace recordPath
+    record_path_pattern = r"(^\s*recordPath:\s*)[^\n]+"
+    match_rp = re.search(record_path_pattern, content, re.MULTILINE)
+    if match_rp:
+        current_line = match_rp.group(0)
+        new_line = f"{match_rp.group(1)}\"{target_record_path}\""
+        if current_line.strip() != new_line.strip():
+            content = re.sub(record_path_pattern, new_line, content, flags=re.MULTILINE)
+            modified = True
+            print(f"[startup] MediaMTX recordPath updated to: {target_record_path}")
+            
+    # Replace runOnRecordSegmentComplete
+    hook_pattern = r"(^\s*runOnRecordSegmentComplete:\s*)[^\n]+"
+    match_hook = re.search(hook_pattern, content, re.MULTILINE)
+    if match_hook:
+        current_line = match_hook.group(0)
+        new_line = f"{match_hook.group(1)}{target_hook_cmd}"
+        if current_line.strip() != new_line.strip():
+            content = re.sub(hook_pattern, new_line, content, flags=re.MULTILINE)
+            modified = True
+            print(f"[startup] MediaMTX runOnRecordSegmentComplete updated to: {target_hook_cmd}")
+
+    # 5. Write back and restart MediaMTX service if updated
+    if modified:
+        try:
+            config_path.write_text(content)
+            print("[startup] MediaMTX configuration updated successfully.")
+            
+            # Check if running as a systemd service, restart it
+            if os.path.exists("/etc/systemd/system/mediamtx.service") or os.path.exists("/lib/systemd/system/mediamtx.service"):
+                print("[startup] Restarting mediamtx service to apply changes...")
+                res = subprocess.run(["systemctl", "restart", "mediamtx"], capture_output=True, text=True)
+                if res.returncode == 0:
+                    print("[startup] mediamtx service restarted successfully.")
+                else:
+                    print(f"[startup] Failed to restart mediamtx service: {res.stderr}")
+            else:
+                print("[startup] Not running under systemd or service file not found, mediamtx needs to be restarted manually.")
+        except Exception as e:
+            print(f"[startup] Failed to write config or restart MediaMTX: {e}")
+    else:
+        print("[startup] MediaMTX configuration is already up to date.")
+
 @app.on_event("startup")
 async def startup():
+    # Dynamically configure MediaMTX path mapping and hooks
+    try:
+        configure_mediamtx_paths_dynamically()
+    except Exception as e:
+        print(f"[startup] Error during MediaMTX dynamic configuration: {e}")
+
     # Attempt to auto-create PostgreSQL tables on start (fallback logic)
     from . import db
     
@@ -138,8 +232,8 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     """Clean up all active transcoders on server shutdown."""
-    from .transcoder import TranscoderManager
-    await TranscoderManager.stop_all()
+    from .transcoder import transcoder_manager
+    await transcoder_manager.stop_all()
 
 class SegmentCompletePayload(BaseModel):
     stream_id: str
@@ -200,42 +294,49 @@ async def record_segment_complete(
             print(f"[webhook] Rejected indexing segment for stream: stream_id={payload.stream_id} reason=not synchronized from Video Server API or inactive")
             return {"status": "ignored", "reason": "strict_validation_failed"}
         
-    # 3. Verify file exists on local disk and size > 0
+    # 3. Resolve relative path (stream_id/date/filename) from the payload path
+    parts = Path(payload.file_path).parts
+    relative_path = "/".join(parts[-3:])
+    
+    # 4. Verify file exists on local disk and size > 0 (checking both absolute input and relative fallback)
     p = Path(payload.file_path)
     if not p.exists():
-        print(f"[webhook] File not found: {payload.file_path}")
+        p = Path(settings.recording_dir) / relative_path
+        
+    if not p.exists():
+        print(f"[webhook] File not found: {payload.file_path} (resolved: {p})")
         raise HTTPException(status_code=400, detail="File does not exist on disk")
         
     try:
         size = p.stat().st_size
         if size == 0:
-            print(f"[webhook] Rejecting 0-byte file: {payload.file_path}")
+            print(f"[webhook] Rejecting 0-byte file: {p}")
             raise HTTPException(status_code=400, detail="File size is zero")
             
         end_ts = p.stat().st_mtime
     except Exception as e:
-        print(f"[webhook] Error checking file stats for {payload.file_path}: {e}")
+        print(f"[webhook] Error checking file stats for {p}: {e}")
         raise HTTPException(status_code=400, detail=f"Error checking file: {e}")
         
-    # 4. Calculate duration and start timestamp
-    duration = await asyncio.to_thread(get_file_duration, payload.file_path, settings.ffmpeg_path)
+    # 5. Calculate duration and start timestamp
+    duration = await asyncio.to_thread(get_file_duration, str(p), settings.ffmpeg_path)
     start_ts = end_ts - duration
     
-    # 5. Insert RecordingSegment idempotent
+    # 6. Insert RecordingSegment idempotent using relative path
     seg = RecordingSegment(
         stream_id=payload.stream_id,
-        file_path=payload.file_path,
+        file_path=relative_path,
         start_ts=start_ts,
         end_ts=end_ts
     )
     session.add(seg)
     try:
         await session.commit()
-        print(f"[webhook] Indexed segment: {payload.file_path} (Duration: {duration}s)")
+        print(f"[webhook] Indexed segment: {relative_path} (Duration: {duration}s)")
         await PlaybackTimelineService.invalidate_cache_for_timestamp(payload.stream_id, start_ts)
     except IntegrityError:
         await session.rollback()
-        print(f"[webhook] Duplicate segment ignored: {payload.file_path}")
+        print(f"[webhook] Duplicate segment ignored: {relative_path}")
         
     return {"status": "ok"}
 
@@ -262,8 +363,14 @@ async def recording_recovery_loop():
 @app.get("/api/recordings/file")
 async def recording_file(path: str):
     p = Path(path)
+    if not p.is_absolute() or not p.exists():
+        # Fallback to resolving relative path dynamically
+        parts = Path(path).parts
+        rel_path = "/".join(parts[-3:])
+        p = Path(settings.recording_dir) / rel_path
+        
     if not p.exists():
-        raise HTTPException(404, "File not found")
+        raise HTTPException(404, f"File not found: {path}")
     return FileResponse(p, media_type="video/mp4")
 
 @app.get("/api/recordings/download")
@@ -310,6 +417,10 @@ async def download_recording(
     valid_files = []
     for seg in segments:
         p = Path(seg.file_path)
+        if not p.is_absolute() or not p.exists():
+            parts = Path(seg.file_path).parts
+            rel_path = "/".join(parts[-3:])
+            p = Path(settings.recording_dir) / rel_path
         if p.exists():
             valid_files.append(p)
             
@@ -475,7 +586,8 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
             stream.stream_url = stream_url
             stream.resolution = res_str
             stream.fps = fps_val
-            stream.codec = codec_val
+            if stream.codec != "H265":
+                stream.codec = codec_val
             stream.bitrate = bitrate_val
             stream.always_on = always_on_val
             await session.flush()
@@ -887,7 +999,12 @@ async def stream_playback(
 
     concat_content = ""
     for seg in segments:
-        abs_path = os.path.abspath(seg.file_path)
+        p = Path(seg.file_path)
+        if not p.is_absolute() or not p.exists():
+            parts = Path(seg.file_path).parts
+            rel_path = "/".join(parts[-3:])
+            p = Path(settings.recording_dir) / rel_path
+        abs_path = os.path.abspath(str(p))
         escaped_path = abs_path.replace("'", "'\\''")
         concat_content += f"file '{escaped_path}'\n"
 
@@ -1351,9 +1468,12 @@ async def upload_edge_backlog(
 
     # 4. Duplicate Handling
     # Check if this exact file path is already indexed
+    parts = Path(file_path).parts
+    relative_path = "/".join(parts[-3:])
+
     stmt_check = select(RecordingSegment).where(
         RecordingSegment.stream_id == stream_id,
-        RecordingSegment.file_path == str(file_path)
+        RecordingSegment.file_path == relative_path
     )
     res_check = await session.execute(stmt_check)
     existing_seg = res_check.scalar_one_or_none()
@@ -1365,7 +1485,7 @@ async def upload_edge_backlog(
     # Insert recording segment
     new_segment = RecordingSegment(
         stream_id=stream_id,
-        file_path=str(file_path),
+        file_path=relative_path,
         start_ts=parsed_start_ts,
         end_ts=parsed_end_ts
     )

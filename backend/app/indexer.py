@@ -24,9 +24,12 @@ def scan_files_sync(recording_dir):
         for mp4 in stream_dir.rglob("*.mp4"):
             try:
                 stat = mp4.stat()
+                # Store relative path (stream_id/date/filename) to be dynamically resolvable
+                parts = mp4.parts
+                rel_path = "/".join(parts[-3:])
                 results.append({
                     "stream_id": stream_id,
-                    "file_path": str(mp4),
+                    "file_path": rel_path,
                     "mtime": stat.st_mtime,
                     "name": mp4.name
                 })

@@ -196,10 +196,11 @@ async def camera_gap_recovery_loop():
     print("[recovery] Starting recording gap recovery loop...")
     semaphore = asyncio.Semaphore(3) # Limit to 3 concurrent downloads
 
+    # Short delay on startup to allow backend initialization
+    await asyncio.sleep(5.0)
+
     while True:
         try:
-            await asyncio.sleep(settings.recovery_interval_seconds)
-
             gaps_to_recover = []
             async for session in get_session():
                 # Get all active streams that are currently ONLINE
@@ -305,22 +306,24 @@ async def camera_gap_recovery_loop():
                             # Index the recovered segment immediately
                             try:
                                 async for insert_session in get_session():
-                                    stmt_check = select(RecordingSegment).where(
-                                        RecordingSegment.stream_id == stream_id,
-                                        RecordingSegment.file_path == str(output_path)
-                                    )
-                                    res_check = await insert_session.execute(stmt_check)
-                                    existing_seg = res_check.scalar_one_or_none()
-                                    if not existing_seg:
-                                        new_seg = RecordingSegment(
-                                            stream_id=stream_id,
-                                            file_path=str(output_path),
-                                            start_ts=temp_start,
-                                            end_ts=temp_end
-                                        )
-                                        insert_session.add(new_seg)
-                                        await insert_session.commit()
-                                        print(f"[recovery] [{stream_id}] Indexed recovered segment immediately: {filename}")
+                                     parts = Path(output_path).parts
+                                     relative_path = "/".join(parts[-3:])
+                                     stmt_check = select(RecordingSegment).where(
+                                         RecordingSegment.stream_id == stream_id,
+                                         RecordingSegment.file_path == relative_path
+                                     )
+                                     res_check = await insert_session.execute(stmt_check)
+                                     existing_seg = res_check.scalar_one_or_none()
+                                     if not existing_seg:
+                                         new_seg = RecordingSegment(
+                                             stream_id=stream_id,
+                                             file_path=relative_path,
+                                             start_ts=temp_start,
+                                             end_ts=temp_end
+                                         )
+                                         insert_session.add(new_seg)
+                                         await insert_session.commit()
+                                         print(f"[recovery] [{stream_id}] Indexed recovered segment immediately: {filename}")
                             except Exception as index_err:
                                 print(f"[recovery] [{stream_id}] Failed to index recovered segment: {index_err}")
                         else:
@@ -398,12 +401,10 @@ async def camera_gap_recovery_loop():
                     # Scan directory for mp4 files not yet indexed
                     reindexed_count = 0
                     for mp4_file in sorted(stream_rec_dir.glob("*.mp4")):
-                        file_path_str = str(mp4_file)
-                        # Also check with /mnt/c/ prefix since MediaMTX uses WSL paths
-                        wsl_path = file_path_str.replace("C:\\", "/mnt/c/").replace("\\", "/")
-                        wsl_path_alt = file_path_str.replace("c:\\", "/mnt/c/").replace("\\", "/")
+                        parts = mp4_file.parts
+                        relative_path = "/".join(parts[-3:])
                         
-                        if file_path_str in indexed_paths or wsl_path in indexed_paths or wsl_path_alt in indexed_paths:
+                        if relative_path in indexed_paths:
                             continue
 
                         # Skip 0-byte files
@@ -431,7 +432,7 @@ async def camera_gap_recovery_loop():
                         # Index the file
                         new_seg = RecordingSegment(
                             stream_id=stream_id,
-                            file_path=file_path_str,
+                            file_path=relative_path,
                             start_ts=start_ts,
                             end_ts=end_ts
                         )
@@ -450,6 +451,8 @@ async def camera_gap_recovery_loop():
 
         except Exception as e:
             print(f"[recovery] Error in edge push filesystem re-index: {e}")
+
+        await asyncio.sleep(settings.recovery_interval_seconds)
 
 
 async def camera_archive_cleanup_loop():
@@ -500,6 +503,8 @@ async def camera_archive_cleanup_loop():
                         for seg in old_segments:
                             # 1. Remove physical file
                             file_path = Path(seg.file_path)
+                            if not file_path.is_absolute():
+                                file_path = Path(settings.recording_dir) / seg.file_path
                             try:
                                 if file_path.exists():
                                     file_path.unlink()
@@ -579,11 +584,11 @@ async def transcoder_watchdog_loop():
     Runs every 15 seconds.
     """
     print("[scheduler] Starting transcoder watchdog loop...")
-    from .transcoder import TranscoderManager
+    from .transcoder import transcoder_manager
     while True:
         try:
             async for session in get_session():
-                await TranscoderManager.watchdog_check(session)
+                await transcoder_manager.watchdog_check(session)
         except Exception as e:
             print(f"[scheduler] Error in transcoder watchdog: {e}")
         await asyncio.sleep(15)

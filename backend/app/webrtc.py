@@ -15,7 +15,7 @@ from .models import WebRTCSession, StreamMetricHistory, CameraStream, StreamStat
 from .redis_client import RedisManager
 from .redis_viewer_tracker import RedisViewerTracker
 from .session_manager import create_db_session, close_db_session
-from .transcoder import TranscoderManager, TranscoderCapacityError
+from .transcoder import transcoder_manager, TranscoderManager, TranscoderCapacityError
 
 router = APIRouter(prefix="/api/webrtc", tags=["webrtc"])
 streams_router = APIRouter(prefix="/api/streams", tags=["streams"])
@@ -251,7 +251,7 @@ async def proxy_signaling_session(
         if cam_stream and cam_stream.codec and cam_stream.codec.upper() == "H265":
             is_h265 = True
             try:
-                mediamtx_stream_id = await TranscoderManager.ensure_transcoder(
+                mediamtx_stream_id = await transcoder_manager.ensure_transcoder(
                     stream_id, db_session
                 )
                 print(f"[webrtc] H.265 stream {stream_id} -> routing to {mediamtx_stream_id}")
@@ -268,19 +268,25 @@ async def proxy_signaling_session(
     body_bytes = await request.body()
     url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}"
     
-    async with httpx.AsyncClient() as client:
-        try:
+    mtx_resp = None
+    try:
+        async with httpx.AsyncClient() as client:
             mtx_resp = await client.post(
                 url,
                 content=body_bytes,
                 headers={"Content-Type": request.headers.get("Content-Type", "application/sdp")},
                 timeout=15.0
             )
-        except Exception as e:
-            import traceback
-            print(f"[webrtc] Connection to MediaMTX failed: {e}")
-            traceback.print_exc()
-            raise HTTPException(status_code=502, detail=f"Failed to connect to media server signaling endpoint: {e}")
+    except Exception as e:
+        import traceback
+        print(f"[webrtc] Connection to MediaMTX failed: {e}")
+        traceback.print_exc()
+        if is_h265:
+            try:
+                await transcoder_manager.register_viewer_disconnect(stream_id, db_session)
+            except Exception as ex:
+                print(f"[webrtc] Error rolling back transcoder viewer count on connection failure: {ex}")
+        raise HTTPException(status_code=502, detail=f"Failed to connect to media server signaling endpoint: {e}")
             
     for k, v in mtx_resp.headers.items():
         if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection"):
@@ -310,6 +316,13 @@ async def proxy_signaling_session(
                 response.headers["Location"] = f"/api/webrtc/play/{stream_id}/{session_id}"
             else:
                 response.headers["Location"] = f"/api/streams/{stream_id}/live/{protocol}/{session_id}"
+    else:
+        # Signaling failed in MediaMTX (e.g. 404/400). Roll back the transcoder viewer count.
+        if is_h265:
+            try:
+                await transcoder_manager.register_viewer_disconnect(stream_id, db_session)
+            except Exception as ex:
+                print(f"[webrtc] Error rolling back transcoder viewer count on non-2xx status: {ex}")
             
     return Response(
         content=mtx_resp.content,
@@ -376,7 +389,7 @@ async def proxy_signaling_action(
         # Notify TranscoderManager of viewer disconnect for H.265 streams
         if is_h265:
             try:
-                await TranscoderManager.register_viewer_disconnect(stream_id, db_session)
+                await transcoder_manager.register_viewer_disconnect(stream_id, db_session)
             except Exception as e:
                 print(f"[webrtc] Error notifying transcoder disconnect for {stream_id}: {e}")
         

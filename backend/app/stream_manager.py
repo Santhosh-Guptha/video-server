@@ -200,8 +200,8 @@ class StreamManager:
             # 3. Stop any running transcoder for H.265 streams
             if stream.codec and stream.codec.upper() == "H265":
                 try:
-                    from .transcoder import TranscoderManager
-                    await TranscoderManager.stop_transcoder(path_name)
+                    from .transcoder import transcoder_manager
+                    await transcoder_manager.stop(path_name)
                 except Exception as e:
                     print(f"[stream_manager] Error stopping transcoder for {path_name}: {e}")
 

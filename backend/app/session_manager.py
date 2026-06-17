@@ -48,6 +48,19 @@ async def close_db_session(session_id: str, db_session: AsyncSession):
         db_sess.ended_at = datetime.utcnow()
         await db_session.commit()
         print(f"[session_manager] Closed DB session {session_id}")
+        
+        # Check if stream is H.265 to notify transcoder_manager
+        try:
+            from .models import CameraStream
+            stream_res = await db_session.execute(
+                select(CameraStream).where(CameraStream.stream_id == db_sess.stream_id)
+            )
+            cam_stream = stream_res.scalar_one_or_none()
+            if cam_stream and cam_stream.codec and cam_stream.codec.upper() == "H265":
+                from .transcoder import transcoder_manager
+                await transcoder_manager.register_viewer_disconnect(db_sess.stream_id, db_session)
+        except Exception as e:
+            print(f"[session_manager] Error notifying transcoder disconnect for {db_sess.stream_id} on close_db_session: {e}")
 
 async def webrtc_session_watchdog_cleanup(db_session: AsyncSession):
     """Watchdog process that cleans up database sessions that are no longer active in MediaMTX."""
@@ -100,12 +113,12 @@ async def webrtc_session_watchdog_cleanup(db_session: AsyncSession):
                 
                 await db_session.commit()
                 
-                # Notify TranscoderManager for H.265 streams that lost sessions
+                # Notify transcoder_manager for H.265 streams that lost sessions
                 if h265_disconnect_streams:
-                    from .transcoder import TranscoderManager
+                    from .transcoder import transcoder_manager
                     for sid in h265_disconnect_streams:
                         try:
-                            await TranscoderManager.register_viewer_disconnect(sid, db_session)
+                            await transcoder_manager.register_viewer_disconnect(sid, db_session)
                         except Exception as e:
                             print(f"[session_manager] Error notifying transcoder disconnect for {sid}: {e}")
                             
