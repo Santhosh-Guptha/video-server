@@ -28,7 +28,9 @@ hlsPartDuration: 200ms
 webrtc: yes
 webrtcAddress: :8889
 webrtcAdditionalHosts: [172.20.100.235]
-webrtcICEServers2:
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcICEServers:
   - url: "stun:stun.l.google.com:19302"
 
 # Recording settings
