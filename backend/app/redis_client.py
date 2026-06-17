@@ -117,6 +117,37 @@ class RedisManager:
                 
         return int(RedisManager._memory_cache.get(f"vms:counter:{name}", 0))
 
+    @staticmethod
+    async def get_last_push_seen(stream_id: str) -> float | None:
+        if redis_client:
+            try:
+                val = await redis_client.get(f"vms:last_push_seen:{stream_id}")
+                return float(val) if val else None
+            except Exception:
+                pass
+        val = RedisManager._memory_cache.get(f"vms:last_push_seen:{stream_id}")
+        return float(val) if val else None
+
+    @staticmethod
+    async def set_last_push_seen(stream_id: str, timestamp: float) -> None:
+        if redis_client:
+            try:
+                await redis_client.set(f"vms:last_push_seen:{stream_id}", str(timestamp))
+                return
+            except Exception:
+                pass
+        RedisManager._memory_cache[f"vms:last_push_seen:{stream_id}"] = str(timestamp)
+
+    @staticmethod
+    async def clear_last_push_seen(stream_id: str) -> None:
+        if redis_client:
+            try:
+                await redis_client.delete(f"vms:last_push_seen:{stream_id}")
+                return
+            except Exception:
+                pass
+        RedisManager._memory_cache.pop(f"vms:last_push_seen:{stream_id}", None)
+
 def datetime_now_iso() -> str:
     from datetime import datetime
     return datetime.utcnow().isoformat()

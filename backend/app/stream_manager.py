@@ -48,7 +48,20 @@ class StreamManager:
                     print(f"[stream_manager] Rejected registering stream: stream_id={path_name} reason=not synchronized from Video Server API or inactive")
                     return
 
-            is_push = "publisher" in stream.stream_url.lower() or not stream.stream_url.strip()
+            url_strip = stream.stream_url.strip()
+            has_valid_rtsp = url_strip.startswith(("rtsp://", "rtsps://", "rtmp://")) and url_strip not in ("rtsp://", "rtsps://", "rtmp://") and "publisher" not in url_strip.lower()
+
+            if stream.stream_mode == "PULL":
+                is_push = False
+                stream.stream_source = "RTSP_PULL"
+            elif stream.stream_mode == "PUSH":
+                is_push = True
+                stream.stream_source = "EDGE_PUSH"
+            else:  # AUTO
+                if stream.stream_source not in ("RTSP_PULL", "EDGE_PUSH"):
+                    stream.stream_source = "RTSP_PULL" if has_valid_rtsp else "EDGE_PUSH"
+                is_push = (stream.stream_source == "EDGE_PUSH")
+
             source_type = "EDGE_PUSH" if is_push else "RTSP_PULL"
             
             # 1. Sync StreamRegistry

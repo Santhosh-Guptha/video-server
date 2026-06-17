@@ -89,6 +89,10 @@ class CameraStream(Base):
     codec: Mapped[str] = mapped_column(String(16), default="H264")
     bitrate: Mapped[int | None] = mapped_column(Integer, nullable=True) # in kbps
     stream_url: Mapped[str] = mapped_column(Text, nullable=False) # Source RTSP or PUSH publisher url
+    stream_mode: Mapped[str] = mapped_column(String(16), default="AUTO", nullable=False)
+    stream_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    last_push_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pull_failed_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[StreamState] = mapped_column(Enum(StreamState, name="stream_state_enum"), default=StreamState.REGISTERED, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     always_on: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

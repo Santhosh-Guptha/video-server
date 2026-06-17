@@ -87,8 +87,9 @@ async def camera_scheduler_loop():
                     for stream in active_streams:
                         stream_info = active_mediamtx_paths.get(stream.stream_id)
                         
+                        ready_status = stream_info and stream_info.get("ready") is True
                         # A stream is considered ONLINE if its path is active and ready (publisher is streaming)
-                        if stream_info and stream_info.get("ready") is True:
+                        if ready_status:
                             # Stream is actively pulling/pushing packets
                             # Check number of clients (readers)
                             readers = stream_info.get("readers", [])
@@ -98,8 +99,45 @@ async def camera_scheduler_loop():
                             # Transition to ONLINE
                             if stream.status != StreamState.ONLINE:
                                 await stream_manager.set_stream_state(session, stream, StreamState.ONLINE)
+                            
+                            # Reset pull failure tracking
+                            if stream.pull_failed_since is not None:
+                                stream.pull_failed_since = None
+                                await session.commit()
                         else:
                             # Stream is configured but not active/streaming
+                            
+                            # Run watchdog recovery loops for AUTO mode
+                            if stream.stream_mode == "AUTO":
+                                # Watchdog Recovery 1: Push heartbeat watchdog (EDGE_PUSH -> RTSP_PULL)
+                                if stream.stream_source == "EDGE_PUSH":
+                                    last_seen_ts = await RedisManager.get_last_push_seen(stream.stream_id)
+                                    if last_seen_ts is None:
+                                        last_seen_ts = stream.last_push_seen.timestamp() if stream.last_push_seen else 0.0
+                                    
+                                    import time
+                                    if time.time() - last_seen_ts > 120.0:
+                                        print(f"[scheduler] Push heartbeat lost (>120s) for stream {stream.stream_id}. Reverting to RTSP pull.")
+                                        stream.stream_source = "RTSP_PULL"
+                                        await stream_manager.add_stream(session, stream)
+                                        await RedisManager.clear_last_push_seen(stream.stream_id)
+                                        continue
+                                        
+                                # Watchdog Recovery 2: Pull failure fallback (RTSP_PULL -> EDGE_PUSH)
+                                elif stream.stream_source == "RTSP_PULL":
+                                    if stream.pull_failed_since is None:
+                                        stream.pull_failed_since = datetime.utcnow()
+                                        await session.commit()
+                                    else:
+                                        elapsed = (datetime.utcnow() - stream.pull_failed_since).total_seconds()
+                                        if elapsed > 30.0:
+                                            print(f"[scheduler] RTSP pull failing continuously (>30s) for stream {stream.stream_id}. Switching to push fallback.")
+                                            stream.stream_source = "EDGE_PUSH"
+                                            await stream_manager.add_stream(session, stream)
+                                            stream.pull_failed_since = None
+                                            await session.commit()
+                                            continue
+
                             # If they are in CONNECTING or ONLINE but show inactive, they might be offline or connecting
                             if stream.status == StreamState.ONLINE:
                                 # For active EDGE_PUSH streams, keep ONLINE if the TCP socket is still connected

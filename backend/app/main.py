@@ -352,6 +352,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
                 codec=codec_val,
                 bitrate=bitrate_val,
                 stream_url=stream_url,
+                stream_mode="AUTO",
                 always_on=always_on_val,
                 status=StreamState.REGISTERED
             )
@@ -874,16 +875,40 @@ async def get_validation_status(session: Annotated[AsyncSession, Depends(get_ses
     active_res = await session.execute(active_stmt)
     active_cameras = active_res.scalar() or 0
     
+    # RTSP Pull count
+    rtsp_stmt = select(func.count(CameraStream.id)).where(CameraStream.stream_source == "RTSP_PULL")
+    rtsp_res = await session.execute(rtsp_stmt)
+    rtsp_pull_streams = rtsp_res.scalar() or 0
+
+    # Edge Push count
+    push_stmt = select(func.count(CameraStream.id)).where(CameraStream.stream_source == "EDGE_PUSH")
+    push_res = await session.execute(push_stmt)
+    edge_push_streams = push_res.scalar() or 0
+
+    # Auto Mode count
+    auto_stmt = select(func.count(CameraStream.id)).where(CameraStream.stream_mode == "AUTO")
+    auto_res = await session.execute(auto_stmt)
+    auto_mode_streams = auto_res.scalar() or 0
+
+    # Unknown streams count
+    unknown_stmt = select(func.count(CameraStream.id)).join(Camera).where(Camera.synced_from_api == False)
+    unknown_res = await session.execute(unknown_stmt)
+    unknown_streams = unknown_res.scalar() or 0
+
     # Rejection metrics from Redis/Memory
     rejected_edge_connections = await RedisManager.get_counter("rejected_edge_connections")
     rejected_uploads = await RedisManager.get_counter("rejected_uploads")
     
     return {
+        "strict_validation": settings.strict_camera_validation,
         "synced_cameras": synced_cameras,
         "active_cameras": active_cameras,
+        "rtsp_pull_streams": rtsp_pull_streams,
+        "edge_push_streams": edge_push_streams,
+        "auto_mode_streams": auto_mode_streams,
+        "unknown_streams": unknown_streams,
         "rejected_edge_connections": rejected_edge_connections,
-        "rejected_uploads": rejected_uploads,
-        "strict_validation": settings.strict_camera_validation
+        "rejected_uploads": rejected_uploads
     }
 
 

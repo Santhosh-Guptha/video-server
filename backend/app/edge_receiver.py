@@ -12,6 +12,7 @@ from .config import settings
 from .db import get_session
 from .models import CameraStream, StreamState, EdgeConnection, Camera, ProfileType
 from .stream_manager import stream_manager
+from .redis_client import RedisManager
 
 # ================= PROTOCOL CONSTANTS =================
 PROXY_METADATA_COMMAND = 0x01
@@ -213,6 +214,13 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                     await db_session.rollback()
                                     print(f"[edge_receiver] Auto-registration failed for {camera_id}: {auto_reg_err}")
 
+                        # Mode verification
+                        if is_valid and stream:
+                            if stream.stream_mode == "PULL":
+                                print(f"[edge_receiver] Rejecting edge push for camera {camera_id}: Camera configured as PULL only")
+                                await RedisManager.increment_counter("rejected_edge_connections")
+                                is_valid = False
+
                         if not is_valid:
                             print(f"[edge_receiver] Rejecting unauthorized camera connection: {camera_id}")
                             metrics["packet_parse_errors"] += 1
@@ -305,6 +313,11 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                             writer.close()
                             return
 
+                        # Update Stream source and heartbeat before setting ONLINE state
+                        stream.stream_source = "EDGE_PUSH"
+                        stream.last_push_seen = datetime.utcnow()
+                        stream.pull_failed_since = None
+
                         # Register new connection record in database
                         connection_db_id = uuid.uuid4()
                         db_conn = EdgeConnection(
@@ -365,10 +378,34 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 nal_len = struct.unpack(">I", body[nal_len_offset : nal_len_offset + 4])[0]
                 nal = body[nal_len_offset + 4 : nal_len_offset + 4 + nal_len]
 
-                # Update frame flow tracking
+                # Update frame flow tracking and heartbeat
+                now_dt = datetime.utcnow()
                 last_frame_received_ts = time.time()
                 if camera_id in active_connections:
-                    active_connections[camera_id]["last_frame_ts"] = datetime.utcnow()
+                    active_connections[camera_id]["last_frame_ts"] = now_dt
+
+                # Update Redis heartbeat cache
+                await RedisManager.set_last_push_seen(camera_id, last_frame_received_ts)
+
+                # Throttle database write to once per 10 seconds
+                last_db_write = active_connections.get(camera_id, {}).get("last_db_heartbeat_ts", 0.0)
+                if last_frame_received_ts - last_db_write > 10.0:
+                    if camera_id in active_connections:
+                        active_connections[camera_id]["last_db_heartbeat_ts"] = last_frame_received_ts
+                    async def _update_db_heartbeat(cam_id, timestamp_dt):
+                        try:
+                            async for db_session in get_session():
+                                stmt = select(CameraStream).where(CameraStream.stream_id == cam_id)
+                                res = await db_session.execute(stmt)
+                                db_stream = res.scalar_one_or_none()
+                                if db_stream:
+                                    db_stream.last_push_seen = timestamp_dt
+                                    db_stream.pull_failed_since = None
+                                    await db_session.commit()
+                                break
+                        except Exception as ex:
+                            print(f"[edge_receiver] Heartbeat DB update failed: {ex}")
+                    asyncio.create_task(_update_db_heartbeat(camera_id, now_dt))
 
                 # Feed FFmpeg pipe
                 if ffmpeg_proc and ffmpeg_proc.returncode is None:
@@ -497,20 +534,6 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             # Check if this connection was indeed the active one registered
             if active_connections.get(camera_id, {}).get("session_id") == session_id:
                 active_connections.pop(camera_id, None)
-
-                async for db_session in get_session():
-                    stmt = select(CameraStream).where(CameraStream.stream_id == camera_id)
-                    res = await db_session.execute(stmt)
-                    stream = res.scalar_one_or_none()
-                    if stream:
-                        is_push = "publisher" in stream.stream_url.lower() or not stream.stream_url.strip()
-                        if not is_push:
-                            # Revert MediaMTX path config back to RTSP Pull (pull mode)
-                            print(f"[edge_receiver] Reverting MediaMTX path {camera_id} back to RTSP pull: {stream.stream_url}")
-                            await stream_manager.add_stream(db_session, stream)
-                        else:
-                            await stream_manager.set_stream_state(db_session, stream, StreamState.OFFLINE, "Edge push client disconnected")
-                    break
 
             # Update database connection history log
             if connection_db_id:
