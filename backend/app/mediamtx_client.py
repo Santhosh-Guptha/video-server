@@ -1,5 +1,22 @@
+import re
 import httpx
 from .config import settings
+
+def double_escape_rtsp_url(url: str) -> str:
+    if not url or not url.startswith(("rtsp://", "rtsps://", "rtmp://")):
+        return url
+    if "@" not in url:
+        return url
+    parts = url.split("://", 1)
+    if len(parts) < 2:
+        return url
+    scheme, rest = parts
+    user_host = rest.rsplit("@", 1)
+    if len(user_host) < 2:
+        return url
+    userinfo, host = user_host
+    escaped_userinfo = re.sub(r'%([0-9a-fA-F]{2})', r'%25\1', userinfo)
+    return f"{scheme}://{escaped_userinfo}@{host}"
 
 class MediaMTXClient:
     def __init__(self, api_url: str = settings.mediamtx_api_url):
@@ -45,7 +62,7 @@ class MediaMTXClient:
         """Adds a path configuration on MediaMTX."""
         url = f"{self.api_url}/v3/config/paths/add/{path_name}"
         payload = {
-            "source": source_url,
+            "source": double_escape_rtsp_url(source_url),
             "sourceOnDemand": False if source_url == "publisher" else source_on_demand,
             "record": True,
             "runOnDemand": "",

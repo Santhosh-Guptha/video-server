@@ -1,3 +1,4 @@
+import re
 import asyncio
 from datetime import datetime
 import httpx
@@ -7,6 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import settings
 from .models import CameraStream, StreamState, StreamRegistry
 from .redis_client import RedisManager
+
+def double_escape_rtsp_url(url: str) -> str:
+    if not url or not url.startswith(("rtsp://", "rtsps://", "rtmp://")):
+        return url
+    if "@" not in url:
+        return url
+    parts = url.split("://", 1)
+    if len(parts) < 2:
+        return url
+    scheme, rest = parts
+    user_host = rest.rsplit("@", 1)
+    if len(user_host) < 2:
+        return url
+    userinfo, host = user_host
+    escaped_userinfo = re.sub(r'%([0-9a-fA-F]{2})', r'%25\1', userinfo)
+    return f"{scheme}://{escaped_userinfo}@{host}"
 
 class StreamManager:
     def __init__(self, api_url: str = settings.mediamtx_api_url):
@@ -101,7 +118,7 @@ class StreamManager:
                     source_on_demand = False
 
             payload = {
-                "source": "publisher" if is_push else stream.stream_url,
+                "source": "publisher" if is_push else double_escape_rtsp_url(stream.stream_url),
                 "sourceOnDemand": False if is_push else source_on_demand,
                 "record": True,
                 "runOnDemand": "",
