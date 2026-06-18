@@ -232,7 +232,9 @@ function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: H
           </div>
         )}
         <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-        <div className="fakeStamp">LIVE</div>
+        <div className="fakeStamp" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span className="recordingDot" style={{ marginRight: '0' }} /> LIVE
+        </div>
       </div>
 
       {!minimal && (

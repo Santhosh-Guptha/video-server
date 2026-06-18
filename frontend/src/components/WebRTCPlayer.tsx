@@ -372,8 +372,8 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
           style={{ width: '100%', height: '100%', objectFit: 'contain' }}
         />
         
-        <div className="fakeStamp" style={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#ef4444' }}>
-          WEBRTC LIVE
+        <div className="fakeStamp" style={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span className="recordingDot" style={{ marginRight: '0' }} /> WEBRTC LIVE
         </div>
 
         <SessionStatsOverlay 

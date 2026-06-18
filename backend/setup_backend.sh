@@ -87,12 +87,20 @@ log_info "Upgrading pip and installing python dependencies..."
 
 # 6. Recreate/Overwrite .env file with fresh values
 log_info "Recreating .env configuration file..."
+EXISTING_UPSTREAM=""
+if [ -f "$BACKEND_DIR/.env" ]; then
+    EXISTING_UPSTREAM=$(grep -E "^UPSTREAM_CAMERA_API_URL=" "$BACKEND_DIR/.env" | cut -d'=' -f2-)
+fi
+if [ -z "$EXISTING_UPSTREAM" ]; then
+    EXISTING_UPSTREAM="https://uat1.iviscloud.net/api/cameras/camera-videoserver"
+fi
+
 cat <<EOF > "$BACKEND_DIR/.env"
 DATABASE_URL=sqlite+aiosqlite:///./data/app.db
 REDIS_URL=redis://localhost:6379/0
 MEDIAMTX_API_URL=http://localhost:9997
 MEDIAMTX_WEBRTC_URL=http://localhost:8889
-UPSTREAM_CAMERA_API_URL=https://uat1.iviscloud.net/api/cameras/camera-videoserver
+UPSTREAM_CAMERA_API_URL=$EXISTING_UPSTREAM
 EOF
 
 # 7. Create video-backend.service
