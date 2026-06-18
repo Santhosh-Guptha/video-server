@@ -143,19 +143,11 @@ async def camera_scheduler_loop():
                                         continue
                                         
                                 # Watchdog Recovery 2: Pull failure fallback (RTSP_PULL -> EDGE_PUSH)
+                                # REMOVED: To prevent continuous config reloads and keep paths stable,
+                                # we no longer fall back to EDGE_PUSH merely because RTSP pull fails.
+                                # Edge push receiver will dynamically patch MediaMTX to publisher on connection.
                                 elif stream.stream_source == "RTSP_PULL":
-                                    if stream.pull_failed_since is None:
-                                        stream.pull_failed_since = datetime.utcnow()
-                                        await session.commit()
-                                    else:
-                                        elapsed = (datetime.utcnow() - stream.pull_failed_since).total_seconds()
-                                        if elapsed > 30.0:
-                                            print(f"[scheduler] RTSP pull failing continuously (>30s) for stream {stream.stream_id}. Switching to push fallback.")
-                                            stream.stream_source = "EDGE_PUSH"
-                                            await stream_manager.add_stream(session, stream)
-                                            stream.pull_failed_since = None
-                                            await session.commit()
-                                            continue
+                                    pass
 
                             # If they are in CONNECTING or ONLINE but show inactive, they might be offline or connecting
                             if stream.status == StreamState.ONLINE:
