@@ -5,7 +5,7 @@ api: yes
 apiAddress: :9997
 
 # Log level
-logLevel: warn
+logLevel: debug
 
 # RTSP server settings (Ingress and Egress)
 rtsp: yes
