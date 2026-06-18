@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import type { Camera } from '../types'
 import { Player } from '../components/Player'
-import { ServerCrash, Users, Play, Square, Maximize2, Minimize2, VideoOff, AlertCircle, Loader2 } from 'lucide-react'
+import { ServerCrash, Users, Play, Square, Maximize2, Minimize2 } from 'lucide-react'
 import { startLive, stopLive } from '../lib/api'
 
 type LiveWallProps = {
@@ -124,18 +124,15 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
     }
   }, [wsConnected])
 
-  // Get optimal grid columns count for high-density wall
-  const gridCols = useMemo(() => {
-    const count = activeCameras.length
-    if (count <= 1) return 1
-    if (count <= 4) return 2
-    if (count <= 9) return 3
-    if (count <= 16) return 4
-    if (count <= 25) return 5
-    if (count <= 36) return 6
-    if (count <= 49) return 7
-    return 8 // 50+ cameras -> 8 columns
-  }, [activeCameras.length])
+  // Filter to show ONLY live recording cameras
+  const liveCameras = useMemo(() => {
+    return activeCameras.filter(cam => {
+      const activeStream = cam.streams[0]
+      if (!activeStream) return false
+      const status = streamStatuses[activeStream.stream_id] || activeStream.status || 'OFFLINE'
+      return onlineStreamIds.has(activeStream.stream_id) || status === 'ONLINE'
+    })
+  }, [activeCameras, onlineStreamIds, streamStatuses])
 
   // Start all cameras
   const handleStartAll = async () => {
@@ -146,7 +143,6 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
       if (activeStream) {
         try {
           await startLive(activeStream.stream_id)
-          // Optimistically update local status to CONNECTING
           setStreamStatuses(prev => ({ ...prev, [activeStream.stream_id]: 'CONNECTING' }))
           success++
         } catch (e) {
@@ -177,64 +173,17 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   }
 
   const renderGrid = () => (
-    <div className={`liveWallGrid grid-${gridCols}`}>
-      {activeCameras.map((cam) => {
+    <div className="liveWallGrid">
+      {liveCameras.map((cam) => {
         const activeStream = cam.streams[0]
         if (!activeStream) return null
-
-        const status = streamStatuses[activeStream.stream_id] || activeStream.status || 'OFFLINE'
         const viewers = streamViewers[activeStream.stream_id] || 0
-        const isOnline = onlineStreamIds.has(activeStream.stream_id) || status === 'ONLINE'
-
-        if (!isOnline) {
-          const isConnecting = status === 'CONNECTING'
-          const isFailed = status === 'FAILED'
-
-          return (
-            <div key={cam.id} className="liveWallCell" style={{ padding: 0, overflow: 'hidden' }}>
-              <div className={`liveWallOfflineCard ${isConnecting ? 'connecting' : isFailed ? 'failed' : 'offline'}`}>
-                {isConnecting ? (
-                  <Loader2 className="offlineCardIcon" size={24} />
-                ) : isFailed ? (
-                  <AlertCircle className="offlineCardIcon" size={24} />
-                ) : (
-                  <VideoOff className="offlineCardIcon" size={24} />
-                )}
-                
-                <div className="offlineCardStatus">
-                  {isConnecting ? 'Connecting' : isFailed ? 'Failed' : 'Offline'}
-                </div>
-                
-                <div className="offlineCardName">{cam.name}</div>
-                
-                {!isConnecting && (
-                  <button 
-                    className="offlineCardActionBtn" 
-                    type="button"
-                    onClick={async (e) => {
-                      e.stopPropagation()
-                      try {
-                        statusTextSetter(`Starting stream for ${cam.name}...`)
-                        await startLive(activeStream.stream_id)
-                        setStreamStatuses(prev => ({ ...prev, [activeStream.stream_id]: 'CONNECTING' }))
-                      } catch (err) {
-                        statusTextSetter(`Failed to start ${cam.name}: ${err}`)
-                      }
-                    }}
-                  >
-                    Start
-                  </button>
-                )}
-              </div>
-            </div>
-          )
-        }
 
         return (
           <div key={cam.id} className="liveWallCell">
             <Player
               src={`/api/streams/${encodeURIComponent(activeStream.stream_id)}/live/index.m3u8`}
-              posterLabel={cam.name}
+              posterLabel=""
               minimal={true}
             />
             <div className="liveWallCellOverlay">
@@ -262,7 +211,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
         <div className="liveWallHeaderInfo">
           <div className="livePulseDot" />
           <span className="liveWallHeaderTitle">
-            Live Wall — {activeCameras.length} active camera{activeCameras.length !== 1 ? 's' : ''} online
+            Live Wall — {liveCameras.length} active camera{liveCameras.length !== 1 ? 's' : ''} online
           </span>
         </div>
         <div className="liveWallActions">
@@ -290,21 +239,21 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
         </div>
       </div>
 
-      {activeCameras.length > 0 ? (
+      {liveCameras.length > 0 ? (
         renderGrid()
       ) : (
         <div className="liveWallEmpty">
           <ServerCrash className="liveWallEmptyIcon" />
-          <div className="liveWallEmptyTitle">No live cameras found</div>
+          <div className="liveWallEmptyTitle">No live recording cameras found</div>
           <div className="liveWallEmptySub">
-            All cameras are currently offline. Cameras will dynamically appear here as soon as they connect and start streaming.
+            All cameras are currently offline. Use "Start All Live" or start individual cameras from the Live View tab.
           </div>
         </div>
       )}
 
-      {isFullView && activeCameras.length > 0 && (
+      {isFullView && liveCameras.length > 0 && (
         <div className="fullscreenVideoWall">
-          <div style={{ width: '100%', height: '100%', padding: '24px', boxSizing: 'border-box' }}>
+          <div style={{ width: '100%', height: '100%', padding: '12px', boxSizing: 'border-box' }}>
             {renderGrid()}
           </div>
           <button

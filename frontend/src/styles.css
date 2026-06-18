@@ -925,24 +925,13 @@ input[type="time"]:focus {
 
 .liveWallGrid {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
   flex: 1;
   overflow-y: auto;
   padding-bottom: 20px;
 }
 
-.liveWallGrid.grid-1 {
-  grid-template-columns: 1fr;
-}
-.liveWallGrid.grid-2 {
-  grid-template-columns: repeat(2, 1fr);
-}
-.liveWallGrid.grid-3 {
-  grid-template-columns: repeat(3, 1fr);
-}
-.liveWallGrid.grid-4 {
-  grid-template-columns: repeat(4, 1fr);
-}
 
 .liveWallCell {
   position: relative;
@@ -1034,19 +1023,6 @@ input[type="time"]:focus {
   line-height: 1.4;
 }
 
-/* High-Density Live Wall Columns */
-.liveWallGrid.grid-5 {
-  grid-template-columns: repeat(5, 1fr);
-}
-.liveWallGrid.grid-6 {
-  grid-template-columns: repeat(6, 1fr);
-}
-.liveWallGrid.grid-7 {
-  grid-template-columns: repeat(7, 1fr);
-}
-.liveWallGrid.grid-8 {
-  grid-template-columns: repeat(8, 1fr);
-}
 
 /* Glowing Recording Status Indicator */
 .recordingDot {
@@ -1182,7 +1158,12 @@ input[type="time"]:focus {
 
 .fullscreenVideoWall .liveWallGrid {
   gap: 2px !important;
-  padding-bottom: 0 !important;
+  padding: 8px !important;
+  box-sizing: border-box !important;
+  height: 100% !important;
+  max-height: 100vh !important;
+  overflow-y: auto !important;
+  padding-bottom: 80px !important;
 }
 
 .fullscreenVideoWall .liveWallCell {
