@@ -93,7 +93,9 @@ async def camera_scheduler_loop():
                             # Stream is actively pulling/pushing packets
                             # Check number of clients (readers)
                             readers = stream_info.get("readers", [])
-                            clients_count = len(readers) if isinstance(readers, list) else 0
+                            # Filter out internal HLS muxer from viewer counts
+                            active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
+                            clients_count = len(active_readers)
                             await RedisManager.set_viewer_count(stream.stream_id, clients_count)
                             
                             # Dynamic codec detection based on active MediaMTX tracks
@@ -183,7 +185,9 @@ async def camera_scheduler_loop():
                                     readers_count = 0
                                     if stream_info:
                                         readers = stream_info.get("readers", [])
-                                        readers_count = len(readers) if isinstance(readers, list) else 0
+                                        # Filter out internal HLS muxer
+                                        active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
+                                        readers_count = len(active_readers)
                                     
                                     # We only restart if someone is actively trying to watch it and it is stuck
                                     if readers_count > 0:

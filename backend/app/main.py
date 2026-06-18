@@ -1,5 +1,7 @@
 import json
 import time
+import http.client
+http.client._MAXHEADERS = 100000
 from pathlib import Path
 from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile

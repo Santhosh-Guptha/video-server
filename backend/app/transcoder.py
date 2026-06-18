@@ -192,7 +192,9 @@ class TranscoderManager:
                                     break
                         if path_info:
                             readers = path_info.get("readers") or []
-                            if len(readers) > 0:
+                            # Filter out internal HLS muxer which is always present
+                            active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"]
+                            if len(active_readers) > 0:
                                 has_readers = True
             except Exception as e:
                 print(f"[transcoder] Error checking readers for {h264_path} during shutdown: {e}")
@@ -253,7 +255,9 @@ class TranscoderManager:
                 has_readers = False
                 if path_info:
                     readers = path_info.get("readers") or []
-                    has_readers = len(readers) > 0
+                    # Filter out internal HLS muxer which is always present
+                    active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"]
+                    has_readers = len(active_readers) > 0
 
                 if viewer_count > 0 or has_readers:
                     print(f"[transcoder] WATCHDOG: Transcoder for {stream_id} crashed "

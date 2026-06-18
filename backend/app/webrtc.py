@@ -1,6 +1,8 @@
 import json
 import os
 import uuid
+import http.client
+http.client._MAXHEADERS = 100000
 import httpx
 import asyncio
 import urllib.request
@@ -36,6 +38,7 @@ def _sync_http_request(url: str, method: str, content: bytes, headers: dict) -> 
     try:
         with urllib.request.urlopen(req, timeout=15.0) as resp:
             resp_headers = {k: v for k, v in resp.headers.items()}
+            print(f"[webrtc] WHEP proxy succeeded. Status: {resp.status}, Response Headers Count: {len(resp.headers.keys())}")
             return DummyResponse(
                 content=resp.read(),
                 status_code=resp.status,
