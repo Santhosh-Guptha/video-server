@@ -96,6 +96,23 @@ async def camera_scheduler_loop():
                             clients_count = len(readers) if isinstance(readers, list) else 0
                             await RedisManager.set_viewer_count(stream.stream_id, clients_count)
                             
+                            # Dynamic codec detection based on active MediaMTX tracks
+                            tracks = stream_info.get("tracks") or []
+                            if isinstance(tracks, list):
+                                has_h265 = any(isinstance(t, str) and t.upper().startswith("H265") for t in tracks)
+                                has_h264 = any(isinstance(t, str) and t.upper().startswith("H264") for t in tracks)
+                                
+                                detected_codec = None
+                                if has_h265:
+                                    detected_codec = "H265"
+                                elif has_h264:
+                                    detected_codec = "H264"
+                                    
+                                if detected_codec and stream.codec != detected_codec:
+                                    print(f"[scheduler] Dynamically detected {detected_codec} codec for stream {stream.stream_id} (tracks: {tracks}, was: {stream.codec})")
+                                    stream.codec = detected_codec
+                                    await session.commit()
+                            
                             # Transition to ONLINE
                             if stream.status != StreamState.ONLINE:
                                 await stream_manager.set_stream_state(session, stream, StreamState.ONLINE)

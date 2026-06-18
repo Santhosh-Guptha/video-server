@@ -741,10 +741,27 @@ async def restart_live(stream_id: str, session: Annotated[AsyncSession, Depends(
 # MediaMTX HLS Reverse Proxy Endpoints
 # ----------------------------------------------------
 @app.get("/api/streams/{stream_id}/live/index.m3u8")
-async def hls_playlist(stream_id: str):
+async def hls_playlist(
+    stream_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    target_stream_id = stream_id
+    try:
+        res = await session.execute(
+            select(CameraStream).where(CameraStream.stream_id == stream_id)
+        )
+        stream = res.scalar_one_or_none()
+        if stream and stream.codec and stream.codec.upper() == "H265":
+            from .transcoder import transcoder_manager
+            target_stream_id = await transcoder_manager.ensure_transcoder(
+                stream_id, session, increment_viewer=False
+            )
+    except Exception as e:
+        print(f"[main] Error ensuring transcoder for H.265 HLS stream {stream_id}: {e}")
+
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{stream_id}/index.m3u8")
+            response = await client.get(f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/index.m3u8")
             if response.status_code == 200:
                 return Response(
                     content=response.content,
@@ -760,11 +777,26 @@ async def hls_playlist(stream_id: str):
     raise HTTPException(404, "Playlist not ready")
 
 @app.get("/api/streams/{stream_id}/live/{filename}")
-async def hls_segment(stream_id: str, filename: str):
+async def hls_segment(
+    stream_id: str,
+    filename: str,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    target_stream_id = stream_id
+    try:
+        res = await session.execute(
+            select(CameraStream).where(CameraStream.stream_id == stream_id)
+        )
+        stream = res.scalar_one_or_none()
+        if stream and stream.codec and stream.codec.upper() == "H265":
+            target_stream_id = f"{stream_id}_h264"
+    except Exception as e:
+        print(f"[main] Error checking codec for HLS segment {stream_id}: {e}")
+
     async with httpx.AsyncClient() as client:
         try:
             # Match endpoints and format params
-            url = f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{stream_id}/{filename}"
+            url = f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/{filename}"
             response = await client.get(url)
             if response.status_code == 200:
                 media_type = "video/MP2T" if filename.endswith(".ts") else "video/mp4"

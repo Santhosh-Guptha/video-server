@@ -26,11 +26,11 @@ class _TranscoderState:
     """In-memory state for a single running transcoder."""
     __slots__ = ("process", "stream_id", "startup_time", "active_viewers", "shutdown_task")
 
-    def __init__(self, process: asyncio.subprocess.Process, stream_id: str):
+    def __init__(self, process: asyncio.subprocess.Process, stream_id: str, active_viewers: int = 1):
         self.process = process
         self.stream_id = stream_id
         self.startup_time = datetime.utcnow()
-        self.active_viewers = 1
+        self.active_viewers = active_viewers
         self.shutdown_task: Optional[asyncio.Task] = None
 
 
@@ -46,7 +46,12 @@ class TranscoderManager:
         return len(cls._transcoders)
 
     @classmethod
-    async def ensure_transcoder(cls, stream_id: str, db_session: Optional[AsyncSession] = None) -> str:
+    async def ensure_transcoder(
+        cls,
+        stream_id: str,
+        db_session: Optional[AsyncSession] = None,
+        increment_viewer: bool = True
+    ) -> str:
         """
         Ensures a shared transcoder is running for the given H.265 stream.
         Returns the transcoded path name (e.g. '{stream_id}_h264').
@@ -58,15 +63,16 @@ class TranscoderManager:
 
             # If transcoder exists and is running, cancel any pending shutdown and reuse
             if state and state.process.returncode is None:
-                if state.shutdown_task and not state.shutdown_task.done():
-                    state.shutdown_task.cancel()
-                    state.shutdown_task = None
-                    print(f"[transcoder] Cancelled pending shutdown for {stream_id}")
-                state.active_viewers += 1
+                if increment_viewer:
+                    if state.shutdown_task and not state.shutdown_task.done():
+                        state.shutdown_task.cancel()
+                        state.shutdown_task = None
+                        print(f"[transcoder] Cancelled pending shutdown for {stream_id}")
+                    state.active_viewers += 1
 
-                # Update DB viewer count if db_session is provided
-                if db_session:
-                    await cls._update_db_viewer_count(stream_id, db_session, delta=1)
+                    # Update DB viewer count if db_session is provided
+                    if db_session:
+                        await cls._update_db_viewer_count(stream_id, db_session, delta=1)
                 return h264_path
 
             # Capacity check
@@ -81,14 +87,22 @@ class TranscoderManager:
 
             # Spawn FFmpeg transcoder process
             process = await cls._spawn_ffmpeg(stream_id, h264_path)
-            cls._transcoders[stream_id] = _TranscoderState(process, stream_id)
+            
+            initial_viewers = 1 if increment_viewer else 0
+            cls._transcoders[stream_id] = _TranscoderState(process, stream_id, active_viewers=initial_viewers)
 
             # Update DB record if db_session is provided
             if db_session:
-                await cls._upsert_db_record(stream_id, process.pid, "ACTIVE", db_session, viewer_count=1)
+                await cls._upsert_db_record(stream_id, process.pid, "ACTIVE", db_session, viewer_count=initial_viewers)
 
             print(f"[transcoder] Started transcoder for {stream_id} (PID: {process.pid}, "
                   f"active: {len(cls._transcoders)})")
+
+            if initial_viewers == 0:
+                # If started statelessly (HLS), schedule a delayed shutdown to check readers
+                cls._transcoders[stream_id].shutdown_task = asyncio.create_task(
+                    cls._delayed_shutdown(stream_id, settings.transcoder_grace_period_seconds)
+                )
 
             return h264_path
 
@@ -130,22 +144,46 @@ class TranscoderManager:
             state = cls._transcoders.get(stream_id)
             if not state:
                 return
-            # Double-check: process still alive and no new viewers
-            if state.active_viewers <= 0:
+            
+            # Check if there are active readers on the h264 path in MediaMTX
+            h264_path = f"{stream_id}_h264"
+            has_readers = False
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list", timeout=5.0)
+                    if resp.status_code == 200:
+                        paths_data = resp.json().get("items", {})
+                        path_info = None
+                        if isinstance(paths_data, dict):
+                            path_info = paths_data.get(h264_path)
+                        elif isinstance(paths_data, list):
+                            for item in paths_data:
+                                if isinstance(item, dict) and item.get("name") == h264_path:
+                                    path_info = item
+                                    break
+                        if path_info:
+                            readers = path_info.get("readers") or []
+                            if len(readers) > 0:
+                                has_readers = True
+            except Exception as e:
+                print(f"[transcoder] Error checking readers for {h264_path} during shutdown: {e}")
+
+            # Double-check: process still alive and no new viewers (in-memory or MediaMTX readers)
+            if state.active_viewers <= 0 and not has_readers:
                 if state.process.returncode is None:
                     await cls._kill_process(state.process, stream_id)
                 await cls._delete_h264_path(stream_id)
                 cls._transcoders.pop(stream_id, None)
                 print(f"[transcoder] Stopped transcoder for {stream_id} after {delay_seconds}s grace period.")
-
-        # Update DB outside lock
-        from .db import get_session as _get_session
-        async for session in _get_session():
-            try:
-                await cls._upsert_db_record(stream_id, None, "INACTIVE", session, viewer_count=0)
-            except Exception as e:
-                print(f"[transcoder] Error updating DB after delayed shutdown: {e}")
-            break
+            else:
+                if has_readers:
+                    print(f"[transcoder] Postponing shutdown for {stream_id} because MediaMTX has active readers on {h264_path}")
+                else:
+                    print(f"[transcoder] Postponing shutdown for {stream_id} because active_viewers count is {state.active_viewers}")
+                # Reschedule shutdown check since we still have viewers/readers
+                state.shutdown_task = asyncio.create_task(
+                    cls._delayed_shutdown(stream_id, delay_seconds)
+                )
 
     @classmethod
     async def watchdog_check(cls, db_session: Optional[AsyncSession] = None) -> None:
@@ -154,6 +192,22 @@ class TranscoderManager:
         Checks if any transcoder process has crashed while viewers are still connected.
         Auto-restarts crashed transcoders.
         """
+        # Fetch active MediaMTX paths to check readers
+        mediamtx_paths = {}
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list", timeout=5.0)
+                if resp.status_code == 200:
+                    items = resp.json().get("items", {})
+                    if isinstance(items, dict):
+                        mediamtx_paths = items
+                    elif isinstance(items, list):
+                        for item in items:
+                            if isinstance(item, dict) and "name" in item:
+                                mediamtx_paths[item["name"]] = item
+        except Exception as e:
+            print(f"[transcoder] Watchdog error fetching MediaMTX paths: {e}")
+
         async with cls._lock:
             dead_streams = []
             for stream_id, state in cls._transcoders.items():
@@ -164,23 +218,27 @@ class TranscoderManager:
                 state = cls._transcoders.pop(stream_id)
                 exit_code = state.process.returncode
                 viewer_count = state.active_viewers
+                
+                h264_path = f"{stream_id}_h264"
+                path_info = mediamtx_paths.get(h264_path)
+                has_readers = False
+                if path_info:
+                    readers = path_info.get("readers") or []
+                    has_readers = len(readers) > 0
 
-                if viewer_count > 0:
+                if viewer_count > 0 or has_readers:
                     print(f"[transcoder] WATCHDOG: Transcoder for {stream_id} crashed "
-                          f"(exit code: {exit_code}), {viewer_count} viewer(s) still connected. "
-                          f"Restarting...")
+                          f"(exit code: {exit_code}), viewers/readers active. Restarting...")
                     try:
-                        h264_path = f"{stream_id}_h264"
                         await cls._register_h264_path(stream_id, h264_path)
                         process = await cls._spawn_ffmpeg(stream_id, h264_path)
-                        new_state = _TranscoderState(process, stream_id)
-                        new_state.active_viewers = viewer_count
+                        new_state = _TranscoderState(process, stream_id, active_viewers=max(viewer_count, 1 if has_readers else 0))
                         cls._transcoders[stream_id] = new_state
                         
                         if db_session:
                             await cls._upsert_db_record(
                                 stream_id, process.pid, "ACTIVE", db_session,
-                                viewer_count=viewer_count
+                                viewer_count=new_state.active_viewers
                             )
                         print(f"[transcoder] WATCHDOG: Restarted transcoder for {stream_id} "
                               f"(new PID: {process.pid})")
@@ -194,7 +252,7 @@ class TranscoderManager:
                             )
                 else:
                     print(f"[transcoder] WATCHDOG: Transcoder for {stream_id} exited "
-                          f"(exit code: {exit_code}), no viewers. Cleaning up.")
+                          f"(exit code: {exit_code}), no viewers/readers. Cleaning up.")
                     await cls._delete_h264_path(stream_id)
                     if db_session:
                         await cls._upsert_db_record(
