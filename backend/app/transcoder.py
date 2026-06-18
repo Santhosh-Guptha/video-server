@@ -110,7 +110,7 @@ class TranscoderManager:
             async with httpx.AsyncClient() as client:
                 for _ in range(25): # 25 * 0.2s = 5s
                     try:
-                        resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list", timeout=1.0)
+                        resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=1.0)
                         if resp.status_code == 200:
                             items = resp.json().get("items", {})
                             path_info = None
@@ -179,7 +179,7 @@ class TranscoderManager:
             has_readers = False
             try:
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list", timeout=5.0)
+                    resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
                     if resp.status_code == 200:
                         paths_data = resp.json().get("items", {})
                         path_info = None
@@ -225,7 +225,7 @@ class TranscoderManager:
         mediamtx_paths = {}
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list", timeout=5.0)
+                resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
                 if resp.status_code == 200:
                     items = resp.json().get("items", {})
                     if isinstance(items, dict):
@@ -328,7 +328,7 @@ class TranscoderManager:
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",
-            "-i", f"rtsp://localhost:8554/{stream_id}",
+            "-i", f"rtsp://127.0.0.1:8554/{stream_id}",
             "-an",
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -341,7 +341,7 @@ class TranscoderManager:
             "-bf", "0",
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
-            f"rtsp://localhost:8554/{h264_path}"
+            f"rtsp://127.0.0.1:8554/{h264_path}"
         ]
 
         process = await asyncio.create_subprocess_exec(

@@ -43,7 +43,7 @@ async def camera_scheduler_loop():
 
                     # Fetch existing configuration paths in MediaMTX
                     try:
-                        paths_resp = await client.get(f"{settings.mediamtx_api_url}/v3/config/paths/list")
+                        paths_resp = await client.get(f"{settings.mediamtx_api_url}/v3/config/paths/list?page=0&itemsPerPage=10000")
                         if paths_resp.status_code == 200:
                             mediamtx_paths_data = paths_resp.json().get("items", {})
                             mediamtx_paths = set()
@@ -66,7 +66,7 @@ async def camera_scheduler_loop():
 
                     # 2. Query active streams status to update state machine
                     try:
-                        paths_status_resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list")
+                        paths_status_resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000")
                         if paths_status_resp.status_code == 200:
                             active_mediamtx_paths_data = paths_status_resp.json().get("items", {})
                             active_mediamtx_paths = {}

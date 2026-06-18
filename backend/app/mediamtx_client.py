@@ -24,7 +24,7 @@ class MediaMTXClient:
 
     async def get_paths(self) -> set[str]:
         """Queries the active configured paths from MediaMTX."""
-        url = f"{self.api_url}/v3/config/paths/list"
+        url = f"{self.api_url}/v3/config/paths/list?page=0&itemsPerPage=10000"
         async with httpx.AsyncClient() as client:
             try:
                 resp = await client.get(url, timeout=5.0)

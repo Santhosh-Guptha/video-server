@@ -37,7 +37,7 @@ async def check_node_health(node_name: str, api_url: str) -> bool:
     """Checks a MediaMTX node health by calling its API endpoint."""
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get(f"{api_url}/v3/config/paths/list", timeout=3.0)
+            resp = await client.get(f"{api_url}/v3/config/paths/list?page=0", timeout=3.0)
             return resp.status_code == 200
         except Exception:
             return False

@@ -643,7 +643,7 @@ async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_sessi
     # 1. Query MediaMTX paths list for currently publishing feeds
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list")
+            resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000")
             if resp.status_code == 200:
                 data = resp.json()
                 items = data.get("items", []) if isinstance(data, dict) else []

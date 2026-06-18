@@ -277,7 +277,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
                         # Initialize and spawn FFmpeg relayer
                         codec_fmt = "hevc" if encoder_type == 10 else "h264"
-                        rtsp_target = f"rtsp://localhost:8554/{camera_id}"
+                        rtsp_target = f"rtsp://127.0.0.1:8554/{camera_id}"
                         cmd = [
                             settings.ffmpeg_path,
                             "-use_wallclock_as_timestamps", "1",
