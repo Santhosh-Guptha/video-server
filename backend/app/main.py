@@ -94,7 +94,7 @@ def configure_mediamtx_paths_dynamically():
     rec_dir = Path(settings.recording_dir).resolve().absolute()
     backend_dir = Path(__file__).resolve().parent.parent
     
-    target_record_path = f"{rec_dir}/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live"
+    target_record_path = f"{rec_dir}/%path/%Y-%m-%d/%Y%m%d_%H%M_live"
     target_hook_cmd = f"/bin/bash {backend_dir}/app/segment_hook.sh \"$MTX_PATH\" \"$MTX_SEGMENT_PATH\""
     
     # 3. Read configuration file
@@ -1431,7 +1431,6 @@ async def upload_edge_backlog(
     parsed_start_ts = start_ts
     if parsed_start_ts is None:
         filename = file.filename or ""
-        # Try YYYYMMDD_HHMMSS
         match = re.search(r"(\d{8})_(\d{6})", filename)
         if match:
             try:
@@ -1440,6 +1439,16 @@ async def upload_edge_backlog(
                 parsed_start_ts = dt.timestamp()
             except Exception:
                 pass
+        else:
+            # Try YYYYMMDD_HHMM
+            match_min = re.search(r"(\d{8})_(\d{4})", filename)
+            if match_min:
+                try:
+                    date_str, time_str = match_min.groups()
+                    dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+                    parsed_start_ts = dt.timestamp()
+                except Exception:
+                    pass
         # Try 10-digit unix timestamp
         if parsed_start_ts is None:
             match_unix = re.search(r"(\d{10})", filename)

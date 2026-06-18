@@ -283,7 +283,7 @@ async def camera_gap_recovery_loop():
                 day_str = dt_start.strftime("%Y-%m-%d")
                 stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
                 stream_record_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
+                filename = f"{dt_start.strftime('%Y%m%d_%H%M')}_recovered.mp4"
                 output_path = stream_record_dir / filename
 
                 async with semaphore:
@@ -431,8 +431,20 @@ async def camera_gap_recovery_loop():
                                 end_ts = mp4_file.stat().st_mtime
                                 start_ts = end_ts - settings.segment_time_seconds
                         else:
-                            end_ts = mp4_file.stat().st_mtime
-                            start_ts = end_ts - settings.segment_time_seconds
+                            # Try 4-digit minutes format
+                            match_min = re.search(r"(\d{8})_(\d{4})", mp4_file.name)
+                            if match_min:
+                                try:
+                                    date_str_m, time_str_m = match_min.groups()
+                                    dt = datetime.strptime(f"{date_str_m}_{time_str_m}", "%Y%m%d_%H%M")
+                                    start_ts = dt.timestamp()
+                                    end_ts = start_ts + settings.segment_time_seconds
+                                except Exception:
+                                    end_ts = mp4_file.stat().st_mtime
+                                    start_ts = end_ts - settings.segment_time_seconds
+                            else:
+                                end_ts = mp4_file.stat().st_mtime
+                                start_ts = end_ts - settings.segment_time_seconds
 
                         # Index the file
                         new_seg = RecordingSegment(

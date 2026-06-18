@@ -94,8 +94,20 @@ async def index_recordings(session, recording_dir):
                 end_ts = item["mtime"]
                 start_ts = end_ts - settings.segment_time_seconds
         else:
-            end_ts = item["mtime"]
-            start_ts = end_ts - settings.segment_time_seconds
+            # Try 4-digit minutes format
+            match_min = re.search(r"(\d{8})_(\d{4})", item["name"])
+            if match_min:
+                try:
+                    date_str, time_str = match_min.groups()
+                    dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+                    start_ts = dt.timestamp()
+                    end_ts = start_ts + settings.segment_time_seconds
+                except Exception:
+                    end_ts = item["mtime"]
+                    start_ts = end_ts - settings.segment_time_seconds
+            else:
+                end_ts = item["mtime"]
+                start_ts = end_ts - settings.segment_time_seconds
 
         session.add(
             RecordingSegment(
