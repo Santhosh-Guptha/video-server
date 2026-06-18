@@ -5,9 +5,9 @@ class Settings(BaseSettings):
     enable_webrtc: bool = True
     # Switch default to postgresql+asyncpg for production, fallback to SQLite for local development without container
     database_url: str = "postgresql+asyncpg://vms_admin:vms_secure_password@localhost:5432/vms_db"
-    redis_url: str = "redis://localhost:6379/0"
-    mediamtx_api_url: str = "http://localhost:9997"
-    mediamtx_webrtc_url: str = "http://localhost:8889"
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    mediamtx_api_url: str = "http://127.0.0.1:9997"
+    mediamtx_webrtc_url: str = "http://127.0.0.1:8889"
     stun_servers: list[str] = ["stun:stun.l.google.com:19302"]
     turn_server_url: str = "turn:localhost:3478"
     turn_server_username: str = "vms_user"

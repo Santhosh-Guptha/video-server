@@ -90,11 +90,11 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
     setHealth('CONNECTING');
     setErrorMessage(null);
 
-    // Initial connection timeout (falls back to HLS if WebRTC fails to connect in 3 seconds)
+    // Initial connection timeout (falls back to HLS if WebRTC fails to connect in 10 seconds)
     connectionTimeoutRef.current = window.setTimeout(() => {
       console.warn(`[WebRTCPlayer:${streamId}] WebRTC connection timed out. Falling back to HLS.`);
       onFallbackToHls();
-    }, 3000);
+    }, 10000);
 
     try {
       // 1. Fetch ICE servers
