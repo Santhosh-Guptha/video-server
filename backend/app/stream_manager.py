@@ -135,11 +135,43 @@ class StreamManager:
                         await self.set_stream_state(session, stream, StreamState.CONNECTING)
                     else:
                         if "already exists" in response.text or response.status_code == 400:
+                            # GET existing config to compare
+                            get_url = f"{self.api_url}/v3/config/paths/get/{path_name}"
+                            get_resp = await client.get(get_url)
+                            if get_resp.status_code == 200:
+                                existing = get_resp.json()
+                                def normalize_url(u):
+                                    if not u: return ""
+                                    return u.replace("%25", "%").replace("&amp;", "&")
+                                
+                                existing_src = normalize_url(existing.get("source", ""))
+                                desired_src = normalize_url(payload.get("source", ""))
+                                
+                                if (existing_src == desired_src and
+                                    existing.get("sourceProtocol") == payload.get("sourceProtocol") and
+                                    existing.get("sourceOnDemand") == payload.get("sourceOnDemand") and
+                                    existing.get("record") == payload.get("record") and
+                                    existing.get("runOnDemand", "") == payload.get("runOnDemand", "") and
+                                    existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
+                                    
+                                    print(f"[stream_manager] Path {path_name} already exists with identical config. Skipping registration.")
+                                    await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                                    return
+                                else:
+                                    print(f"[stream_manager] Path {path_name} exists but config differs. Patching...")
+                                    patch_url = f"{self.api_url}/v3/config/paths/patch/{path_name}"
+                                    patch_resp = await client.patch(patch_url, json=payload)
+                                    if patch_resp.status_code in (200, 201):
+                                        print(f"[stream_manager] Patched path {path_name} config successfully.")
+                                        await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                                        return
+                            
+                            # Fallback if GET or PATCH failed
                             delete_url = f"{self.api_url}/v3/config/paths/delete/{path_name}"
                             await client.delete(delete_url)
                             response = await client.post(url, json=payload)
                             if response.status_code in (200, 201):
-                                print(f"[stream_manager] Re-registered path {path_name} in MediaMTX after deletion. On-demand: {source_on_demand}")
+                                print(f"[stream_manager] Re-registered path {path_name} in MediaMTX after deletion fallback. On-demand: {source_on_demand}")
                                 await self.set_stream_state(session, stream, StreamState.CONNECTING)
                                 return
                         print(f"[stream_manager] Failed to register path {path_name}: {response.text}")

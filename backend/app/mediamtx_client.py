@@ -74,8 +74,33 @@ class MediaMTXClient:
                 resp = await client.post(url, json=payload, timeout=5.0)
                 if resp.status_code in (200, 201):
                     return True
-                # If already exists, we attempt an edit update (via delete & re-add)
+                # If already exists, we attempt an edit update (via GET + PATCH/skip)
                 if "already exists" in resp.text or resp.status_code == 400:
+                    get_url = f"{self.api_url}/v3/config/paths/get/{path_name}"
+                    get_resp = await client.get(get_url, timeout=5.0)
+                    if get_resp.status_code == 200:
+                        existing = get_resp.json()
+                        def normalize_url(u):
+                            if not u: return ""
+                            return u.replace("%25", "%").replace("&amp;", "&")
+                        
+                        existing_src = normalize_url(existing.get("source", ""))
+                        desired_src = normalize_url(payload.get("source", ""))
+                        
+                        if (existing_src == desired_src and
+                            existing.get("sourceProtocol") == payload.get("sourceProtocol") and
+                            existing.get("sourceOnDemand") == payload.get("sourceOnDemand") and
+                            existing.get("record") == payload.get("record") and
+                            existing.get("runOnDemand", "") == payload.get("runOnDemand", "") and
+                            existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
+                            return True
+                        
+                        patch_url = f"{self.api_url}/v3/config/paths/patch/{path_name}"
+                        patch_resp = await client.patch(patch_url, json=payload, timeout=5.0)
+                        if patch_resp.status_code in (200, 201):
+                            return True
+                    
+                    # Fallback to delete & add if GET/PATCH failed
                     delete_url = f"{self.api_url}/v3/config/paths/delete/{path_name}"
                     await client.delete(delete_url, timeout=5.0)
                     resp = await client.post(url, json=payload, timeout=5.0)
