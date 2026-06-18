@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import type { Camera } from '../types'
 import { Player } from '../components/Player'
 import { ServerCrash, Users, Play, Square, Maximize2, Minimize2 } from 'lucide-react'
@@ -21,6 +21,9 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   const [streamViewers, setStreamViewers] = useState<Record<string, number>>({})
   const [wsConnected, setWsConnected] = useState(false)
   const [isFullView, setIsFullView] = useState(false)
+  
+  // Use a ref to track connection state inside the polling interval without causing useEffect retriggers
+  const wsConnectedRef = useRef(false)
 
   // Fetch all active cameras configured in the platform
   const fetchActiveList = async () => {
@@ -68,6 +71,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
 
       ws.onopen = () => {
         console.log('[LiveWall] Status WebSocket connected')
+        wsConnectedRef.current = true
         setWsConnected(true)
       }
 
@@ -98,6 +102,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
 
       ws.onclose = () => {
         console.log('[LiveWall] Status WebSocket disconnected. Retrying...')
+        wsConnectedRef.current = false
         setWsConnected(false)
         reconnectTimeout = window.setTimeout(connect, 3000)
       }
@@ -112,7 +117,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
 
     // Fallback polling loop in case WS fails
     const pollInterval = setInterval(() => {
-      if (!wsConnected) {
+      if (!wsConnectedRef.current) {
         fetchActiveList()
       }
     }, 10000)
@@ -122,7 +127,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
       clearTimeout(reconnectTimeout)
       clearInterval(pollInterval)
     }
-  }, [wsConnected])
+  }, [])
 
   // Filter to show ONLY live recording cameras
   const liveCameras = useMemo(() => {
