@@ -38,6 +38,24 @@ class Settings(BaseSettings):
     transcoder_preset: str = "ultrafast"
     transcoder_grace_period_seconds: int = 60
 
+    # ── Phase 3: Camera Lifecycle Policy Overrides ─────────────────────────────
+    # These can be set in .env to change runtime behavior without code changes.
+
+    # Recording policy: True = only MAIN/HD profile streams are recorded
+    record_hd_only: bool = True
+
+    # Camera health watchdog interval (seconds between full ping cycles)
+    camera_ping_interval_seconds: int = 120
+
+    # ffprobe RTSP reachability timeout per camera (seconds)
+    camera_ping_timeout_seconds: int = 5
+
+    # Edge push heartbeat window: pushes seen within this window → camera treated as EDGE_PUSH
+    edge_push_heartbeat_timeout_seconds: int = 120
+
+    # Edge push watchdog check interval (seconds)
+    edge_push_check_interval_seconds: int = 30
+
     class Config:
         env_file = ".env"
 

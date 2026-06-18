@@ -254,24 +254,29 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                 pass
 
                         # Dynamically patch MediaMTX path config to publisher to accept edge push relayer
+                        # Use should_record() to respect HD-only recording policy:
+                        # MAIN/HD streams → record=True, NORMAL/SUB streams → record=False
+                        from .stream_manager import should_record
+                        record_for_push = should_record(stream) if stream else True
+
                         async with httpx.AsyncClient() as client:
                             url = f"{settings.mediamtx_api_url}/v3/config/paths/patch/{camera_id}"
                             payload = {
                                 "source": "publisher",
                                 "sourceOnDemand": False,
-                                "record": True,
+                                "record": record_for_push,
                                 "runOnDemand": "",
                                 "runOnUnDemand": ""
                             }
                             try:
                                 resp = await client.patch(url, json=payload, timeout=5.0)
                                 if resp.status_code in (200, 201):
-                                    print(f"[edge_receiver] Patched MediaMTX path {camera_id} config to source=publisher.")
+                                    print(f"[edge_receiver] Patched MediaMTX path {camera_id} config to source=publisher (record={record_for_push}).")
                                 else:
                                     # Try adding path if not exists (although it should exist)
                                     add_url = f"{settings.mediamtx_api_url}/v3/config/paths/add/{camera_id}"
                                     await client.post(add_url, json=payload, timeout=5.0)
-                                    print(f"[edge_receiver] Added MediaMTX path {camera_id} with source=publisher.")
+                                    print(f"[edge_receiver] Added MediaMTX path {camera_id} with source=publisher (record={record_for_push}).")
                             except Exception as e:
                                 print(f"[edge_receiver] Error patching MediaMTX path config for {camera_id}: {e}")
 

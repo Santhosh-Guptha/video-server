@@ -6,8 +6,23 @@ from unittest.mock import AsyncMock, MagicMock
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from .config import settings
-from .models import CameraStream, StreamState, StreamRegistry
+from .models import CameraStream, ProfileType, StreamState, StreamRegistry
 from .redis_client import RedisManager
+
+def should_record(stream: CameraStream) -> bool:
+    """
+    Returns True if this stream should be recorded per the active policy.
+
+    When RECORD_HD_ONLY is True (default): only MAIN profile streams get record=true.
+    NORMAL/SUB streams remain registered for live viewing but are NOT recorded.
+    This achieves ~50% storage savings with no impact on live viewing.
+    """
+    # Import here to avoid circular imports at module load time
+    from .camera_policy import RECORD_HD_ONLY
+    if RECORD_HD_ONLY:
+        return stream.profile_type == ProfileType.MAIN
+    return True  # Record all profiles when HD-only policy is disabled
+
 
 def double_escape_rtsp_url(url: str) -> str:
     if not url or not url.startswith(("rtsp://", "rtsps://", "rtmp://")):
@@ -117,11 +132,14 @@ class StreamManager:
                 if diff.total_seconds() < 900: # 15 minutes
                     source_on_demand = False
 
+            # Determine recording policy: only MAIN/HD streams are recorded
+            record_flag = should_record(stream)
+
             payload = {
                 "source": "publisher" if is_push else stream.stream_url,
                 "sourceProtocol": "tcp",
                 "sourceOnDemand": False if is_push else source_on_demand,
-                "record": True,
+                "record": record_flag,
                 "runOnDemand": "",
                 "runOnUnDemand": ""
             }
@@ -147,10 +165,11 @@ class StreamManager:
                                 existing_src = normalize_url(existing.get("source", ""))
                                 desired_src = normalize_url(payload.get("source", ""))
                                 
+                                # Compare existing config vs desired (record uses should_record policy)
                                 if (existing_src == desired_src and
                                     existing.get("sourceProtocol") == payload.get("sourceProtocol") and
                                     existing.get("sourceOnDemand") == payload.get("sourceOnDemand") and
-                                    existing.get("record") == payload.get("record") and
+                                    existing.get("record") == record_flag and
                                     existing.get("runOnDemand", "") == payload.get("runOnDemand", "") and
                                     existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
                                     

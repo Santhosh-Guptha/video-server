@@ -128,26 +128,10 @@ async def camera_scheduler_loop():
                             
                             # Run watchdog recovery loops for AUTO mode
                             if stream.stream_mode == "AUTO":
-                                # Watchdog Recovery 1: Push heartbeat watchdog (EDGE_PUSH -> RTSP_PULL)
-                                if stream.stream_source == "EDGE_PUSH":
-                                    last_seen_ts = await RedisManager.get_last_push_seen(stream.stream_id)
-                                    if last_seen_ts is None:
-                                        last_seen_ts = stream.last_push_seen.timestamp() if stream.last_push_seen else 0.0
-                                    
-                                    import time
-                                    if time.time() - last_seen_ts > 120.0:
-                                        print(f"[scheduler] Push heartbeat lost (>120s) for stream {stream.stream_id}. Reverting to RTSP pull.")
-                                        stream.stream_source = "RTSP_PULL"
-                                        await stream_manager.add_stream(session, stream)
-                                        await RedisManager.clear_last_push_seen(stream.stream_id)
-                                        continue
-                                        
-                                # Watchdog Recovery 2: Pull failure fallback (RTSP_PULL -> EDGE_PUSH)
-                                # REMOVED: To prevent continuous config reloads and keep paths stable,
-                                # we no longer fall back to EDGE_PUSH merely because RTSP pull fails.
-                                # Edge push receiver will dynamically patch MediaMTX to publisher on connection.
-                                elif stream.stream_source == "RTSP_PULL":
-                                    pass
+                                # Push heartbeat watchdog moved to camera_watchdog.edge_push_watchdog_loop()
+                                # which handles EDGE_PUSH → RTSP_PULL reversion with proper PATCH-only
+                                # MediaMTX updates and the new centralized EDGE_PUSH_HEARTBEAT_TIMEOUT.
+                                pass
 
                             # If they are in CONNECTING or ONLINE but show inactive, they might be offline or connecting
                             if stream.status == StreamState.ONLINE:

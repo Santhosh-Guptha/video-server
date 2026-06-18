@@ -4,12 +4,19 @@ from .config import settings
 
 class RecordingProvider(abc.ABC):
     @abc.abstractmethod
-    async def start_recording(self, stream_id: str) -> None:
-        """Enable recording for the specified stream_id."""
+    async def start_recording(self, stream_id: str, profile_type=None) -> None:
+        """Enable recording for the specified stream_id.
+        
+        Args:
+            stream_id: The stream identifier in MediaMTX.
+            profile_type: Optional ProfileType — used to enforce HD-only policy.
+                          If RECORD_HD_ONLY is True and profile_type is not MAIN,
+                          recording will be skipped.
+        """
         pass
 
     @abc.abstractmethod
-    async def stop_recording(self, stream_id: str) -> None:
+    async def stop_recording(self, stream_id: str, profile_type=None) -> None:
         """Disable recording for the specified stream_id."""
         pass
 
@@ -22,7 +29,19 @@ class MediaMTXRecordingProvider(RecordingProvider):
     def __init__(self, api_url: str = settings.mediamtx_api_url):
         self.api_url = api_url
 
-    async def start_recording(self, stream_id: str) -> None:
+    async def start_recording(self, stream_id: str, profile_type=None) -> None:
+        """
+        Enable recording for the specified stream_id.
+        
+        Respects RECORD_HD_ONLY policy: if active and profile_type is not MAIN,
+        recording is silently skipped (NORMAL streams are live-only).
+        """
+        from .camera_policy import RECORD_HD_ONLY
+        from .models import ProfileType
+        if RECORD_HD_ONLY and profile_type is not None and profile_type != ProfileType.MAIN:
+            print(f"[recording] HD-only policy: skipping recording for non-HD stream {stream_id} (profile={profile_type})")
+            return
+
         async with httpx.AsyncClient() as client:
             get_url = f"{self.api_url}/v3/config/paths/get/{stream_id}"
             try:
@@ -42,7 +61,8 @@ class MediaMTXRecordingProvider(RecordingProvider):
             except Exception as e:
                 print(f"[recording] Connection error starting MediaMTX recording for {stream_id}: {e}")
 
-    async def stop_recording(self, stream_id: str) -> None:
+    async def stop_recording(self, stream_id: str, profile_type=None) -> None:
+        """Disable recording. profile_type accepted for API consistency but not enforced — always safe to stop."""
         async with httpx.AsyncClient() as client:
             get_url = f"{self.api_url}/v3/config/paths/get/{stream_id}"
             try:

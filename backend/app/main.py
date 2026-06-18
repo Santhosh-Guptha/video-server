@@ -230,6 +230,8 @@ async def startup():
         transcoder_watchdog_loop
     )
     from .health_monitor import health_monitor_loop
+    from .camera_watchdog import camera_health_watchdog_loop, edge_push_watchdog_loop
+
     asyncio.create_task(upstream_sync_loop())
     asyncio.create_task(camera_scheduler_loop())
     asyncio.create_task(camera_gap_recovery_loop())
@@ -237,6 +239,9 @@ async def startup():
     asyncio.create_task(webrtc_session_watchdog_loop())
     asyncio.create_task(health_monitor_loop())
     asyncio.create_task(transcoder_watchdog_loop())
+    # Phase 3: Camera lifecycle watchdogs
+    asyncio.create_task(camera_health_watchdog_loop())   # Ping/ffprobe cycle every 120s
+    asyncio.create_task(edge_push_watchdog_loop())       # Push heartbeat monitor every 30s
 
     if settings.edge_receiver_enabled:
         from .edge_receiver import start_edge_receiver
