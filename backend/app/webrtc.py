@@ -2,6 +2,9 @@ import json
 import os
 import uuid
 import httpx
+import asyncio
+import urllib.request
+import urllib.error
 from datetime import datetime
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -16,6 +19,37 @@ from .redis_client import RedisManager
 from .redis_viewer_tracker import RedisViewerTracker
 from .session_manager import create_db_session, close_db_session
 from .transcoder import transcoder_manager, TranscoderManager, TranscoderCapacityError
+
+class DummyResponse:
+    def __init__(self, content: bytes, status_code: int, headers: dict):
+        self.content = content
+        self.status_code = status_code
+        self.headers = headers
+
+def _sync_http_request(url: str, method: str, content: bytes, headers: dict) -> DummyResponse:
+    req = urllib.request.Request(
+        url,
+        data=content if method in ("POST", "PUT", "PATCH") else None,
+        headers=headers,
+        method=method
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15.0) as resp:
+            resp_headers = {k: v for k, v in resp.headers.items()}
+            return DummyResponse(
+                content=resp.read(),
+                status_code=resp.status,
+                headers=resp_headers
+            )
+    except urllib.error.HTTPError as e:
+        resp_headers = {k: v for k, v in e.headers.items()}
+        return DummyResponse(
+            content=e.read(),
+            status_code=e.code,
+            headers=resp_headers
+        )
+    except Exception as e:
+        raise e
 
 router = APIRouter(prefix="/api/webrtc", tags=["webrtc"])
 streams_router = APIRouter(prefix="/api/streams", tags=["streams"])
@@ -270,13 +304,14 @@ async def proxy_signaling_session(
     
     mtx_resp = None
     try:
-        async with httpx.AsyncClient() as client:
-            mtx_resp = await client.post(
-                url,
-                content=body_bytes,
-                headers={"Content-Type": request.headers.get("Content-Type", "application/sdp")},
-                timeout=15.0
-            )
+        headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
+        mtx_resp = await asyncio.to_thread(
+            _sync_http_request,
+            url,
+            "POST",
+            body_bytes,
+            headers_dict
+        )
     except Exception as e:
         import traceback
         print(f"[webrtc] Connection to MediaMTX failed: {e}")
@@ -361,20 +396,20 @@ async def proxy_signaling_action(
     body_bytes = await request.body()
     url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}/{session_id}"
     
-    async with httpx.AsyncClient() as client:
-        try:
-            mtx_resp = await client.request(
-                method=request.method,
-                url=url,
-                content=body_bytes,
-                headers={"Content-Type": request.headers.get("Content-Type", "application/sdp")},
-                timeout=15.0
-            )
-        except Exception as e:
-            import traceback
-            print(f"[webrtc] Action proxy to MediaMTX failed: {e}")
-            traceback.print_exc()
-            raise HTTPException(status_code=502, detail=f"Failed to connect to media server session endpoint: {e}")
+    try:
+        headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
+        mtx_resp = await asyncio.to_thread(
+            _sync_http_request,
+            url,
+            request.method,
+            body_bytes,
+            headers_dict
+        )
+    except Exception as e:
+        import traceback
+        print(f"[webrtc] Action proxy to MediaMTX failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Failed to connect to media server session endpoint: {e}")
             
     for k, v in mtx_resp.headers.items():
         if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection"):

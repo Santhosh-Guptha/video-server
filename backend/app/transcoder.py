@@ -104,6 +104,35 @@ class TranscoderManager:
                     cls._delayed_shutdown(stream_id, settings.transcoder_grace_period_seconds)
                 )
 
+            # Wait up to 5 seconds for the transcoded stream to become ready in MediaMTX
+            # This prevents race conditions where the browser requests the stream before FFmpeg starts publishing
+            ready = False
+            async with httpx.AsyncClient() as client:
+                for _ in range(25): # 25 * 0.2s = 5s
+                    try:
+                        resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list", timeout=1.0)
+                        if resp.status_code == 200:
+                            items = resp.json().get("items", {})
+                            path_info = None
+                            if isinstance(items, dict):
+                                path_info = items.get(h264_path)
+                            elif isinstance(items, list):
+                                for item in items:
+                                    if isinstance(item, dict) and item.get("name") == h264_path:
+                                        path_info = item
+                                        break
+                            if path_info and path_info.get("ready") is True:
+                                ready = True
+                                break
+                    except Exception as e:
+                        print(f"[transcoder] Error checking readiness for {h264_path}: {e}")
+                    await asyncio.sleep(0.2)
+            
+            if ready:
+                print(f"[transcoder] Transcoded stream {h264_path} is ready and publishing.")
+            else:
+                print(f"[transcoder] Warning: Transcoded stream {h264_path} did not start publishing within 5s.")
+
             return h264_path
 
     @classmethod
