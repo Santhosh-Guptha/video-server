@@ -88,11 +88,27 @@ log_info "Upgrading pip and installing python dependencies..."
 # 6. Recreate/Overwrite .env file with fresh values
 log_info "Recreating .env configuration file..."
 EXISTING_UPSTREAM=""
+EXISTING_TURN_URL=""
+EXISTING_TURN_USER=""
+EXISTING_TURN_CRED=""
 if [ -f "$BACKEND_DIR/.env" ]; then
     EXISTING_UPSTREAM=$(grep -E "^UPSTREAM_CAMERA_API_URL=" "$BACKEND_DIR/.env" | cut -d'=' -f2-)
+    EXISTING_TURN_URL=$(grep -E "^TURN_SERVER_URL=" "$BACKEND_DIR/.env" | cut -d'=' -f2-)
+    EXISTING_TURN_USER=$(grep -E "^TURN_SERVER_USERNAME=" "$BACKEND_DIR/.env" | cut -d'=' -f2-)
+    EXISTING_TURN_CRED=$(grep -E "^TURN_SERVER_CREDENTIAL=" "$BACKEND_DIR/.env" | cut -d'=' -f2-)
 fi
 if [ -z "$EXISTING_UPSTREAM" ]; then
     EXISTING_UPSTREAM="https://uat1.iviscloud.net/api/cameras/camera-videoserver"
+fi
+if [ -z "$EXISTING_TURN_URL" ]; then
+    PRIMARY_IP=$(hostname -I | awk '{print $1}')
+    EXISTING_TURN_URL="turn:$PRIMARY_IP:3478"
+fi
+if [ -z "$EXISTING_TURN_USER" ]; then
+    EXISTING_TURN_USER="admin"
+fi
+if [ -z "$EXISTING_TURN_CRED" ]; then
+    EXISTING_TURN_CRED="admin123"
 fi
 
 cat <<EOF > "$BACKEND_DIR/.env"
@@ -101,6 +117,9 @@ REDIS_URL=redis://localhost:6379/0
 MEDIAMTX_API_URL=http://localhost:9997
 MEDIAMTX_WEBRTC_URL=http://localhost:8889
 UPSTREAM_CAMERA_API_URL=$EXISTING_UPSTREAM
+TURN_SERVER_URL=$EXISTING_TURN_URL
+TURN_SERVER_USERNAME=$EXISTING_TURN_USER
+TURN_SERVER_CREDENTIAL=$EXISTING_TURN_CRED
 EOF
 
 # 7. Create video-backend.service

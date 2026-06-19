@@ -28,7 +28,7 @@ hlsPartDuration: 200ms
 webrtc: yes
 webrtcAddress: 0.0.0.0:8889
 webrtcAdditionalHosts: [172.27.154.190, 172.22.1.151, localhost, 127.0.0.1]
-webrtcLocalUDPAddress: 0.0.0.0:8189
+webrtcLocalUDPAddress: ""
 webrtcLocalTCPAddress: 0.0.0.0:8189
 webrtcICEServers2:
   - url: "stun:stun.l.google.com:19302"
