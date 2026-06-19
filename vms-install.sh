@@ -366,11 +366,16 @@ elif [[ -d "$INSTALL_DIR/.git" ]]; then
     git fetch --all
     git reset --hard "origin/$BRANCH_NAME" || git reset --hard "$BRANCH_NAME"
     cd - >/dev/null
-else
-    print_warn "Cloning fresh repository to $INSTALL_DIR..."
-    rm -rf "$INSTALL_DIR"
-    git clone -b "$BRANCH_NAME" "$REPO_URL" "$INSTALL_DIR"
 fi
+
+# Ensure storage directories are restored/available after codebase deployment
+mkdir -p "$LOG_DIR"
+mkdir -p "$DATA_DIR"
+mkdir -p "$REC_DIR"
+chown -R root:root "$INSTALL_DIR"
+chmod -R 777 "$DATA_DIR"
+chmod -R 777 "$LOG_DIR"
+
 
 # Setup Virtual Environment
 if [[ ! -d "$VENV_DIR" ]]; then
@@ -513,7 +518,7 @@ if curl -s -f http://127.0.0.1:8000/health &>/dev/null; then
 fi
 
 # 2. Validate MediaMTX API
-if curl -s -f http://127.0.0.1:9997/v3/config/global &>/dev/null; then
+if curl -s -f http://127.0.0.1:9997/v3/config/paths/list &>/dev/null; then
     STATUS_MEDIAMTX="OK"
 fi
 
