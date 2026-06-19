@@ -192,7 +192,7 @@ hlsVariant: lowLatency
 hlsSegmentCount: 8
 hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
-hlsAllowOrigin: *
+hlsAllowOrigin: "*"
 
 pathDefaults:
   sourceProtocol: tcp
