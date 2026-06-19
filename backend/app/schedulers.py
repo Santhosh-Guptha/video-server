@@ -474,8 +474,14 @@ async def camera_archive_cleanup_loop():
     Background loop that deletes recording files and DB references older than the stream's configured archive days.
     """
     print("[cleanup] Starting camera archive cleanup loop...")
+    from .vms_policy import ENABLE_RETENTION, DEFAULT_RETENTION_DAYS
+
     while True:
         try:
+            if not ENABLE_RETENTION:
+                await asyncio.sleep(settings.cleanup_interval_seconds)
+                continue
+
             async for session in get_session():
                 # Query all camera streams
                 res = await session.execute(select(CameraStream).join(Camera))
@@ -490,12 +496,12 @@ async def camera_archive_cleanup_loop():
 
                     archive_days = raw.get("archiveDays")
                     if archive_days is None:
-                        continue
-
-                    try:
-                        archive_days = int(archive_days)
-                    except ValueError:
-                        continue
+                        archive_days = DEFAULT_RETENTION_DAYS
+                    else:
+                        try:
+                            archive_days = int(archive_days)
+                        except ValueError:
+                            archive_days = DEFAULT_RETENTION_DAYS
 
                     if archive_days <= 0:
                         continue
