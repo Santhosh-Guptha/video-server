@@ -19,7 +19,7 @@ def should_record(stream: CameraStream) -> bool:
       - RECORD_NORMAL  = True  → also records SUB profile
       - RECORD_MOBILE  = True  → also records MOBILE profile
     """
-    from .vms_policy import should_record_profile
+    from .config import should_record_profile
     return should_record_profile(stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type))
 
 

@@ -23,14 +23,14 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .camera_policy import (
+from .config import (
     CAMERA_PING_INTERVAL_SECONDS,
     CAMERA_PING_MAX_CONCURRENT,
     CAMERA_PING_TIMEOUT_SECONDS,
     EDGE_PUSH_CHECK_INTERVAL_SECONDS,
     EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS,
+    settings,
 )
-from .config import settings
 from .db import get_session
 from .models import Camera, CameraStream, ProfileType, StreamState
 from .redis_client import RedisManager

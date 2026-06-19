@@ -40,7 +40,7 @@ class MediaMTXRecordingProvider(RecordingProvider):
 
         Non-eligible streams are silently skipped (they remain available for live viewing).
         """
-        from .vms_policy import should_record_profile
+        from .config import should_record_profile
         from .models import ProfileType
         if profile_type is not None:
             profile_val = profile_type.value if hasattr(profile_type, 'value') else str(profile_type)

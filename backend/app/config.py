@@ -71,24 +71,120 @@ class Settings(BaseSettings):
 
     # Allow falling back to NORMAL recordings when HD recordings are unavailable.
     playback_allow_normal_fallback: bool = True
+    playback_allow_mobile_fallback: bool = False
+    playback_speeds: list[float] = [0.5, 1.0, 2.0, 4.0, 8.0]
 
     # ── WebRTC policy ──────────────────────────────────────────────────────────
     max_webrtc_sessions_per_camera: int = 100
     enable_h265_transcoding: bool = True
+    enable_hls_fallback: bool = True
+    webrtc_connection_timeout_seconds: int = 10
 
     # ── Camera health watchdog ─────────────────────────────────────────────────
     camera_ping_interval_seconds: int = 120
     camera_ping_timeout_seconds: int = 5
+    camera_ping_max_concurrent: int = 10
+    enable_rtsp_health_check: bool = True
 
     # ── Edge push policy ───────────────────────────────────────────────────────
     edge_push_heartbeat_timeout_seconds: int = 120
     edge_push_check_interval_seconds: int = 30
+    enable_edge_push: bool = True
+    edge_push_priority: bool = True
 
     # ── Storage retention policy ───────────────────────────────────────────────
     enable_retention: bool = True
     default_retention_days: int = 30
 
+    # ── Recording policy constants ─────────────────────────────────────────────
+    enable_recording: bool = True
+
+    # ── Playback timeline policy constants ─────────────────────────────────────
+    timeline_cache_seconds: int = 60
+    timeline_merge_threshold_seconds: int = 5
+    timeline_default_zoom: str = "24h"
+
+    # ── MediaMTX safety constants ──────────────────────────────────────────────
+    mediamtx_patch_only: bool = True
+    allow_delete_add_reconfiguration: bool = False
+
     class Config:
         env_file = ".env"
 
 settings = Settings()
+
+# ── Profile map ──────────────────────────────────────────────────────────────
+PROFILE_MAP = {
+    "HD": "MAIN",
+    "NORMAL": "SUB",
+    "MOBILE": "MOBILE",
+}
+
+# ── Dynamic policy helpers ───────────────────────────────────────────────────
+def resolve_live_profile(layout_size: int = 0) -> str:
+    if settings.enable_adaptive_profile and layout_size > 0:
+        profile_name = settings.focus_view_profile if layout_size == 1 else settings.grid_view_profile
+    else:
+        profile_name = settings.live_stream_profile
+    return PROFILE_MAP.get(profile_name.upper(), "SUB")
+
+def resolve_playback_profile() -> str:
+    return PROFILE_MAP.get(settings.playback_profile.upper(), "MAIN")
+
+def get_recording_profiles() -> list:
+    if settings.record_hd_only:
+        return ["MAIN"]
+    profiles = ["MAIN"]
+    if settings.record_normal:
+        profiles.append("SUB")
+    if settings.record_mobile:
+        profiles.append("MOBILE")
+    return profiles
+
+def should_record_profile(profile_type_value: str) -> bool:
+    return profile_type_value in get_recording_profiles()
+
+# ── UPPERCASE Compatibility Aliases for policy values ──────────────────────────
+STRICT_CAMERA_VALIDATION = settings.strict_camera_validation
+ALLOW_UNKNOWN_EDGE_DEVICES = settings.allow_unknown_edge_devices
+RECORD_HD_ONLY = settings.record_hd_only
+RECORD_NORMAL = settings.record_normal
+RECORD_MOBILE = settings.record_mobile
+LIVE_STREAM_PROFILE = settings.live_stream_profile
+ENABLE_ADAPTIVE_PROFILE = settings.enable_adaptive_profile
+FOCUS_VIEW_PROFILE = settings.focus_view_profile
+GRID_VIEW_PROFILE = settings.grid_view_profile
+MOBILE_VIEW_PROFILE = settings.mobile_view_profile
+PLAYBACK_PROFILE = settings.playback_profile
+PLAYBACK_ALLOW_NORMAL_FALLBACK = settings.playback_allow_normal_fallback
+PLAYBACK_ALLOW_MOBILE_FALLBACK = settings.playback_allow_mobile_fallback
+PLAYBACK_SPEEDS = settings.playback_speeds
+ENABLE_WEBRTC = settings.enable_webrtc
+ENABLE_HLS_FALLBACK = settings.enable_hls_fallback
+WEBRTC_CONNECTION_TIMEOUT_SECONDS = settings.webrtc_connection_timeout_seconds
+MAX_WEBRTC_SESSIONS_PER_CAMERA = settings.max_webrtc_sessions_per_camera
+ENABLE_H265_TRANSCODING = settings.enable_h265_transcoding
+TRANSCODER_VCODEC = settings.transcoder_vcodec
+TRANSCODER_PRESET = settings.transcoder_preset
+TRANSCODER_TUNE = settings.transcoder_tune
+TRANSCODER_IDLE_TIMEOUT_SECONDS = settings.transcoder_grace_period_seconds
+MAX_ACTIVE_TRANSCODERS = settings.max_active_transcoders
+SEGMENT_DURATION_SECONDS = settings.segment_time_seconds
+ENABLE_RECORDING = settings.enable_recording
+RECORDING_RECOVERY_INTERVAL_HOURS = settings.recovery_interval_seconds / 3600.0
+TIMELINE_CACHE_SECONDS = settings.timeline_cache_seconds
+TIMELINE_MERGE_THRESHOLD_SECONDS = settings.timeline_merge_threshold_seconds
+TIMELINE_DEFAULT_ZOOM = settings.timeline_default_zoom
+ENABLE_EDGE_PUSH = settings.enable_edge_push
+EDGE_PUSH_PRIORITY = settings.edge_push_priority
+EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS = settings.edge_push_heartbeat_timeout_seconds
+EDGE_PUSH_CHECK_INTERVAL_SECONDS = settings.edge_push_check_interval_seconds
+ENABLE_RTSP_HEALTH_CHECK = settings.enable_rtsp_health_check
+CAMERA_PING_INTERVAL_SECONDS = settings.camera_ping_interval_seconds
+CAMERA_PING_TIMEOUT_SECONDS = settings.camera_ping_timeout_seconds
+CAMERA_PING_MAX_CONCURRENT = settings.camera_ping_max_concurrent
+UPSTREAM_SYNC_INTERVAL_MINUTES = settings.upstream_sync_interval_minutes
+ENABLE_RETENTION = settings.enable_retention
+DEFAULT_RETENTION_DAYS = settings.default_retention_days
+MEDIAMTX_PATCH_ONLY = settings.mediamtx_patch_only
+ALLOW_DELETE_ADD_RECONFIGURATION = settings.allow_delete_add_reconfiguration

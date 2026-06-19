@@ -474,7 +474,7 @@ async def camera_archive_cleanup_loop():
     Background loop that deletes recording files and DB references older than the stream's configured archive days.
     """
     print("[cleanup] Starting camera archive cleanup loop...")
-    from .vms_policy import ENABLE_RETENTION, DEFAULT_RETENTION_DAYS
+    from .config import ENABLE_RETENTION, DEFAULT_RETENTION_DAYS
 
     while True:
         try:

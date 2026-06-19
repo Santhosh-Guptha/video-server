@@ -99,10 +99,10 @@ async def resolve_stream_by_identifier(
         
     # If multiple profiles exist, select the preferred profile according to the active policy
     if purpose == "playback":
-        from .vms_policy import resolve_playback_profile
+        from .config import resolve_playback_profile
         preferred_profile_type = resolve_playback_profile()  # Returns "MAIN", "SUB", or "MOBILE"
     else:
-        from .vms_policy import resolve_live_profile
+        from .config import resolve_live_profile
         preferred_profile_type = resolve_live_profile()  # Returns "MAIN", "SUB", or "MOBILE"
     
     # Try to find the stream matching the preferred profile type
@@ -112,7 +112,7 @@ async def resolve_stream_by_identifier(
             
     # Fallback logic
     if purpose == "playback":
-        from .vms_policy import PLAYBACK_ALLOW_NORMAL_FALLBACK
+        from .config import PLAYBACK_ALLOW_NORMAL_FALLBACK
         fallbacks = []
         if PLAYBACK_ALLOW_NORMAL_FALLBACK:
             fallbacks.append("SUB")
@@ -317,7 +317,7 @@ async def proxy_signaling_session(
         return Response(status_code=204)
 
     # 1. Enforce stream viewer limits (from vms_policy.MAX_WEBRTC_SESSIONS_PER_CAMERA)
-    from .vms_policy import MAX_WEBRTC_SESSIONS_PER_CAMERA
+    from .config import MAX_WEBRTC_SESSIONS_PER_CAMERA
     viewer_count = await RedisViewerTracker.get_viewer_count(stream_id)
     if viewer_count >= MAX_WEBRTC_SESSIONS_PER_CAMERA:
         raise HTTPException(

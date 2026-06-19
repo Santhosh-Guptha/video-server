@@ -54,7 +54,7 @@ def map_stream_profile(upstream_type: str) -> ProfileType:
 
 async def upstream_sync_loop():
     print("[upstream_sync] Starting periodic upstream camera sync watchdog loop...")
-    from .vms_policy import UPSTREAM_SYNC_INTERVAL_MINUTES
+    from .config import UPSTREAM_SYNC_INTERVAL_MINUTES
     while True:
         await asyncio.sleep(UPSTREAM_SYNC_INTERVAL_MINUTES * 60)
         try:
@@ -249,7 +249,7 @@ async def startup():
         asyncio.create_task(start_edge_receiver())
 
     # Print VMS policy summary on startup
-    from . import vms_policy as policy
+    from . import config as policy
     print("\n" + "="*70)
     print("  VMS POLICY ACTIVE CONFIGURATION")
     print("="*70)
@@ -282,7 +282,7 @@ async def get_policy():
     The UI must use this response to make all stream-selection and playback decisions.
     No stream routing logic should be hardcoded in the frontend.
     """
-    from . import vms_policy as p
+    from . import config as p
     return {
         "recording": {
             "record_hd_only":   p.RECORD_HD_ONLY,
@@ -362,7 +362,7 @@ async def get_stream_selection(
     Returns:
         { stream_id, profile_type, profile_name, hls_url, context }
     """
-    from . import vms_policy as p
+    from . import config as p
     from .models import Camera, CameraStream, ProfileType
 
     res = await session.execute(

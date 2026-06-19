@@ -333,7 +333,7 @@ class TranscoderManager:
         Codec, preset, and tune are read from vms_policy (TRANSCODER_VCODEC,
         TRANSCODER_PRESET, TRANSCODER_TUNE) so they can be changed in one place.
         """
-        from .vms_policy import TRANSCODER_VCODEC, TRANSCODER_PRESET, TRANSCODER_TUNE
+        from .config import TRANSCODER_VCODEC, TRANSCODER_PRESET, TRANSCODER_TUNE
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",
