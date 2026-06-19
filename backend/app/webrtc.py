@@ -11,12 +11,12 @@ from datetime import datetime
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import settings
 from .db import get_session
-from .models import WebRTCSession, StreamMetricHistory, CameraStream, StreamState
+from .models import WebRTCSession, StreamMetricHistory, CameraStream, StreamState, Camera
 from .redis_client import RedisManager
 from .redis_viewer_tracker import RedisViewerTracker
 from .session_manager import create_db_session, close_db_session
@@ -56,6 +56,61 @@ def _sync_http_request(url: str, method: str, content: bytes, headers: dict) -> 
 
 router = APIRouter(prefix="/api/webrtc", tags=["webrtc"])
 streams_router = APIRouter(prefix="/api/streams", tags=["streams"])
+
+async def resolve_stream_by_identifier(identifier: str, db_session: AsyncSession) -> Optional[CameraStream]:
+    """
+    Resolves a camera stream from a flexible identifier (exact stream_id,
+    case-insensitive stream_id, stream_id prefix, or camera name).
+    """
+    if not identifier:
+        return None
+        
+    # 1. Exact match on stream_id
+    stmt = select(CameraStream).where(CameraStream.stream_id == identifier)
+    res = await db_session.execute(stmt)
+    stream = res.scalar_one_or_none()
+    if stream:
+        return stream
+        
+    # 2. Case-insensitive match on stream_id
+    stmt = select(CameraStream).where(func.lower(CameraStream.stream_id) == identifier.lower())
+    res = await db_session.execute(stmt)
+    stream = res.scalar_one_or_none()
+    if stream:
+        return stream
+        
+    # 3. Check if the identifier matches a camera name (case-insensitive)
+    # or is a prefix of a stream_id.
+    # Let's get all streams that start with this identifier (e.g. IDENTIFIER_HD, IDENTIFIER_NORMAL)
+    # or belong to a camera named IDENTIFIER.
+    stmt = select(CameraStream).join(Camera).where(
+        (func.lower(CameraStream.stream_id).like(f"{identifier.lower()}%")) |
+        (func.lower(Camera.name) == identifier.lower())
+    )
+    res = await db_session.execute(stmt)
+    streams = res.scalars().all()
+    
+    if not streams:
+        return None
+        
+    # If multiple profiles exist, select the preferred profile according to the active live policy
+    from .vms_policy import resolve_live_profile
+    preferred_profile_type = resolve_live_profile()  # Returns "MAIN", "SUB", or "MOBILE"
+    
+    # Try to find the stream matching the preferred profile type
+    for s in streams:
+        if s.profile_type == preferred_profile_type:
+            return s
+            
+    # Fallback to any available stream (e.g. MAIN if SUB is preferred but unavailable)
+    for profile in ["SUB", "MAIN", "MOBILE"]:
+        for s in streams:
+            if s.profile_type == profile:
+                return s
+                
+    return streams[0]
+
+from typing import Optional
 
 class StatsPayload(BaseModel):
     session_id: str
@@ -281,25 +336,28 @@ async def proxy_signaling_session(
             )
 
     # 3. Detect H.265 stream codec and route through transcoder if needed
+    resolved_stream_id = stream_id
     mediamtx_stream_id = stream_id  # Default: proxy directly to the stream
     is_h265 = False
     try:
-        res = await db_session.execute(
-            select(CameraStream).where(CameraStream.stream_id == stream_id)
-        )
-        cam_stream = res.scalar_one_or_none()
-        if cam_stream and cam_stream.codec and cam_stream.codec.upper() == "H265":
-            is_h265 = True
-            try:
-                mediamtx_stream_id = await transcoder_manager.ensure_transcoder(
-                    stream_id, db_session
-                )
-                print(f"[webrtc] H.265 stream {stream_id} -> routing to {mediamtx_stream_id}")
-            except TranscoderCapacityError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=str(e)
-                )
+        cam_stream = await resolve_stream_by_identifier(stream_id, db_session)
+        if cam_stream:
+            resolved_stream_id = cam_stream.stream_id
+            mediamtx_stream_id = resolved_stream_id
+            if cam_stream.codec and cam_stream.codec.upper() == "H265":
+                is_h265 = True
+                try:
+                    mediamtx_stream_id = await transcoder_manager.ensure_transcoder(
+                        resolved_stream_id, db_session
+                    )
+                    print(f"[webrtc] H.265 stream {resolved_stream_id} -> routing to {mediamtx_stream_id}")
+                except TranscoderCapacityError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=str(e)
+                    )
+        else:
+            print(f"[webrtc] Warning: could not resolve stream by identifier: {stream_id}")
     except HTTPException:
         raise
     except Exception as e:
@@ -308,7 +366,7 @@ async def proxy_signaling_session(
     body_bytes = await request.body()
     url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}"
     
-    print(f"[webrtc] WHEP POST request for stream_id={stream_id} (proxied to {mediamtx_stream_id})")
+    print(f"[webrtc] WHEP POST request for stream_id={stream_id} (resolved to {resolved_stream_id}, proxied to {mediamtx_stream_id})")
     print(f"[webrtc] WHEP POST destination: {url}")
     print(f"[webrtc] WHEP POST offer SDP:\n{body_bytes.decode('utf-8', errors='replace')}")
     
@@ -328,7 +386,7 @@ async def proxy_signaling_session(
         traceback.print_exc()
         if is_h265:
             try:
-                await transcoder_manager.register_viewer_disconnect(stream_id, db_session)
+                await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
             except Exception as ex:
                 print(f"[webrtc] Error rolling back transcoder viewer count on connection failure: {ex}")
         raise HTTPException(status_code=502, detail=f"Failed to connect to media server signaling endpoint: {e}")
@@ -349,9 +407,9 @@ async def proxy_signaling_session(
             session_id = location.rstrip("/").split("/")[-1]
             client_ip = request.client.host if request.client else "unknown"
             
-            # Create DB session and register in viewer tracker under the ORIGINAL stream_id
-            await create_db_session(session_id, stream_id, protocol.upper(), client_ip, db_session, user_id)
-            await RedisViewerTracker.add_viewer_session(stream_id, session_id, {
+            # Create DB session and register in viewer tracker under the RESOLVED stream_id
+            await create_db_session(session_id, resolved_stream_id, protocol.upper(), client_ip, db_session, user_id)
+            await RedisViewerTracker.add_viewer_session(resolved_stream_id, session_id, {
                 "user_id": str(user_id) if user_id else None,
                 "client_ip": client_ip,
                 "protocol": protocol.upper(),
@@ -370,7 +428,7 @@ async def proxy_signaling_session(
         # Signaling failed in MediaMTX (e.g. 404/400). Roll back the transcoder viewer count.
         if is_h265:
             try:
-                await transcoder_manager.register_viewer_disconnect(stream_id, db_session)
+                await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
             except Exception as ex:
                 print(f"[webrtc] Error rolling back transcoder viewer count on non-2xx status: {ex}")
             
@@ -395,23 +453,24 @@ async def proxy_signaling_action(
         return Response(status_code=204)
 
     # Detect H.265 stream to route MediaMTX actions to the transcoded path
+    resolved_stream_id = stream_id
     mediamtx_stream_id = stream_id
     is_h265 = False
     try:
-        res = await db_session.execute(
-            select(CameraStream).where(CameraStream.stream_id == stream_id)
-        )
-        cam_stream = res.scalar_one_or_none()
-        if cam_stream and cam_stream.codec and cam_stream.codec.upper() == "H265":
-            is_h265 = True
-            mediamtx_stream_id = f"{stream_id}_h264"
+        cam_stream = await resolve_stream_by_identifier(stream_id, db_session)
+        if cam_stream:
+            resolved_stream_id = cam_stream.stream_id
+            mediamtx_stream_id = resolved_stream_id
+            if cam_stream.codec and cam_stream.codec.upper() == "H265":
+                is_h265 = True
+                mediamtx_stream_id = f"{resolved_stream_id}_h264"
     except Exception as e:
         print(f"[webrtc] Error checking stream codec for action on {stream_id}: {e}")
-
+ 
     body_bytes = await request.body()
     url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}/{session_id}"
     
-    print(f"[webrtc] WHEP {request.method} request for stream_id={stream_id}, session_id={session_id} (proxied to {mediamtx_stream_id})")
+    print(f"[webrtc] WHEP {request.method} request for stream_id={stream_id} (resolved to {resolved_stream_id}, session_id={session_id}, proxied to {mediamtx_stream_id})")
     print(f"[webrtc] WHEP {request.method} destination: {url}")
     if request.method == "PATCH":
         print(f"[webrtc] WHEP PATCH body:\n{body_bytes.decode('utf-8', errors='replace')}")
@@ -443,14 +502,14 @@ async def proxy_signaling_action(
     
     if request.method == "DELETE" and mtx_resp.status_code in (200, 204):
         await close_db_session(session_id, db_session)
-        await RedisViewerTracker.remove_viewer_session(stream_id, session_id)
+        await RedisViewerTracker.remove_viewer_session(resolved_stream_id, session_id)
         
         # Notify TranscoderManager of viewer disconnect for H.265 streams
         if is_h265:
             try:
-                await transcoder_manager.register_viewer_disconnect(stream_id, db_session)
+                await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
             except Exception as e:
-                print(f"[webrtc] Error notifying transcoder disconnect for {stream_id}: {e}")
+                print(f"[webrtc] Error notifying transcoder disconnect for {resolved_stream_id}: {e}")
         
     return Response(
         content=mtx_resp.content,
