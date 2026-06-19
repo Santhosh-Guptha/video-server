@@ -11,17 +11,17 @@ from .redis_client import RedisManager
 
 def should_record(stream: CameraStream) -> bool:
     """
-    Returns True if this stream should be recorded per the active policy.
+    Returns True if this stream should be recorded per the active vms_policy.
 
-    When RECORD_HD_ONLY is True (default): only MAIN profile streams get record=true.
-    NORMAL/SUB streams remain registered for live viewing but are NOT recorded.
-    This achieves ~50% storage savings with no impact on live viewing.
+    Delegates entirely to vms_policy.should_record_profile() so the recording
+    logic is always in sync with the centralized policy file. Supports:
+      - RECORD_HD_ONLY = True  → only MAIN profile recorded
+      - RECORD_NORMAL  = True  → also records SUB profile
+      - RECORD_MOBILE  = True  → also records MOBILE profile
     """
-    # Import here to avoid circular imports at module load time
-    from .camera_policy import RECORD_HD_ONLY
-    if RECORD_HD_ONLY:
-        return stream.profile_type == ProfileType.MAIN
-    return True  # Record all profiles when HD-only policy is disabled
+    from .vms_policy import should_record_profile
+    return should_record_profile(stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type))
+
 
 
 def double_escape_rtsp_url(url: str) -> str:

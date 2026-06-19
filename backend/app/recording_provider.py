@@ -32,15 +32,21 @@ class MediaMTXRecordingProvider(RecordingProvider):
     async def start_recording(self, stream_id: str, profile_type=None) -> None:
         """
         Enable recording for the specified stream_id.
-        
-        Respects RECORD_HD_ONLY policy: if active and profile_type is not MAIN,
-        recording is silently skipped (NORMAL streams are live-only).
+
+        Respects the active vms_policy recording configuration:
+          - RECORD_HD_ONLY=True  → only MAIN/HD profile streams are recorded
+          - RECORD_NORMAL=True   → also records SUB/NORMAL streams
+          - RECORD_MOBILE=True   → also records MOBILE streams
+
+        Non-eligible streams are silently skipped (they remain available for live viewing).
         """
-        from .camera_policy import RECORD_HD_ONLY
+        from .vms_policy import should_record_profile
         from .models import ProfileType
-        if RECORD_HD_ONLY and profile_type is not None and profile_type != ProfileType.MAIN:
-            print(f"[recording] HD-only policy: skipping recording for non-HD stream {stream_id} (profile={profile_type})")
-            return
+        if profile_type is not None:
+            profile_val = profile_type.value if hasattr(profile_type, 'value') else str(profile_type)
+            if not should_record_profile(profile_val):
+                print(f"[recording] Policy: skipping recording for stream {stream_id} (profile={profile_val} not in allowed recording profiles)")
+                return
 
         async with httpx.AsyncClient() as client:
             get_url = f"{self.api_url}/v3/config/paths/get/{stream_id}"

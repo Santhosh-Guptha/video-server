@@ -247,11 +247,166 @@ async def startup():
         from .edge_receiver import start_edge_receiver
         asyncio.create_task(start_edge_receiver())
 
+    # Print VMS policy summary on startup
+    from . import vms_policy as policy
+    print("\n" + "="*70)
+    print("  VMS POLICY ACTIVE CONFIGURATION")
+    print("="*70)
+    print(f"  Recording  : HD={policy.RECORD_HD_ONLY}, Normal={policy.RECORD_NORMAL}, Mobile={policy.RECORD_MOBILE}")
+    print(f"  Live Stream: profile={policy.LIVE_STREAM_PROFILE}, adaptive={policy.ENABLE_ADAPTIVE_PROFILE}")
+    if policy.ENABLE_ADAPTIVE_PROFILE:
+        print(f"    1x1 (focus) → {policy.FOCUS_VIEW_PROFILE}")
+        print(f"    2x2/3x3     → {policy.GRID_VIEW_PROFILE}")
+    print(f"  Playback   : profile={policy.PLAYBACK_PROFILE}, normal_fallback={policy.PLAYBACK_ALLOW_NORMAL_FALLBACK}")
+    print(f"  WebRTC     : enabled={policy.ENABLE_WEBRTC}, max_sessions={policy.MAX_WEBRTC_SESSIONS_PER_CAMERA}")
+    print(f"  H265       : transcoding={policy.ENABLE_H265_TRANSCODING}, vcodec={policy.TRANSCODER_VCODEC}, preset={policy.TRANSCODER_PRESET}")
+    print(f"  Retention  : enabled={policy.ENABLE_RETENTION}, days={policy.DEFAULT_RETENTION_DAYS}")
+    print(f"  Edge Push  : enabled={policy.ENABLE_EDGE_PUSH}, priority={policy.EDGE_PUSH_PRIORITY}")
+    print("="*70 + "\n")
+
 @app.on_event("shutdown")
 async def shutdown():
     """Clean up all active transcoders on server shutdown."""
     from .transcoder import transcoder_manager
     await transcoder_manager.stop_all()
+
+
+# ── Policy API ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/policy")
+async def get_policy():
+    """
+    Exposes the active VMS runtime policy to the frontend and any external client.
+
+    The UI must use this response to make all stream-selection and playback decisions.
+    No stream routing logic should be hardcoded in the frontend.
+    """
+    from . import vms_policy as p
+    return {
+        "recording": {
+            "record_hd_only":   p.RECORD_HD_ONLY,
+            "record_normal":    p.RECORD_NORMAL,
+            "record_mobile":    p.RECORD_MOBILE,
+            "enabled_profiles": p.get_recording_profiles(),
+            "segment_duration_seconds": p.SEGMENT_DURATION_SECONDS,
+            "enable_recording": p.ENABLE_RECORDING,
+            "retention_enabled": p.ENABLE_RETENTION,
+            "retention_days":   p.DEFAULT_RETENTION_DAYS,
+        },
+        "live": {
+            "profile":                p.LIVE_STREAM_PROFILE,
+            "adaptive_enabled":       p.ENABLE_ADAPTIVE_PROFILE,
+            "focus_view_profile":     p.FOCUS_VIEW_PROFILE,
+            "grid_view_profile":      p.GRID_VIEW_PROFILE,
+            "mobile_view_profile":    p.MOBILE_VIEW_PROFILE,
+            "resolved_1x1":           p.resolve_live_profile(layout_size=1),
+            "resolved_grid":          p.resolve_live_profile(layout_size=4),
+        },
+        "playback": {
+            "profile":                   p.PLAYBACK_PROFILE,
+            "resolved_profile_type":     p.resolve_playback_profile(),
+            "allow_normal_fallback":     p.PLAYBACK_ALLOW_NORMAL_FALLBACK,
+            "allow_mobile_fallback":     p.PLAYBACK_ALLOW_MOBILE_FALLBACK,
+            "speeds":                    p.PLAYBACK_SPEEDS,
+            "timeline_default_zoom":     p.TIMELINE_DEFAULT_ZOOM,
+            "timeline_merge_threshold":  p.TIMELINE_MERGE_THRESHOLD_SECONDS,
+        },
+        "webrtc": {
+            "enabled":              p.ENABLE_WEBRTC,
+            "hls_fallback":         p.ENABLE_HLS_FALLBACK,
+            "max_sessions":         p.MAX_WEBRTC_SESSIONS_PER_CAMERA,
+            "connection_timeout":   p.WEBRTC_CONNECTION_TIMEOUT_SECONDS,
+        },
+        "transcoding": {
+            "h265_enabled":      p.ENABLE_H265_TRANSCODING,
+            "vcodec":            p.TRANSCODER_VCODEC,
+            "preset":            p.TRANSCODER_PRESET,
+            "tune":              p.TRANSCODER_TUNE,
+            "idle_timeout":      p.TRANSCODER_IDLE_TIMEOUT_SECONDS,
+            "max_transcoders":   p.MAX_ACTIVE_TRANSCODERS,
+        },
+        "edge_push": {
+            "enabled":              p.ENABLE_EDGE_PUSH,
+            "priority":             p.EDGE_PUSH_PRIORITY,
+            "heartbeat_timeout":    p.EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS,
+            "check_interval":       p.EDGE_PUSH_CHECK_INTERVAL_SECONDS,
+        },
+        "watchdog": {
+            "rtsp_health_check":     p.ENABLE_RTSP_HEALTH_CHECK,
+            "ping_interval":         p.CAMERA_PING_INTERVAL_SECONDS,
+            "ping_timeout":          p.CAMERA_PING_TIMEOUT_SECONDS,
+        },
+        "validation": {
+            "strict_camera_validation": p.STRICT_CAMERA_VALIDATION,
+            "allow_unknown_edge":        p.ALLOW_UNKNOWN_EDGE_DEVICES,
+        },
+    }
+
+
+@app.get("/api/policy/stream-selection")
+async def get_stream_selection(
+    camera_id: str,
+    context: str = "live",
+    layout_size: int = 1,
+    session: Annotated[AsyncSession, Depends(get_session)] = None
+):
+    """
+    Resolves the correct stream_id to use for a given camera and context.
+
+    Args:
+        camera_id: The Camera.id (UUID) to resolve streams for.
+        context:   "live" | "playback" | "live-wall"
+        layout_size: Number of cameras in the current grid (for adaptive profile).
+
+    Returns:
+        { stream_id, profile_type, profile_name, hls_url, context }
+    """
+    from . import vms_policy as p
+    from .models import Camera, CameraStream, ProfileType
+
+    res = await session.execute(
+        select(Camera).where(Camera.id == camera_id).options(selectinload(Camera.streams))
+    )
+    camera = res.scalar_one_or_none()
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    if context == "playback":
+        target_profile = p.resolve_playback_profile()
+    else:
+        target_profile = p.resolve_live_profile(layout_size=layout_size)
+
+    # Find matching stream
+    target_stream = None
+    if camera.streams:
+        # Prefer exact profile match
+        target_stream = next((s for s in camera.streams if s.profile_type.value == target_profile), None)
+        # Fallback chain
+        if not target_stream and context == "playback" and p.PLAYBACK_ALLOW_NORMAL_FALLBACK:
+            target_stream = next((s for s in camera.streams if s.profile_type == ProfileType.SUB), None)
+        if not target_stream:
+            target_stream = next((s for s in camera.streams if s.profile_type == ProfileType.MAIN), None)
+        if not target_stream:
+            target_stream = camera.streams[0] if camera.streams else None
+
+    if not target_stream:
+        raise HTTPException(status_code=404, detail="No streams available for this camera")
+
+    profile_name = next(
+        (k for k, v in p.PROFILE_MAP.items() if v == target_stream.profile_type.value),
+        target_stream.profile_type.value
+    )
+
+    return {
+        "camera_id":    camera_id,
+        "stream_id":    target_stream.stream_id,
+        "profile_type": target_stream.profile_type.value,
+        "profile_name": profile_name,
+        "hls_url":      f"/api/streams/{target_stream.stream_id}/live/index.m3u8",
+        "context":      context,
+        "layout_size":  layout_size,
+    }
+
 
 class SegmentCompletePayload(BaseModel):
     stream_id: str

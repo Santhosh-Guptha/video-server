@@ -328,15 +328,20 @@ class TranscoderManager:
 
     @classmethod
     async def _spawn_ffmpeg(cls, stream_id: str, h264_path: str) -> asyncio.subprocess.Process:
-        """Spawns an FFmpeg process to transcode from the raw RTSP stream to H.264."""
+        """Spawns an FFmpeg process to transcode from the raw RTSP stream to H.264.
+        
+        Codec, preset, and tune are read from vms_policy (TRANSCODER_VCODEC,
+        TRANSCODER_PRESET, TRANSCODER_TUNE) so they can be changed in one place.
+        """
+        from .vms_policy import TRANSCODER_VCODEC, TRANSCODER_PRESET, TRANSCODER_TUNE
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",
             "-i", f"rtsp://127.0.0.1:8554/{stream_id}",
             "-an",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
+            "-c:v", TRANSCODER_VCODEC,
+            "-preset", TRANSCODER_PRESET,
+            "-tune", TRANSCODER_TUNE,
             "-profile:v", "baseline",
             "-pix_fmt", "yuv420p",
             "-g", "25",

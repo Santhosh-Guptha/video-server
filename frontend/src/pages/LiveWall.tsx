@@ -3,6 +3,7 @@ import type { Camera } from '../types'
 import { Player } from '../components/Player'
 import { ServerCrash, Users, Play, Square, Maximize2, Minimize2 } from 'lucide-react'
 import { startLive, stopLive } from '../lib/api'
+import { usePolicy, resolveLiveStreamId } from '../lib/usePolicy'
 
 type LiveWallProps = {
   statusTextSetter: (txt: string) => void
@@ -21,7 +22,10 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   const [streamViewers, setStreamViewers] = useState<Record<string, number>>({})
   const [wsConnected, setWsConnected] = useState(false)
   const [isFullView, setIsFullView] = useState(false)
-  
+
+  // Policy-driven stream resolution for live wall
+  const { policy } = usePolicy()
+
   // Use a ref to track connection state inside the polling interval without causing useEffect retriggers
   const wsConnectedRef = useRef(false)
 
@@ -129,48 +133,50 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
     }
   }, [])
 
-  // Filter to show ONLY live recording cameras
+  // Filter to show ONLY live recording cameras (check sub-stream status via policy)
   const liveCameras = useMemo(() => {
     return activeCameras.filter(cam => {
-      const activeStream = cam.streams[0]
-      if (!activeStream) return false
-      const status = streamStatuses[activeStream.stream_id] || activeStream.status || 'OFFLINE'
-      return onlineStreamIds.has(activeStream.stream_id) || status === 'ONLINE'
+      // Use policy to resolve which stream to check for status
+      const streamId = resolveLiveStreamId(cam, policy, 4) // wall = grid profile
+      const anyStream = cam.streams.find(s => s.stream_id === streamId) || cam.streams[0]
+      if (!anyStream) return false
+      const status = streamStatuses[anyStream.stream_id] || anyStream.status || 'OFFLINE'
+      return onlineStreamIds.has(anyStream.stream_id) || status === 'ONLINE'
     })
-  }, [activeCameras, onlineStreamIds, streamStatuses])
+  }, [activeCameras, onlineStreamIds, streamStatuses, policy])
 
-  // Start all cameras
+  // Start all cameras using policy-resolved stream
   const handleStartAll = async () => {
     statusTextSetter('Warming up all online cameras...')
     let success = 0
     for (const cam of activeCameras) {
-      const activeStream = cam.streams[0]
-      if (activeStream) {
+      const streamId = resolveLiveStreamId(cam, policy, 4)
+      if (streamId) {
         try {
-          await startLive(activeStream.stream_id)
-          setStreamStatuses(prev => ({ ...prev, [activeStream.stream_id]: 'CONNECTING' }))
+          await startLive(streamId)
+          setStreamStatuses(prev => ({ ...prev, [streamId]: 'CONNECTING' }))
           success++
         } catch (e) {
-          console.error(`Failed to start ${activeStream.stream_id}`, e)
+          console.error(`Failed to start ${streamId}`, e)
         }
       }
     }
     statusTextSetter(`Warmed up ${success}/${activeCameras.length} online cameras`)
   }
 
-  // Stop all cameras
+  // Stop all cameras using policy-resolved stream
   const handleStopAll = async () => {
     statusTextSetter('Stopping all online cameras...')
     let success = 0
     for (const cam of activeCameras) {
-      const activeStream = cam.streams[0]
-      if (activeStream) {
+      const streamId = resolveLiveStreamId(cam, policy, 4)
+      if (streamId) {
         try {
-          await stopLive(activeStream.stream_id)
-          setStreamStatuses(prev => ({ ...prev, [activeStream.stream_id]: 'OFFLINE' }))
+          await stopLive(streamId)
+          setStreamStatuses(prev => ({ ...prev, [streamId]: 'OFFLINE' }))
           success++
         } catch (e) {
-          console.error(`Failed to stop ${activeStream.stream_id}`, e)
+          console.error(`Failed to stop ${streamId}`, e)
         }
       }
     }
@@ -180,14 +186,15 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   const renderGrid = () => (
     <div className="liveWallGrid">
       {liveCameras.map((cam) => {
-        const activeStream = cam.streams[0]
-        if (!activeStream) return null
-        const viewers = streamViewers[activeStream.stream_id] || 0
+        const streamId = resolveLiveStreamId(cam, policy, 4) // wall always uses grid profile
+        const anyStream = cam.streams.find(s => s.stream_id === streamId) || cam.streams[0]
+        if (!anyStream) return null
+        const viewers = streamViewers[anyStream.stream_id] || 0
 
         return (
           <div key={cam.id} className="liveWallCell">
             <Player
-              src={`/api/streams/${encodeURIComponent(activeStream.stream_id)}/live/index.m3u8`}
+              src={`/api/streams/${encodeURIComponent(streamId)}/live/index.m3u8`}
               posterLabel=""
               minimal={true}
             />

@@ -8,27 +8,15 @@ import { Playback } from './pages/Playback'
 import { EdgePushPage } from './pages/EdgePush'
 import { LiveWall } from './pages/LiveWall'
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
+import { usePolicy, resolveLiveStreamId, resolvePlaybackStreamId } from './lib/usePolicy'
 import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2, ChevronDown, Search } from 'lucide-react'
-
-function getStreamIdForLayout(cam: Camera, layoutSize: number): string {
-  if (!cam.streams || cam.streams.length === 0) {
-    return cam.stream_id;
-  }
-  const targetProfile = layoutSize === 1 ? 'MAIN' : 'SUB';
-  const matchedStream = cam.streams.find(s => s.profile_type === targetProfile);
-  if (matchedStream) {
-    return matchedStream.stream_id;
-  }
-  const mainStream = cam.streams.find(s => s.profile_type === 'MAIN');
-  if (mainStream) return mainStream.stream_id;
-  const subStream = cam.streams.find(s => s.profile_type === 'SUB');
-  if (subStream) return subStream.stream_id;
-  return cam.stream_id;
-}
 
 export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selected, setSelected] = useState<Camera | undefined>()
+
+  // Fetch active VMS policy from backend — ALL stream routing decisions use this
+  const { policy } = usePolicy()
 
   const isEdgeCamera = (cam: Camera) => !cam.rtsp_url || cam.rtsp_url.trim() === "" || !cam.rtsp_url.trim().toLowerCase().startsWith("rtsp://");
 
@@ -480,7 +468,7 @@ export default function App() {
                         {selectedStreams.map((cam) => (
                           <Player
                             key={cam.stream_id}
-                            src={`/api/streams/${encodeURIComponent(getStreamIdForLayout(cam, layout))}/live/index.m3u8`}
+                            src={`/api/streams/${encodeURIComponent(resolveLiveStreamId(cam, policy, layout))}/live/index.m3u8`}
                             posterLabel={`${cam.name} — ${cam.stream_type}`}
                             isFocused={selected?.stream_id === cam.stream_id}
                             onFocus={() => setSelected(cam)}
@@ -521,7 +509,7 @@ export default function App() {
           {activeTab === 'playback' && (
             <div className="streamArea">
               <Playback
-                streamId={selected?.stream_id}
+                streamId={selected ? resolvePlaybackStreamId(selected, policy) : undefined}
                 cameraName={selected?.name}
                 cameras={standardCameras}
                 onSelectCamera={(cam) => setSelected(cam)}
@@ -543,7 +531,7 @@ export default function App() {
             {selectedStreams.map((cam) => (
               <Player
                 key={cam.stream_id}
-                src={`/api/streams/${encodeURIComponent(getStreamIdForLayout(cam, layout))}/live/index.m3u8`}
+                src={`/api/streams/${encodeURIComponent(resolveLiveStreamId(cam, policy, layout))}/live/index.m3u8`}
                 posterLabel={`${cam.name} — ${cam.stream_type}`}
                 isFocused={selected?.stream_id === cam.stream_id}
                 onFocus={() => setSelected(cam)}

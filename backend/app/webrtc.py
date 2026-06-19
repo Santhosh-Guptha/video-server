@@ -242,9 +242,10 @@ async def proxy_signaling_session(
     if request.method == "OPTIONS":
         return Response(status_code=204)
 
-    # 1. Enforce stream viewer limits
+    # 1. Enforce stream viewer limits (from vms_policy.MAX_WEBRTC_SESSIONS_PER_CAMERA)
+    from .vms_policy import MAX_WEBRTC_SESSIONS_PER_CAMERA
     viewer_count = await RedisViewerTracker.get_viewer_count(stream_id)
-    if viewer_count >= settings.max_subscribers_per_stream:
+    if viewer_count >= MAX_WEBRTC_SESSIONS_PER_CAMERA:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Stream viewer limit exceeded"

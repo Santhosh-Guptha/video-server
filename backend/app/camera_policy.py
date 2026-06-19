@@ -1,79 +1,115 @@
 """
-camera_policy.py — Centralized Runtime Policy Controller
+camera_policy.py — Backward-Compatibility Shim
 
-All tuneable parameters for VMS behavior live here.
-Operators can override most settings via environment variables in .env
-(values are read from `settings` in config.py where env-override is supported).
+All policy constants have been consolidated into vms_policy.py.
+This file re-exports them so existing imports in stream_manager, recording_provider,
+camera_watchdog, etc. continue to work without changes.
 
-To change any policy:
-    - Edit this file for code-level defaults
-    - Use .env for production overrides without code changes
-
-NEVER hardcode these constants in other modules. Always import from here.
+To change any policy, edit: backend/app/vms_policy.py
+To use env overrides, set the corresponding variable in: backend/.env
 """
 
-from .config import settings
+# Re-export everything from the centralized policy module
+from .vms_policy import (
+    # Source validation
+    STRICT_CAMERA_VALIDATION,
+    ALLOW_UNKNOWN_EDGE_DEVICES,
 
-# ── Source Validation ──────────────────────────────────────────────────────────
-# When True: only cameras synced from UPSTREAM_CAMERA_API_URL are allowed.
-# Rejects unknown edge pushes, uploads, playback, and RTSP pulls.
-# Read from settings so it can be toggled via .env (STRICT_CAMERA_VALIDATION=false).
-STRICT_CAMERA_VALIDATION: bool = settings.strict_camera_validation
+    # Recording
+    RECORD_HD_ONLY,
+    RECORD_NORMAL,
+    RECORD_MOBILE,
+    get_recording_profiles,
+    should_record_profile,
 
-# When True: unknown edge push devices are auto-registered (dev/test mode).
-# Only active when STRICT_CAMERA_VALIDATION=false.
-ALLOW_UNKNOWN_EDGE_DEVICES: bool = settings.allow_unknown_edge_devices
+    # Live streaming
+    LIVE_STREAM_PROFILE,
+    ENABLE_ADAPTIVE_PROFILE,
+    FOCUS_VIEW_PROFILE,
+    GRID_VIEW_PROFILE,
+    MOBILE_VIEW_PROFILE,
+    resolve_live_profile,
 
-# ── Recording ─────────────────────────────────────────────────────────────────
-# When True: only MAIN (HD) profile streams have record=true in MediaMTX.
-# NORMAL/SUB streams get record=false — they remain available for live viewing only.
-# Benefits: ~50% storage reduction, lower I/O, faster timeline generation.
-RECORD_HD_ONLY: bool = settings.record_hd_only
+    # Playback
+    PLAYBACK_PROFILE,
+    PLAYBACK_ALLOW_NORMAL_FALLBACK,
+    PLAYBACK_ALLOW_MOBILE_FALLBACK,
+    PLAYBACK_SPEEDS,
+    resolve_playback_profile,
 
-# ── Upstream Sync ──────────────────────────────────────────────────────────────
-# How often to re-sync camera list from upstream Video Server API (in hours).
-UPSTREAM_SYNC_INTERVAL_HOURS: int = 1
+    # WebRTC
+    ENABLE_WEBRTC,
+    ENABLE_HLS_FALLBACK,
+    WEBRTC_CONNECTION_TIMEOUT_SECONDS,
+    MAX_WEBRTC_SESSIONS_PER_CAMERA,
 
-# ── Camera Health Watchdog ─────────────────────────────────────────────────────
-# Interval between full health check cycles (seconds).
-# Cameras are pinged via ffprobe ONLY when MediaMTX reports ready=false.
-CAMERA_PING_INTERVAL_SECONDS: int = settings.camera_ping_interval_seconds
+    # H.265 transcoding
+    ENABLE_H265_TRANSCODING,
+    TRANSCODER_VCODEC,
+    TRANSCODER_PRESET,
+    TRANSCODER_TUNE,
+    TRANSCODER_IDLE_TIMEOUT_SECONDS,
+    MAX_ACTIVE_TRANSCODERS,
 
-# Timeout for each ffprobe RTSP reachability check (seconds).
-CAMERA_PING_TIMEOUT_SECONDS: int = settings.camera_ping_timeout_seconds
+    # Recording segments
+    SEGMENT_DURATION_SECONDS,
+    ENABLE_RECORDING,
+    RECORDING_RECOVERY_INTERVAL_HOURS,
 
-# Maximum number of concurrent ffprobe invocations per watchdog cycle.
-# Prevents overloading the network on large camera deployments.
-CAMERA_PING_MAX_CONCURRENT: int = 10
+    # Timeline
+    TIMELINE_CACHE_SECONDS,
+    TIMELINE_MERGE_THRESHOLD_SECONDS,
+    TIMELINE_DEFAULT_ZOOM,
 
-# ── Edge Push Priority ─────────────────────────────────────────────────────────
-# If a push heartbeat was seen within this window (seconds), the camera is
-# treated as EDGE_PUSH and RTSP health checks are skipped entirely.
-EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS: int = settings.edge_push_heartbeat_timeout_seconds
+    # Edge push
+    ENABLE_EDGE_PUSH,
+    EDGE_PUSH_PRIORITY,
+    EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS,
+    EDGE_PUSH_CHECK_INTERVAL_SECONDS,
 
-# How often the edge push watchdog checks for stale heartbeats (seconds).
-EDGE_PUSH_CHECK_INTERVAL_SECONDS: int = settings.edge_push_check_interval_seconds
+    # RTSP watchdog
+    ENABLE_RTSP_HEALTH_CHECK,
+    CAMERA_PING_INTERVAL_SECONDS,
+    CAMERA_PING_TIMEOUT_SECONDS,
+    CAMERA_PING_MAX_CONCURRENT,
 
-# ── MediaMTX Safety ───────────────────────────────────────────────────────────
-# When True: all MediaMTX path updates use GET → compare → PATCH.
-# Never use DELETE+ADD which triggers config reloads and kills WebRTC sessions.
-MEDIAMTX_PATCH_ONLY: bool = True
+    # Upstream sync
+    UPSTREAM_SYNC_INTERVAL_HOURS,
 
-# ── H.265 Transcoding ─────────────────────────────────────────────────────────
-# Enable on-demand H.265 → H.264 transcoding for browser WebRTC compatibility.
-ENABLE_H265_TRANSCODING: bool = True
+    # Storage retention
+    ENABLE_RETENTION,
+    DEFAULT_RETENTION_DAYS,
 
-# Idle timeout before stopping an unused transcoder process (seconds).
-TRANSCODER_IDLE_TIMEOUT_SECONDS: int = settings.transcoder_grace_period_seconds
+    # MediaMTX safety
+    MEDIAMTX_PATCH_ONLY,
+    ALLOW_DELETE_ADD_RECONFIGURATION,
 
-# ── WebRTC ────────────────────────────────────────────────────────────────────
-# Maximum concurrent WHEP sessions per camera stream.
-MAX_WEBRTC_SESSIONS_PER_CAMERA: int = 100
+    # Profile map
+    PROFILE_MAP,
+)
 
-# ── Playback ──────────────────────────────────────────────────────────────────
-# Redis cache TTL for timeline segment queries (seconds).
-TIMELINE_CACHE_SECONDS: int = 60
-
-# ── Recording Recovery ────────────────────────────────────────────────────────
-# How often the gap recovery loop runs (hours — derived from settings).
-RECORDING_RECOVERY_INTERVAL_HOURS: float = settings.recovery_interval_seconds / 3600
+__all__ = [
+    "STRICT_CAMERA_VALIDATION", "ALLOW_UNKNOWN_EDGE_DEVICES",
+    "RECORD_HD_ONLY", "RECORD_NORMAL", "RECORD_MOBILE",
+    "get_recording_profiles", "should_record_profile",
+    "LIVE_STREAM_PROFILE", "ENABLE_ADAPTIVE_PROFILE",
+    "FOCUS_VIEW_PROFILE", "GRID_VIEW_PROFILE", "MOBILE_VIEW_PROFILE",
+    "resolve_live_profile",
+    "PLAYBACK_PROFILE", "PLAYBACK_ALLOW_NORMAL_FALLBACK",
+    "PLAYBACK_ALLOW_MOBILE_FALLBACK", "PLAYBACK_SPEEDS",
+    "resolve_playback_profile",
+    "ENABLE_WEBRTC", "ENABLE_HLS_FALLBACK",
+    "WEBRTC_CONNECTION_TIMEOUT_SECONDS", "MAX_WEBRTC_SESSIONS_PER_CAMERA",
+    "ENABLE_H265_TRANSCODING", "TRANSCODER_VCODEC", "TRANSCODER_PRESET",
+    "TRANSCODER_TUNE", "TRANSCODER_IDLE_TIMEOUT_SECONDS", "MAX_ACTIVE_TRANSCODERS",
+    "SEGMENT_DURATION_SECONDS", "ENABLE_RECORDING", "RECORDING_RECOVERY_INTERVAL_HOURS",
+    "TIMELINE_CACHE_SECONDS", "TIMELINE_MERGE_THRESHOLD_SECONDS", "TIMELINE_DEFAULT_ZOOM",
+    "ENABLE_EDGE_PUSH", "EDGE_PUSH_PRIORITY",
+    "EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS", "EDGE_PUSH_CHECK_INTERVAL_SECONDS",
+    "ENABLE_RTSP_HEALTH_CHECK", "CAMERA_PING_INTERVAL_SECONDS",
+    "CAMERA_PING_TIMEOUT_SECONDS", "CAMERA_PING_MAX_CONCURRENT",
+    "UPSTREAM_SYNC_INTERVAL_HOURS",
+    "ENABLE_RETENTION", "DEFAULT_RETENTION_DAYS",
+    "MEDIAMTX_PATCH_ONLY", "ALLOW_DELETE_ADD_RECONFIGURATION",
+    "PROFILE_MAP",
+]
