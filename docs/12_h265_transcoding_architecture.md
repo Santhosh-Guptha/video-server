@@ -1,5 +1,6 @@
 # H.265 Transcoding Architecture Document
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-HTD-012  
+**Target Audience**: Media Engineers, Backend Engineers  
 **Owner**: Transcoding Architect  
 
 ---

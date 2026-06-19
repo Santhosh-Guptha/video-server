@@ -1,5 +1,6 @@
 # Support Team Operations Manual
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-SOM-026  
+**Target Audience**: L1/L2/L3 Customer Support Engineers  
 **Owner**: Support Lead  
 
 ---

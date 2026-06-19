@@ -1,5 +1,6 @@
 # Recording Architecture Document
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-RAD-008  
+**Target Audience**: Storage Engineers, Operations Leads  
 **Owner**: Storage Architect  
 
 ---

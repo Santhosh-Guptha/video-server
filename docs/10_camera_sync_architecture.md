@@ -1,5 +1,6 @@
 # Camera Sync Architecture Document
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-CSD-010  
+**Target Audience**: Integration Architects, Software Engineers  
 **Owner**: Integration Architect  
 
 ---

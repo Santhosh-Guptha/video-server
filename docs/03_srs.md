@@ -1,5 +1,6 @@
 # Software Requirements Specification (SRS)
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-SRS-003  
+**Target Audience**: Technical Architects, DevOps Engineers, QA Engineers  
 **Owner**: Software Architect  
 
 ---
@@ -23,5 +24,5 @@ The VMS backend is written in FastAPI, using SQLAlchemy for database operations,
 - **Latency**: WebRTC streaming latency must remain under 1.0 second.
 - **Reliability**: Crashed transcoder processes must recover within 15 seconds.
 - **Maintainability**: Unified single configuration source of truth (`config.py`).
-- **Security**: Token-based authentication and strict CORS headers.
+- **Security**: Token-based REST authorization.
 - **Auditability**: SQLite/Postgres logs for all session creations and terminations.

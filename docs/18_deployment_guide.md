@@ -1,5 +1,6 @@
 # Deployment Guide
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-DEP-018  
+**Target Audience**: Deployments, DevOps, Installers  
 **Owner**: DevOps Team  
 
 ---

@@ -1,5 +1,6 @@
 # Streaming Architecture Document
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-SAD-007  
+**Target Audience**: Streaming Specialists, Infrastructure Engineers  
 **Owner**: Streaming Media Architect  
 
 ---

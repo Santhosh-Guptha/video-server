@@ -1,5 +1,6 @@
 # Configuration Guide
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-CFG-016  
+**Target Audience**: Operations Teams, Installers  
 **Owner**: Deployments Team  
 
 ---

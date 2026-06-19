@@ -1,5 +1,6 @@
 # Environment Variables Reference
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-EVR-017  
+**Target Audience**: DevOps Engineers, SysAdmins  
 **Owner**: DevOps Team  
 
 ---

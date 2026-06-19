@@ -1,5 +1,6 @@
 # QA Test Strategy Document
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-QTS-023  
+**Target Audience**: QA Engineers, Testers, Tech Leads  
 **Owner**: QA Lead  
 
 ---

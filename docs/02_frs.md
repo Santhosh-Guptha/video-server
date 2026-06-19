@@ -1,22 +1,33 @@
 # Functional Requirements Specification (FRS)
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-FRS-002  
+**Target Audience**: Software Engineers, QA Leads, Tech Leads  
 **Owner**: Senior Functional Analyst  
 
 ---
 
-## 1. Camera Registry Sync
-- **Purpose**: Synchronize camera definitions from the upstream server.
-- **Workflow**: Scheduler calls upstream URL -> parses cameras JSON -> upserts rows -> reconfigures MediaMTX paths.
-- **Inputs**: Upstream URL, Timeout, Sync Interval.
-- **Outputs**: Synced cameras, logs, database updates.
+## 1. Camera Registry Synchronization
+- **Purpose**: Synchronize local camera configurations with the upstream system.
+- **Workflow**: 
+  1. Scheduler calls `/api/cameras/sync` dynamically.
+  2. Sync queries `UPSTREAM_CAMERA_API_URL`.
+  3. Returns camera array -> matches database -> upserts camera streams.
+  4. Updates path configurations in MediaMTX.
+- **Inputs**: Upstream URL, Sync Timeout, Interval Minutes.
+- **Outputs**: Synced cameras count, MediaMTX path definitions.
 - **Validations**: Check database unique constraint on camera ID.
 - **Business Rules**: If `STRICT_CAMERA_VALIDATION=true`, delete any local streams not present in upstream payload.
 - **Exception Handling**: Fall back to `backup_cameras.json` if upstream is unreachable.
 - **Acceptance Criteria**: Registry updates dynamically without service restart.
 
-## 2. WebRTC Live View
+## 2. WebRTC Live View (WHEP)
 - **Purpose**: Serve low-latency WebRTC streams to client browser players.
-- **Workflow**: Player sends WHEP POST (Offer) -> Backend validates and proxies to MediaMTX -> Returns SDP Answer.
+- **Workflow**:
+  1. Browser sends WHEP POST (SDP Offer) to `/api/streams/{stream_id}/live/whep`.
+  2. Backend validates active sessions and increments viewer counts in Redis.
+  3. Intercepts HEVC/H.265 codecs -> spawns FFmpeg H.264 transcoder if needed.
+  4. Proxies offer to MediaMTX -> receives SDP Answer.
+  5. Responds with SDP Answer (201 Created) and session Location header.
+  6. Trickle ICE candidates are negotiated via WHEP PATCH.
 - **Inputs**: SDP Offer, stream ID, user ID.
 - **Outputs**: SDP Answer, Location session ID, RTCPeerConnection active.
 - **Validations**: Check viewer limits per stream.

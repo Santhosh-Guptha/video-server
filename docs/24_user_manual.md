@@ -1,5 +1,6 @@
 # User Manual
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-UM-024  
+**Target Audience**: Operations staff, Security Guards  
 **Owner**: Product Owner / Customer Success  
 
 ---

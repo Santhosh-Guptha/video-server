@@ -1,5 +1,6 @@
 # Security Architecture Document
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-SAD-021  
+**Target Audience**: Security Officers, Network Engineers  
 **Owner**: Security Architect  
 
 ---

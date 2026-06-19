@@ -1,5 +1,6 @@
 # Frontend Architecture Document
-**Project**: Enterprise Video Management System (VMS)  
+**VMS Project Document ID**: VMS-FAD-006  
+**Target Audience**: UI Engineers, UX Designers  
 **Owner**: Senior Frontend Architect  
 
 ---
