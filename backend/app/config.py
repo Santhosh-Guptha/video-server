@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     # ── Storage retention policy ───────────────────────────────────────────────
     enable_retention: bool = True
     default_retention_days: int = 30
+    low_disk_space_threshold_gb: float = 5.0
+    target_free_space_gb: float = 10.0
 
     # ── Recording policy constants ─────────────────────────────────────────────
     enable_recording: bool = True

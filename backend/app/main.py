@@ -22,7 +22,7 @@ from urllib.parse import quote
 from .indexer import index_recordings
 from .config import settings
 from .db import engine, Base, get_session
-from .models import Camera, CameraStream, RecordingSegment, StreamState, ProfileType, EdgeConnection
+from .models import Camera, CameraStream, RecordingSegment, StreamState, ProfileType, EdgeConnection, StreamTranscoder
 from .schemas import CameraOut, CameraStreamOut, RecordingSegmentOut, SyncResponse
 from .upstream import fetch_upstream_cameras
 from .redis_client import RedisManager

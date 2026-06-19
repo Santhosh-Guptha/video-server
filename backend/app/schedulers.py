@@ -469,6 +469,68 @@ async def camera_gap_recovery_loop():
         await asyncio.sleep(settings.recovery_interval_seconds)
 
 
+async def check_and_evict_low_disk_space(session):
+    """
+    Checks free disk space and deletes the oldest recording segments
+    across all cameras/streams if free space drops below threshold.
+    """
+    import shutil
+    try:
+        recording_dir = Path(settings.recording_dir)
+        if not recording_dir.exists():
+            return
+        
+        usage = shutil.disk_usage(recording_dir)
+        free_gb = usage.free / (1024 ** 3)
+        
+        if free_gb >= settings.low_disk_space_threshold_gb:
+            return
+            
+        print(f"[cleanup] DISK SPACE CRITICALLY LOW: {free_gb:.2f} GB free (Threshold: {settings.low_disk_space_threshold_gb} GB). Starting emergency eviction...")
+        
+        # Keep deleting until we hit target_free_space_gb
+        while free_gb < settings.target_free_space_gb:
+            # Fetch the 50 oldest segments across ALL cameras
+            res = await session.execute(
+                select(RecordingSegment)
+                .order_by(RecordingSegment.start_ts.asc())
+                .limit(50)
+            )
+            old_segments = list(res.scalars().all())
+            
+            if not old_segments:
+                print("[cleanup] Emergency eviction: No more segments found to delete, stopping.")
+                break
+                
+            deleted_count = 0
+            for seg in old_segments:
+                file_path = Path(seg.file_path)
+                if not file_path.is_absolute():
+                    file_path = recording_dir / seg.file_path
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                    deleted_count += 1
+                except Exception:
+                    pass
+                
+                await session.delete(seg)
+                
+            await session.commit()
+            print(f"[cleanup] Emergency eviction deleted {deleted_count} oldest segments.")
+            
+            # Re-check space
+            usage = shutil.disk_usage(recording_dir)
+            free_gb = usage.free / (1024 ** 3)
+            print(f"[cleanup] Free space now: {free_gb:.2f} GB (Target: {settings.target_free_space_gb} GB)")
+            
+            # Short sleep to prevent CPU spin
+            await asyncio.sleep(0.1)
+            
+    except Exception as e:
+        print(f"[cleanup] Error during emergency disk eviction: {e}")
+
+
 async def camera_archive_cleanup_loop():
     """
     Background loop that deletes recording files and DB references older than the stream's configured archive days.
@@ -483,6 +545,9 @@ async def camera_archive_cleanup_loop():
                 continue
 
             async for session in get_session():
+                # Run emergency low disk space eviction first
+                await check_and_evict_low_disk_space(session)
+
                 # Query all camera streams
                 res = await session.execute(select(CameraStream).join(Camera))
                 streams = list(res.scalars().all())
