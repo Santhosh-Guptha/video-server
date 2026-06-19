@@ -474,6 +474,8 @@ async def check_and_evict_low_disk_space(session):
     Checks free disk space and deletes the oldest recording segments
     across all cameras/streams if free space drops below threshold.
     """
+    if not settings.enable_low_disk_eviction:
+        return
     import shutil
     try:
         recording_dir = Path(settings.recording_dir)
