@@ -216,15 +216,22 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     
     if (match) {
       const offset = ts - match.start_ts
-      pendingSeekOffset.current = offset
-      setCurrentSegment(match)
-      setCurrentAbsoluteTs(ts)
-      setVideoSrc(`/api/recordings/file?path=${encodeURIComponent(match.file_path)}`)
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.load()
-        }
-      }, 50)
+      
+      // If we are already playing this segment, just seek directly without reloading!
+      if (currentSegment && currentSegment.file_path === match.file_path && videoRef.current) {
+        videoRef.current.currentTime = offset
+        setCurrentAbsoluteTs(ts)
+      } else {
+        pendingSeekOffset.current = offset
+        setCurrentSegment(match)
+        setCurrentAbsoluteTs(ts)
+        setVideoSrc(`/api/recordings/file?path=${encodeURIComponent(match.file_path)}`)
+        setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.load()
+          }
+        }, 50)
+      }
     } else {
       // Find the next closest segment after this timestamp
       const nextSeg = segList
@@ -261,6 +268,13 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
   const handleTimeUpdate = () => {
     const video = videoRef.current
     if (!video || !currentSegment || isDragging) return
+    
+    // Prevent race condition: check if the video element has loaded the current segment's source
+    const expectedPath = encodeURIComponent(currentSegment.file_path)
+    if (!video.src.includes(expectedPath)) {
+      return
+    }
+    
     const currentAbs = currentSegment.start_ts + video.currentTime
     setCurrentAbsoluteTs(currentAbs)
   }
