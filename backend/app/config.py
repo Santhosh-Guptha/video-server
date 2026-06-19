@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     upstream_camera_api_url: str = ""
     upstream_timeout_seconds: float = 10.0
+    upstream_sync_interval_minutes: int = 5
     ffmpeg_path: str = "ffmpeg"
     recording_dir: str = "./data/recordings"
     hls_dir: str = "./data/hls"

@@ -211,8 +211,8 @@ CAMERA_PING_MAX_CONCURRENT: int = 10
 
 # ── Upstream Camera Sync Policy ────────────────────────────────────────────────
 
-# How often to re-sync camera list from the upstream Video Server API (hours).
-UPSTREAM_SYNC_INTERVAL_HOURS: int = 1
+# How often to re-sync camera list from the upstream Video Server API (minutes).
+UPSTREAM_SYNC_INTERVAL_MINUTES: int = settings.upstream_sync_interval_minutes
 
 # ── Storage Retention Policy ───────────────────────────────────────────────────
 

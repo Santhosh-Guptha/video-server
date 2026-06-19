@@ -54,8 +54,9 @@ def map_stream_profile(upstream_type: str) -> ProfileType:
 
 async def upstream_sync_loop():
     print("[upstream_sync] Starting periodic upstream camera sync watchdog loop...")
+    from .vms_policy import UPSTREAM_SYNC_INTERVAL_MINUTES
     while True:
-        await asyncio.sleep(3600) # 1 hour
+        await asyncio.sleep(UPSTREAM_SYNC_INTERVAL_MINUTES * 60)
         try:
             print("[upstream_sync] Running periodic camera synchronization...")
             async for session in get_session():
@@ -573,6 +574,12 @@ async def download_recording(
     if start_ts >= end_ts:
         raise HTTPException(400, "start_time must be before end_time")
         
+    # Resolve stream_id
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
+
     # 2. Query database for segments overlapping with this range
     stmt = (
         select(RecordingSegment)
@@ -843,12 +850,8 @@ async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_sessi
 @app.get("/api/cameras/{stream_id}", response_model=CameraOut)
 async def get_camera(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
     # Retrieve the parent Camera for the requested stream ID
-    res = await session.execute(
-        select(CameraStream)
-        .where(CameraStream.stream_id == stream_id)
-        .options(selectinload(CameraStream.camera))
-    )
-    stream = res.scalar_one_or_none()
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
 
@@ -861,43 +864,37 @@ async def get_camera(stream_id: str, session: Annotated[AsyncSession, Depends(ge
 
 @app.post("/api/cameras/{stream_id}/live/start")
 async def start_live(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
-    res = await session.execute(
-        select(CameraStream).where(CameraStream.stream_id == stream_id)
-    )
-    stream = res.scalar_one_or_none()
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
 
     await stream_manager.add_stream(session, stream)
     return {
-        "stream_id": stream_id,
+        "stream_id": stream.stream_id,
         "status": "started",
-        "hls": f"/api/streams/{stream_id}/live/index.m3u8"
+        "hls": f"/api/streams/{stream.stream_id}/live/index.m3u8"
     }
 
 @app.post("/api/cameras/{stream_id}/live/stop")
 async def stop_live(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
-    res = await session.execute(
-        select(CameraStream).where(CameraStream.stream_id == stream_id)
-    )
-    stream = res.scalar_one_or_none()
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
 
     await stream_manager.remove_stream(session, stream)
-    return {"stream_id": stream_id, "status": "stopped"}
+    return {"stream_id": stream.stream_id, "status": "stopped"}
 
 @app.post("/api/cameras/{stream_id}/live/restart")
 async def restart_live(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
-    res = await session.execute(
-        select(CameraStream).where(CameraStream.stream_id == stream_id)
-    )
-    stream = res.scalar_one_or_none()
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
 
     await stream_manager.restart_stream(session, stream)
-    return {"stream_id": stream_id, "status": "restarted"}
+    return {"stream_id": stream.stream_id, "status": "restarted"}
 
 # ----------------------------------------------------
 # MediaMTX HLS Reverse Proxy Endpoints
@@ -909,15 +906,16 @@ async def hls_playlist(
 ):
     target_stream_id = stream_id
     try:
-        res = await session.execute(
-            select(CameraStream).where(CameraStream.stream_id == stream_id)
-        )
-        stream = res.scalar_one_or_none()
-        if stream and stream.codec and stream.codec.upper() == "H265":
-            from .transcoder import transcoder_manager
-            target_stream_id = await transcoder_manager.ensure_transcoder(
-                stream_id, session, increment_viewer=False
-            )
+        from .webrtc import resolve_stream_by_identifier
+        stream = await resolve_stream_by_identifier(stream_id, session)
+        if stream:
+            stream_id = stream.stream_id
+            target_stream_id = stream_id
+            if stream.codec and stream.codec.upper() == "H265":
+                from .transcoder import transcoder_manager
+                target_stream_id = await transcoder_manager.ensure_transcoder(
+                    stream_id, session, increment_viewer=False
+                )
     except Exception as e:
         print(f"[main] Error ensuring transcoder for H.265 HLS stream {stream_id}: {e}")
 
@@ -946,12 +944,13 @@ async def hls_segment(
 ):
     target_stream_id = stream_id
     try:
-        res = await session.execute(
-            select(CameraStream).where(CameraStream.stream_id == stream_id)
-        )
-        stream = res.scalar_one_or_none()
-        if stream and stream.codec and stream.codec.upper() == "H265":
-            target_stream_id = f"{stream_id}_h264"
+        from .webrtc import resolve_stream_by_identifier
+        stream = await resolve_stream_by_identifier(stream_id, session)
+        if stream:
+            stream_id = stream.stream_id
+            target_stream_id = stream_id
+            if stream.codec and stream.codec.upper() == "H265":
+                target_stream_id = f"{stream_id}_h264"
     except Exception as e:
         print(f"[main] Error checking codec for HLS segment {stream_id}: {e}")
 
@@ -980,6 +979,11 @@ async def hls_segment(
 # ----------------------------------------------------
 @app.get("/api/playback/{stream_id}", response_model=list[RecordingSegmentOut])
 async def playback(stream_id: str, start_ts: float, end_ts: float, session: Annotated[AsyncSession, Depends(get_session)]):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
+
     res = await session.execute(
         select(RecordingSegment)
         .where(RecordingSegment.stream_id == stream_id)
@@ -1015,6 +1019,11 @@ async def playback(stream_id: str, start_ts: float, end_ts: float, session: Anno
 
 @app.get("/api/cameras/{stream_id}/recordings")
 async def list_recordings(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
+
     res = await session.execute(
         select(RecordingSegment)
         .where(RecordingSegment.stream_id == stream_id)
@@ -1030,8 +1039,8 @@ async def list_recordings(stream_id: str, session: Annotated[AsyncSession, Depen
         .options(selectinload(CameraStream.camera))
         .where(CameraStream.stream_id == stream_id)
     )
-    stream = stream_res.scalar_one_or_none()
-    cam_name = stream.camera.name if stream and stream.camera else stream_id
+    stream_obj = stream_res.scalar_one_or_none()
+    cam_name = stream_obj.camera.name if stream_obj and stream_obj.camera else stream_id
 
     return [
         {
@@ -1093,6 +1102,11 @@ async def ws_status(ws: WebSocket):
 
 @app.get("/api/playback/{stream_id}/available-dates")
 async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
+
     res = await session.execute(
         select(RecordingSegment.start_ts)
         .where(RecordingSegment.stream_id == stream_id)
@@ -1112,6 +1126,10 @@ async def get_playback_timeline(
     zoom_level: str = "24h",
     session: Annotated[AsyncSession, Depends(get_session)] = None
 ):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
     try:
         timeline = await PlaybackTimelineService.get_daily_timeline(session, stream_id, date)
         return timeline
@@ -1124,6 +1142,10 @@ async def get_playback_gaps(
     date: str,
     session: Annotated[AsyncSession, Depends(get_session)] = None
 ):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
     try:
         timeline = await PlaybackTimelineService.get_daily_timeline(session, stream_id, date)
         return timeline["gaps"]
@@ -1136,6 +1158,11 @@ async def playback_summary(
     date: str = None,
     session: Annotated[AsyncSession, Depends(get_session)] = None
 ):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
+
     if date:
         try:
             timeline = await PlaybackTimelineService.get_daily_timeline(session, stream_id, date)
@@ -1175,6 +1202,11 @@ async def stream_playback(
     end_ts: float,
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
+    if stream:
+        stream_id = stream.stream_id
+
     res = await session.execute(
         select(RecordingSegment)
         .where(RecordingSegment.stream_id == stream_id)

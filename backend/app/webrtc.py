@@ -57,7 +57,11 @@ def _sync_http_request(url: str, method: str, content: bytes, headers: dict) -> 
 router = APIRouter(prefix="/api/webrtc", tags=["webrtc"])
 streams_router = APIRouter(prefix="/api/streams", tags=["streams"])
 
-async def resolve_stream_by_identifier(identifier: str, db_session: AsyncSession) -> Optional[CameraStream]:
+async def resolve_stream_by_identifier(
+    identifier: str,
+    db_session: AsyncSession,
+    purpose: str = "live"
+) -> Optional[CameraStream]:
     """
     Resolves a camera stream from a flexible identifier (exact stream_id,
     case-insensitive stream_id, stream_id prefix, or camera name).
@@ -93,20 +97,35 @@ async def resolve_stream_by_identifier(identifier: str, db_session: AsyncSession
     if not streams:
         return None
         
-    # If multiple profiles exist, select the preferred profile according to the active live policy
-    from .vms_policy import resolve_live_profile
-    preferred_profile_type = resolve_live_profile()  # Returns "MAIN", "SUB", or "MOBILE"
+    # If multiple profiles exist, select the preferred profile according to the active policy
+    if purpose == "playback":
+        from .vms_policy import resolve_playback_profile
+        preferred_profile_type = resolve_playback_profile()  # Returns "MAIN", "SUB", or "MOBILE"
+    else:
+        from .vms_policy import resolve_live_profile
+        preferred_profile_type = resolve_live_profile()  # Returns "MAIN", "SUB", or "MOBILE"
     
     # Try to find the stream matching the preferred profile type
     for s in streams:
         if s.profile_type == preferred_profile_type:
             return s
             
-    # Fallback to any available stream (e.g. MAIN if SUB is preferred but unavailable)
-    for profile in ["SUB", "MAIN", "MOBILE"]:
-        for s in streams:
-            if s.profile_type == profile:
-                return s
+    # Fallback logic
+    if purpose == "playback":
+        from .vms_policy import PLAYBACK_ALLOW_NORMAL_FALLBACK
+        fallbacks = []
+        if PLAYBACK_ALLOW_NORMAL_FALLBACK:
+            fallbacks.append("SUB")
+        fallbacks.extend(["MAIN", "SUB", "MOBILE"])
+        for profile in fallbacks:
+            for s in streams:
+                if s.profile_type == profile:
+                    return s
+    else:
+        for profile in ["SUB", "MAIN", "MOBILE"]:
+            for s in streams:
+                if s.profile_type == profile:
+                    return s
                 
     return streams[0]
 
