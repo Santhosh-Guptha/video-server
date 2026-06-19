@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     scheduler_interval_seconds: int = 10
     recovery_interval_seconds: int = 300
     cleanup_interval_seconds: int = 600
+    indexer_interval_seconds: int = 600
+
     recovery_rtsp_template: str = "{rtsp_url}?starttime={start_iso}&endtime={end_iso}"
 
     edge_receiver_host: str = "0.0.0.0"
@@ -186,5 +188,7 @@ CAMERA_PING_MAX_CONCURRENT = settings.camera_ping_max_concurrent
 UPSTREAM_SYNC_INTERVAL_MINUTES = settings.upstream_sync_interval_minutes
 ENABLE_RETENTION = settings.enable_retention
 DEFAULT_RETENTION_DAYS = settings.default_retention_days
+INDEXER_INTERVAL_SECONDS = settings.indexer_interval_seconds
 MEDIAMTX_PATCH_ONLY = settings.mediamtx_patch_only
 ALLOW_DELETE_ADD_RECONFIGURATION = settings.allow_delete_add_reconfiguration
+

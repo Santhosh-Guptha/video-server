@@ -293,6 +293,8 @@ async def get_policy():
             "enable_recording": p.ENABLE_RECORDING,
             "retention_enabled": p.ENABLE_RETENTION,
             "retention_days":   p.DEFAULT_RETENTION_DAYS,
+            "indexer_interval_seconds": p.INDEXER_INTERVAL_SECONDS,
+
         },
         "live": {
             "profile":                p.LIVE_STREAM_PROFILE,
@@ -527,12 +529,13 @@ async def recording_recovery_loop():
         print("[indexer] Initial recovery scanner error:", e)
 
     while True:
-        await asyncio.sleep(43200) # 12 hours
+        await asyncio.sleep(settings.indexer_interval_seconds)
         async for session in get_session():
             try:
                 await index_recordings(session, settings.recording_dir)
             except Exception as e:
                 print("[indexer] Recovery scanner loop error:", e)
+
 
 @app.get("/api/recordings/file")
 async def recording_file(path: str):
