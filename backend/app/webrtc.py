@@ -306,6 +306,10 @@ async def proxy_signaling_session(
     body_bytes = await request.body()
     url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}"
     
+    print(f"[webrtc] WHEP POST request for stream_id={stream_id} (proxied to {mediamtx_stream_id})")
+    print(f"[webrtc] WHEP POST destination: {url}")
+    print(f"[webrtc] WHEP POST offer SDP:\n{body_bytes.decode('utf-8', errors='replace')}")
+    
     mtx_resp = None
     try:
         headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
@@ -326,6 +330,10 @@ async def proxy_signaling_session(
             except Exception as ex:
                 print(f"[webrtc] Error rolling back transcoder viewer count on connection failure: {ex}")
         raise HTTPException(status_code=502, detail=f"Failed to connect to media server signaling endpoint: {e}")
+            
+    print(f"[webrtc] WHEP POST response status: {mtx_resp.status_code}")
+    print(f"[webrtc] WHEP POST response headers: {mtx_resp.headers}")
+    print(f"[webrtc] WHEP POST response body:\n{mtx_resp.content.decode('utf-8', errors='replace')}")
             
     for k, v in mtx_resp.headers.items():
         if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection"):
@@ -355,6 +363,7 @@ async def proxy_signaling_session(
                 response.headers["Location"] = f"/api/webrtc/play/{stream_id}/{session_id}"
             else:
                 response.headers["Location"] = f"/api/streams/{stream_id}/live/{protocol}/{session_id}"
+            print(f"[webrtc] WHEP POST session created. Rewrote Location header to: {response.headers.get('Location')}")
     else:
         # Signaling failed in MediaMTX (e.g. 404/400). Roll back the transcoder viewer count.
         if is_h265:
@@ -400,6 +409,11 @@ async def proxy_signaling_action(
     body_bytes = await request.body()
     url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}/{session_id}"
     
+    print(f"[webrtc] WHEP {request.method} request for stream_id={stream_id}, session_id={session_id} (proxied to {mediamtx_stream_id})")
+    print(f"[webrtc] WHEP {request.method} destination: {url}")
+    if request.method == "PATCH":
+        print(f"[webrtc] WHEP PATCH body:\n{body_bytes.decode('utf-8', errors='replace')}")
+        
     try:
         headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
         mtx_resp = await asyncio.to_thread(
@@ -414,6 +428,10 @@ async def proxy_signaling_action(
         print(f"[webrtc] Action proxy to MediaMTX failed: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Failed to connect to media server session endpoint: {e}")
+            
+    print(f"[webrtc] WHEP {request.method} response status: {mtx_resp.status_code}")
+    print(f"[webrtc] WHEP {request.method} response headers: {mtx_resp.headers}")
+    print(f"[webrtc] WHEP {request.method} response body:\n{mtx_resp.content.decode('utf-8', errors='replace')}")
             
     for k, v in mtx_resp.headers.items():
         if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection"):
