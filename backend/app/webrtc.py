@@ -8,7 +8,7 @@ import asyncio
 import urllib.request
 import urllib.error
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select, update, func
@@ -109,8 +109,6 @@ async def resolve_stream_by_identifier(identifier: str, db_session: AsyncSession
                 return s
                 
     return streams[0]
-
-from typing import Optional
 
 class StatsPayload(BaseModel):
     session_id: str
