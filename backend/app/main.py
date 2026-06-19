@@ -537,6 +537,65 @@ async def recording_recovery_loop():
                 print("[indexer] Recovery scanner loop error:", e)
 
 
+@app.get("/api/recordings/recovered-stats")
+async def get_recovered_stats(
+    session: Annotated[AsyncSession, Depends(get_session)] = None
+):
+    from sqlalchemy import select, func
+    
+    # We query all segments where file_path contains '_recovered'
+    stmt = select(
+        RecordingSegment.stream_id,
+        func.count(RecordingSegment.id).label("count"),
+        func.sum(RecordingSegment.end_ts - RecordingSegment.start_ts).label("duration")
+    ).where(RecordingSegment.file_path.like("%_recovered%")).group_by(RecordingSegment.stream_id)
+    
+    res = await session.execute(stmt)
+    rows = res.all()
+    
+    by_stream = {}
+    total_count = 0
+    total_duration = 0.0
+    
+    for row in rows:
+        stream_id, count, duration = row
+        duration = float(duration or 0)
+        by_stream[stream_id] = {
+            "count": count,
+            "duration": duration
+        }
+        total_count += count
+        total_duration += duration
+        
+    # Also query the 10 most recent recovered files
+    recent_stmt = select(RecordingSegment).where(
+        RecordingSegment.file_path.like("%_recovered%")
+    ).order_by(RecordingSegment.created_at.desc()).limit(10)
+    
+    recent_res = await session.execute(recent_stmt)
+    recent_segs = recent_res.scalars().all()
+    
+    recent_list = []
+    for s in recent_segs:
+        recent_list.append({
+            "id": s.id,
+            "stream_id": s.stream_id,
+            "file_path": s.file_path,
+            "filename": s.file_path.split("/")[-1].split("\\")[-1],
+            "start_ts": s.start_ts,
+            "end_ts": s.end_ts,
+            "duration": s.end_ts - s.start_ts,
+            "created_at": s.created_at.isoformat() if s.created_at else None
+        })
+        
+    return {
+        "total_count": total_count,
+        "total_duration": total_duration,
+        "by_stream": by_stream,
+        "recent": recent_list
+    }
+
+
 @app.get("/api/recordings/file")
 async def recording_file(path: str):
     p = Path(path)

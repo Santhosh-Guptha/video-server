@@ -1,3 +1,4 @@
+import React, { useState, useEffect } from "react";
 import {
   Camera,
   Search,
@@ -37,6 +38,15 @@ const codecLabel = (codec?: string | null) => {
   return codec;
 };
 
+const formatDuration = (sec: number) => {
+  const hrs = Math.floor(sec / 3600);
+  const mins = Math.floor((sec % 3600) / 60);
+  if (hrs > 0) {
+    return `${hrs}h ${mins}m`;
+  }
+  return `${mins}m ${Math.round(sec % 60)}s`;
+};
+
 export function Dashboard({
   cameras,
   query,
@@ -45,6 +55,32 @@ export function Dashboard({
   focusedStreamId,
   onSelect,
 }: DashboardProps) {
+  const [recoveredStats, setRecoveredStats] = useState<{
+    total_count: number;
+    total_duration: number;
+    by_stream: Record<string, { count: number; duration: number }>;
+    recent: any[];
+  }>({
+    total_count: 0,
+    total_duration: 0,
+    by_stream: {},
+    recent: []
+  });
+
+  useEffect(() => {
+    async function loadRecoveredStats() {
+      try {
+        const res = await fetch("/api/recordings/recovered-stats");
+        if (res.ok) {
+          const data = await res.json();
+          setRecoveredStats(data);
+        }
+      } catch (e) {
+        console.error("Failed to load recovered stats", e);
+      }
+    }
+    loadRecoveredStats();
+  }, []);
   const filtered = cameras.filter((c) => {
     const q = query.toLowerCase();
 
@@ -148,7 +184,7 @@ export function Dashboard({
       <div className="streamDashboardPanel" style={{ display: 'flex', gap: '20px', margin: '20px 0', background: 'rgba(30, 41, 59, 0.5)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
         <div style={{ flex: 1 }}>
           <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#94a3b8' }}>Ingestion Pipe Statistics</h4>
-          <div style={{ display: 'flex', gap: '30px' }}>
+          <div style={{ display: 'flex', gap: '30px', flexWrap: 'wrap' }}>
             <div>
               <span style={{ fontSize: '12px', color: '#64748b' }}>WebRTC WHEP Ready</span>
               <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#f8fafc' }}>{onlineStreams} streams</div>
@@ -162,6 +198,14 @@ export function Dashboard({
               <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#a855f7' }}>
                 {cameras.filter(c => c.raw_json.includes('"edgePush"')).length} nodes
               </div>
+            </div>
+            <div>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>Recovered Files</span>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#f59e0b' }}>{recoveredStats.total_count} files</div>
+            </div>
+            <div>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>Recovered Duration</span>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#f59e0b' }}>{formatDuration(recoveredStats.total_duration)}</div>
             </div>
           </div>
         </div>
@@ -262,11 +306,46 @@ export function Dashboard({
                 <span className="footTag">
                   {camera.camera_type || "UNKNOWN"}
                 </span>
+
+                {recoveredStats.by_stream[camera.stream_id] && (
+                  <span className="footTag" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.3)' }}>
+                    {recoveredStats.by_stream[camera.stream_id].count} recovered
+                  </span>
+                )}
               </div>
             </button>
           );
         })}
       </div>
+
+      {recoveredStats.recent && recoveredStats.recent.length > 0 && (
+        <div style={{ marginTop: '30px', background: 'rgba(30, 41, 59, 0.4)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', padding: '20px' }}>
+          <h3 style={{ margin: '0 0 15px 0', fontSize: '1.1rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Activity size={18} style={{ color: '#f59e0b' }} />
+            Recently Recovered Segments
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {recoveredStats.recent.map((rec: any) => {
+              const cam = cameras.find(c => c.stream_id === rec.stream_id);
+              const camName = cam ? cam.name : rec.stream_id;
+              return (
+                <div key={rec.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', background: 'rgba(15, 23, 42, 0.4)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.02)' }}>
+                  <div>
+                    <span style={{ fontWeight: 600, color: '#f8fafc', fontSize: '0.86rem' }}>{rec.filename}</span>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                      Camera: <span style={{ color: '#cbd5e1' }}>{camName}</span> • Stream: <span style={{ color: '#cbd5e1' }}>{rec.stream_id}</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '0.8rem' }}>
+                    <span style={{ color: '#94a3b8' }}>Duration: {Math.round(rec.duration)}s</span>
+                    <span style={{ color: '#64748b' }}>{new Date(rec.created_at).toLocaleString()}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

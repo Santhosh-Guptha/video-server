@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { Calendar, Film, Loader2, AlertCircle, FileVideo, ChevronDown, Clock, Activity } from 'lucide-react'
+import { Calendar, Film, Loader2, AlertCircle, FileVideo, ChevronDown, Clock, Activity, Play, Pause, RotateCcw, RotateCw } from 'lucide-react'
 import type { Camera, RecordingSegment } from '../types'
 
 type Props = {
@@ -310,6 +310,85 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     }
   }
 
+  const togglePlayPause = () => {
+    const video = videoRef.current
+    if (!video) return
+    if (video.paused) {
+      video.play().catch(() => {})
+      setIsPaused(false)
+    } else {
+      video.pause()
+      setIsPaused(true)
+    }
+  }
+
+  const handleSeek = (seconds: number) => {
+    const video = videoRef.current
+    if (!video || !currentSegment) return
+    const newTime = video.currentTime + seconds
+    const segmentDuration = currentSegment.end_ts - currentSegment.start_ts
+    if (newTime >= 0 && newTime <= segmentDuration) {
+      video.currentTime = newTime
+      setCurrentAbsoluteTs(currentSegment.start_ts + newTime)
+    } else {
+      const newAbsTs = currentAbsoluteTs + seconds
+      seekToTimestamp(newAbsTs)
+    }
+  }
+
+  const stateRef = useRef({ currentAbsoluteTs, currentSegment, rawSegments })
+  useEffect(() => {
+    stateRef.current = { currentAbsoluteTs, currentSegment, rawSegments }
+  }, [currentAbsoluteTs, currentSegment, rawSegments])
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'SELECT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+
+      if (event.key === ' ') {
+        event.preventDefault()
+        togglePlayPause()
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        const video = videoRef.current
+        if (!video || !stateRef.current.currentSegment) return
+        const newTime = video.currentTime - 10
+        if (newTime >= 0) {
+          video.currentTime = newTime
+          setCurrentAbsoluteTs(stateRef.current.currentSegment.start_ts + newTime)
+        } else {
+          const newAbsTs = stateRef.current.currentAbsoluteTs - 10
+          playSegmentAtTimestamp(newAbsTs, stateRef.current.rawSegments)
+        }
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        const video = videoRef.current
+        if (!video || !stateRef.current.currentSegment) return
+        const segmentDuration = stateRef.current.currentSegment.end_ts - stateRef.current.currentSegment.start_ts
+        const newTime = video.currentTime + 10
+        if (newTime <= segmentDuration) {
+          video.currentTime = newTime
+          setCurrentAbsoluteTs(stateRef.current.currentSegment.start_ts + newTime)
+        } else {
+          const newAbsTs = stateRef.current.currentAbsoluteTs + 10
+          playSegmentAtTimestamp(newAbsTs, stateRef.current.rawSegments)
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   // Dynamic seeking triggered by timeline clicks or drags
   const seekToTimestamp = (targetTs: number) => {
     playSegmentAtTimestamp(targetTs, rawSegments)
@@ -373,7 +452,8 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     let text = `${new Date(ts * 1000).toLocaleTimeString()}`
     if (hoverSeg) {
       const dur = Math.round(hoverSeg.end_ts - hoverSeg.start_ts)
-      text += ` [Recorded - Duration: ${dur}s]`
+      const isRecovered = hoverSeg.file_path.includes('_recovered')
+      text += ` [${isRecovered ? 'Recovered' : 'Recorded'} - Duration: ${dur}s]`
     } else {
       text += ' [Gap - No video]'
     }
@@ -729,6 +809,77 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                   </video>
                 </div>
 
+                {/* On-Screen Video Controls */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '16px',
+                  marginBottom: '20px',
+                  padding: '10px 20px',
+                  background: 'rgba(15, 23, 42, 0.6)',
+                  borderRadius: '16px',
+                  border: '1px solid rgba(148, 163, 184, 0.08)'
+                }}>
+                  <button
+                    onClick={() => handleSeek(-10)}
+                    className="toggleBtn"
+                    title="Rewind 10s (Left Arrow)"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 16px',
+                      borderRadius: '12px',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <RotateCcw size={16} />
+                    <span>-10s</span>
+                  </button>
+
+                  <button
+                    onClick={togglePlayPause}
+                    className="primaryBtn"
+                    title="Play/Pause (Space)"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '42px',
+                      height: '42px',
+                      borderRadius: '50%',
+                      padding: 0,
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      borderColor: 'rgba(16, 185, 129, 0.3)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {isPaused ? <Play size={20} fill="#fff" /> : <Pause size={20} fill="#fff" />}
+                  </button>
+
+                  <button
+                    onClick={() => handleSeek(10)}
+                    className="toggleBtn"
+                    title="Forward 10s (Right Arrow)"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 16px',
+                      borderRadius: '12px',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <span>+10s</span>
+                    <RotateCw size={16} />
+                  </button>
+                </div>
+
                 {/* Visual Scrubber timeline */}
                 <div style={{ padding: '8px 4px 14px', position: 'relative' }}>
                   
@@ -790,6 +941,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
 
                         const leftPercent = ((start - timelineWindow.start) / timelineWindow.duration) * 100
                         const widthPercent = ((end - start) / timelineWindow.duration) * 100
+                        const isRecovered = seg.file_path.includes('_recovered')
                         return (
                           <div
                             key={idx}
@@ -799,7 +951,9 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                               left: `${Math.max(0, Math.min(100, leftPercent))}%`,
                               width: `${Math.max(0.1, Math.min(100, widthPercent))}%`,
                               height: '100%',
-                              background: 'linear-gradient(180deg, #10b981, #059669)',
+                              background: isRecovered 
+                                ? 'linear-gradient(180deg, #f59e0b, #d97706)' 
+                                : 'linear-gradient(180deg, #10b981, #059669)',
                               opacity: 0.85
                             }}
                           />
@@ -845,6 +999,18 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                         </span>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Timeline Legend */}
+                  <div style={{ display: 'flex', gap: '16px', fontSize: '0.75rem', marginTop: '16px', justifyContent: 'flex-end', color: '#94a3b8' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: 'linear-gradient(180deg, #10b981, #059669)' }} />
+                      <span>Normal Recording</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: 'linear-gradient(180deg, #f59e0b, #d97706)' }} />
+                      <span>Recovered Footage</span>
+                    </div>
                   </div>
                 </div>
 
