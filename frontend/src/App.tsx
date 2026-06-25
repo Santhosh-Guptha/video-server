@@ -35,11 +35,18 @@ export default function App() {
   const [layout, setLayout] = useState(() => {
     const stored = localStorage.getItem('vms_layout')
     return stored ? parseInt(stored, 10) : 4
-  }) 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream'>(() => {
-    const stored = localStorage.getItem('vms_active_tab')
-    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream') ? stored : 'dashboard'
   })
+  const [activeTab, setActiveTabState] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream'>(() => {
+    const path = window.location.pathname.replace(/^\//, '')
+    const validTabs = ['dashboard', 'live', 'playback', 'edgepush', 'camera_config', 'webcam_stream']
+    return validTabs.includes(path) ? (path as any) : 'dashboard'
+  })
+
+  const setActiveTab = (tab: string) => {
+    setActiveTabState(tab as any)
+    window.history.pushState(null, '', `/${tab}`)
+  }
+
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
   const [liveUrl, setLiveUrl] = useState<string>('')
@@ -56,8 +63,21 @@ export default function App() {
 
   // Caching states to localStorage for page-refresh persistence
   useEffect(() => {
-    localStorage.setItem('vms_active_tab', activeTab)
-  }, [activeTab])
+    const handlePopState = () => {
+      const path = window.location.pathname.replace(/^\//, '')
+      const validTabs = ['dashboard', 'live', 'playback', 'edgepush', 'camera_config', 'webcam_stream']
+      setActiveTabState(validTabs.includes(path) ? (path as any) : 'dashboard')
+    }
+    window.addEventListener('popstate', handlePopState)
+    
+    // Normalize path to /dashboard if empty or invalid
+    const path = window.location.pathname.replace(/^\//, '')
+    const validTabs = ['dashboard', 'live', 'playback', 'edgepush', 'camera_config', 'webcam_stream']
+    if (!validTabs.includes(path)) {
+      window.history.replaceState(null, '', '/dashboard')
+    }
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('vms_layout', layout.toString())
