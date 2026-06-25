@@ -10,6 +10,7 @@ export type CameraStream = {
   stream_url: string
   status: 'REGISTERED' | 'CONNECTING' | 'ONLINE' | 'DEGRADED' | 'RECONNECTING' | 'OFFLINE' | 'ERROR'
   error_message?: string | null
+  always_on?: boolean
   created_at: string
   updated_at: string
 }
@@ -32,6 +33,8 @@ export type Camera = {
   camera_type?: string | null
   decode_type?: string | null
   server_http_port?: number | null
+  make?: string | null
+  synced_from_api?: boolean
   raw_json: string
   streams: CameraStream[]
   created_at: string

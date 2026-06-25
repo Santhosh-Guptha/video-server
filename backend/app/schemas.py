@@ -122,3 +122,33 @@ class SyncResponse(BaseModel):
     total: int
     created_or_updated: int
     source: str
+
+class CameraCreate(BaseModel):
+    source_camera_id: int
+    name: str
+    active: bool = True
+    make: Optional[str] = None
+    stream_id: str
+    profile_type: str = "MAIN"
+    resolution: str = "1920x1080"
+    fps: int = 30
+    codec: str = "H264"
+    bitrate: Optional[int] = None
+    stream_url: str
+    stream_mode: str = "AUTO"
+    always_on: bool = False
+
+class CameraUpdate(BaseModel):
+    name: str
+    active: bool
+    make: Optional[str] = None
+    resolution: str
+    fps: int
+    codec: str
+    bitrate: Optional[int] = None
+    stream_url: str
+    always_on: bool
+
+class SettingsUpdate(BaseModel):
+    use_upstream_cameras: bool
+

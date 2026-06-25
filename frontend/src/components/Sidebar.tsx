@@ -1,4 +1,4 @@
-import { Camera, RefreshCw, Radar, Clock3, Wifi } from 'lucide-react'
+import { Camera, RefreshCw, Radar, Clock3, Wifi, Sliders, Video } from 'lucide-react'
 
 type SidebarProps = {
   onRefresh: () => void
@@ -74,6 +74,22 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, ac
           style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
         >
           <Wifi size={14} /> Edge Push
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'camera_config' ? 'active' : ''}`}
+          onClick={() => setActiveTab('camera_config')}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Sliders size={14} /> Camera Config
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'webcam_stream' ? 'active' : ''}`}
+          onClick={() => setActiveTab('webcam_stream')}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Video size={14} /> Webcam Stream
         </button>
       </nav>
 

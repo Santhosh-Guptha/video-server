@@ -7,6 +7,8 @@ import { CameraDetails } from './pages/CameraDetails'
 import { Playback } from './pages/Playback'
 import { EdgePushPage } from './pages/EdgePush'
 import { LiveWall } from './pages/LiveWall'
+import { CameraManagement } from './pages/CameraManagement'
+import { WebcamStream } from './pages/WebcamStream'
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
 import { usePolicy, resolveLiveStreamId, resolvePlaybackStreamId } from './lib/usePolicy'
 import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2, ChevronDown, Search } from 'lucide-react'
@@ -34,9 +36,9 @@ export default function App() {
     const stored = localStorage.getItem('vms_layout')
     return stored ? parseInt(stored, 10) : 4
   }) 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush'>(() => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream'>(() => {
     const stored = localStorage.getItem('vms_active_tab')
-    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush') ? stored : 'dashboard'
+    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream') ? stored : 'dashboard'
   })
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
@@ -520,6 +522,18 @@ export default function App() {
           {activeTab === 'edgepush' && (
             <div className="streamArea">
               <EdgePushPage edgeCameras={edgeCameras} />
+            </div>
+          )}
+
+          {activeTab === 'camera_config' && (
+            <div className="streamArea">
+              <CameraManagement cameras={cameras} onRefresh={loadCameras} />
+            </div>
+          )}
+
+          {activeTab === 'webcam_stream' && (
+            <div className="streamArea">
+              <WebcamStream edgeCameras={edgeCameras} onRefresh={loadCameras} />
             </div>
           )}
         </div>

@@ -23,7 +23,7 @@ from .indexer import index_recordings
 from .config import settings
 from .db import engine, Base, get_session
 from .models import Camera, CameraStream, RecordingSegment, StreamState, ProfileType, EdgeConnection, StreamTranscoder
-from .schemas import CameraOut, CameraStreamOut, RecordingSegmentOut, SyncResponse
+from .schemas import CameraOut, CameraStreamOut, RecordingSegmentOut, SyncResponse, CameraCreate, CameraUpdate, SettingsUpdate
 from .upstream import fetch_upstream_cameras
 from .redis_client import RedisManager
 from .stream_manager import stream_manager
@@ -58,6 +58,11 @@ async def upstream_sync_loop():
     while True:
         await asyncio.sleep(UPSTREAM_SYNC_INTERVAL_MINUTES * 60)
         try:
+            use_upstream = await RedisManager.get_setting_use_upstream()
+            if not use_upstream:
+                print("[upstream_sync] Upstream sync is disabled. Skipping periodic sync.")
+                continue
+
             print("[upstream_sync] Running periodic camera synchronization...")
             async for session in get_session():
                 await sync_cameras(session)
@@ -210,6 +215,27 @@ async def startup():
     # Sync registered camera streams with Upstream API and MediaMTX on boot
     async def initial_sync():
         await asyncio.sleep(2.0) # Wait for MediaMTX to boot up fully in Compose
+        use_upstream = await RedisManager.get_setting_use_upstream()
+        if not use_upstream:
+            print("[startup] Upstream sync disabled. Skipping startup sync.")
+            # Still need to load and register existing local streams into stream_manager on boot!
+            async for session in get_session():
+                try:
+                    res = await session.execute(
+                        select(CameraStream).options(selectinload(CameraStream.camera))
+                    )
+                    streams = res.scalars().all()
+                    for stream in streams:
+                        camera = stream.camera
+                        if camera and camera.active:
+                            await stream_manager.add_stream(session, stream)
+                        else:
+                            await stream_manager.remove_stream(session, stream)
+                    print("[startup] Local streams registered successfully.")
+                except Exception as e:
+                    print(f"[startup] Error registering local streams: {e}")
+            return
+
         print("[startup] Syncing camera streams with upstream API dynamically...")
         async for session in get_session():
             try:
@@ -879,17 +905,18 @@ async def sync_cameras_get(session: Annotated[AsyncSession, Depends(get_session)
 
 @app.get("/api/cameras", response_model=list[CameraOut])
 async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], sync: bool = Query(default=False)):
-    if sync:
+    use_upstream = await RedisManager.get_setting_use_upstream()
+    if sync and use_upstream:
         try:
             await sync_cameras(session)
         except Exception as e:
             print(f"[main] Failed to sync upstream cameras: {e}")
 
-    res = await session.execute(
-        select(Camera)
-        .options(selectinload(Camera.streams))
-        .order_by(Camera.name.asc())
-    )
+    query = select(Camera).options(selectinload(Camera.streams))
+    if not use_upstream:
+        query = query.where(Camera.synced_from_api == False)
+
+    res = await session.execute(query.order_by(Camera.name.asc()))
     return list(res.scalars().all())
 
 @app.get("/api/cameras/active", response_model=list[CameraOut])
@@ -924,11 +951,13 @@ async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_sessi
     if active_stream_ids:
         conditions.append(CameraStream.stream_id.in_(list(active_stream_ids)))
 
+    use_upstream = await RedisManager.get_setting_use_upstream()
+    query = select(Camera).join(CameraStream).where(or_(*conditions))
+    if not use_upstream:
+        query = query.where(Camera.synced_from_api == False)
+
     res = await session.execute(
-        select(Camera)
-        .join(CameraStream)
-        .where(or_(*conditions))
-        .options(selectinload(Camera.streams))
+        query.options(selectinload(Camera.streams))
         .order_by(Camera.name.asc())
         .distinct()
     )
@@ -1845,3 +1874,212 @@ async def upload_edge_backlog(
 @app.get("/")
 async def root():
     return {"message": "Enterprise VMS FastAPI backend is running"}
+
+# ── VMS Settings and Camera CRUD Endpoints ──
+
+@app.get("/api/settings")
+async def get_settings():
+    use_upstream = await RedisManager.get_setting_use_upstream()
+    return {"use_upstream_cameras": use_upstream}
+
+@app.post("/api/settings")
+async def update_settings(
+    payload: SettingsUpdate,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    await RedisManager.set_setting_use_upstream(payload.use_upstream_cameras)
+    
+    if not payload.use_upstream_cameras:
+        # Delete all synced cameras from DB and MediaMTX
+        res = await session.execute(
+            select(Camera).where(Camera.synced_from_api == True)
+        )
+        synced_cameras = list(res.scalars().all())
+        for camera in synced_cameras:
+            # Delete its streams from MediaMTX
+            streams_res = await session.execute(
+                select(CameraStream).where(CameraStream.camera_id == camera.id)
+            )
+            camera_streams = list(streams_res.scalars().all())
+            for s in camera_streams:
+                try:
+                    await stream_manager.remove_stream(session, s)
+                except Exception:
+                    pass
+            await session.delete(camera)
+        await session.commit()
+    else:
+        # Sync immediately on enabling to restore upstream feeds
+        try:
+            await sync_cameras(session)
+        except Exception as e:
+            print(f"[main] Failed to sync upstream cameras after enabling setting: {e}")
+            
+    return {"status": "ok", "use_upstream_cameras": payload.use_upstream_cameras}
+
+
+@app.post("/api/cameras", response_model=CameraOut)
+async def create_camera(
+    payload: CameraCreate,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    # Validate unique source_camera_id
+    existing_cam = await session.execute(
+        select(Camera).where(Camera.source_camera_id == payload.source_camera_id)
+    )
+    if existing_cam.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"Camera with ID {payload.source_camera_id} already exists")
+
+    # Validate unique stream_id
+    existing_stream = await session.execute(
+        select(CameraStream).where(CameraStream.stream_id == payload.stream_id)
+    )
+    if existing_stream.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"Stream with ID {payload.stream_id} already exists")
+
+    # Map profile type
+    profile = ProfileType.MAIN
+    if payload.profile_type == "SUB":
+        profile = ProfileType.SUB
+    elif payload.profile_type == "MOBILE":
+        profile = ProfileType.MOBILE
+
+    camera = Camera(
+        source_camera_id=payload.source_camera_id,
+        name=payload.name,
+        active=payload.active,
+        make=payload.make,
+        synced_from_api=False, # Manually created
+    )
+    session.add(camera)
+    await session.flush()
+
+    stream = CameraStream(
+        camera_id=camera.id,
+        stream_id=payload.stream_id,
+        profile_type=profile,
+        resolution=payload.resolution,
+        fps=payload.fps,
+        codec=payload.codec,
+        bitrate=payload.bitrate,
+        stream_url=payload.stream_url,
+        stream_mode=payload.stream_mode,
+        always_on=payload.always_on,
+        status=StreamState.REGISTERED
+    )
+    session.add(stream)
+    await session.commit()
+
+    # Re-fetch camera with streams pre-loaded to prevent serialization error
+    refreshed_res = await session.execute(
+        select(Camera)
+        .options(selectinload(Camera.streams))
+        .where(Camera.id == camera.id)
+    )
+    camera = refreshed_res.scalar_one()
+
+    # Register stream in MediaMTX if active and streams exist
+    if camera.active and camera.streams:
+        await stream_manager.add_stream(session, camera.streams[0])
+
+    return camera
+
+
+@app.put("/api/cameras/{stream_id}", response_model=CameraOut)
+async def update_camera(
+    stream_id: str,
+    payload: CameraUpdate,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    res = await session.execute(
+        select(CameraStream)
+        .options(selectinload(CameraStream.camera))
+        .where(CameraStream.stream_id == stream_id)
+    )
+    stream = res.scalar_one_or_none()
+    if not stream or not stream.camera:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+
+    camera = stream.camera
+    
+    # Update camera parent fields
+    camera.name = payload.name
+    was_active = camera.active
+    camera.active = payload.active
+    camera.make = payload.make
+
+    # Update stream fields
+    stream.resolution = payload.resolution
+    stream.fps = payload.fps
+    stream.codec = payload.codec
+    stream.bitrate = payload.bitrate
+    stream.stream_url = payload.stream_url
+    stream.always_on = payload.always_on
+
+    await session.commit()
+
+    # Re-fetch camera with streams pre-loaded to prevent serialization error
+    refreshed_res = await session.execute(
+        select(Camera)
+        .options(selectinload(Camera.streams))
+        .where(Camera.id == camera.id)
+    )
+    camera = refreshed_res.scalar_one()
+
+    # Sync MediaMTX config
+    if camera.streams:
+        target_stream = camera.streams[0]
+        if was_active and not camera.active:
+            await stream_manager.remove_stream(session, target_stream)
+        elif camera.active:
+            await stream_manager.add_stream(session, target_stream)
+
+    return camera
+
+
+@app.delete("/api/cameras/{stream_id}")
+async def delete_camera(
+    stream_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    res = await session.execute(
+        select(CameraStream)
+        .options(selectinload(CameraStream.camera))
+        .where(CameraStream.stream_id == stream_id)
+    )
+    stream = res.scalar_one_or_none()
+    if not stream or not stream.camera:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+
+    camera = stream.camera
+
+    # Fetch all streams for this camera to remove them from MediaMTX and disk
+    streams_res = await session.execute(
+        select(CameraStream).where(CameraStream.camera_id == camera.id)
+    )
+    all_streams = list(streams_res.scalars().all())
+
+    import shutil
+    for s in all_streams:
+        # 1. Remove from MediaMTX
+        try:
+            await stream_manager.remove_stream(session, s)
+        except Exception as e:
+            print(f"[main] Failed to remove stream {s.stream_id} from MediaMTX during deletion: {e}")
+
+        # 2. Physical cleanup of recordings and HLS cache directories
+        for base_dir in (settings.recording_dir, settings.hls_dir):
+            if base_dir:
+                p = Path(base_dir) / s.stream_id
+                if p.exists() and p.is_dir():
+                    try:
+                        shutil.rmtree(p)
+                        print(f"[main] Deleted physical stream directory: {p}")
+                    except Exception as e:
+                        print(f"[main] Failed to delete physical directory {p}: {e}")
+
+    # 3. Delete camera from DB (cascading takes care of streams and segments)
+    await session.delete(camera)
+    await session.commit()
+
+    return {"status": "ok", "message": f"Camera {camera.name} and stream {stream_id} deleted successfully"}

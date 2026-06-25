@@ -37,3 +37,61 @@ export async function fetchPlayback(streamId: string, startTs: number, endTs: nu
   if (!res.ok) throw new Error(`Failed to fetch playback: ${res.status}`)
   return res.json()
 }
+
+export async function createCamera(payload: any): Promise<Camera> {
+  const res = await fetch('/api/cameras', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload)
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Failed to create camera')
+  }
+  return res.json()
+}
+
+export async function updateCamera(streamId: string, payload: any): Promise<Camera> {
+  const res = await fetch(`/api/cameras/${encodeURIComponent(streamId)}`, {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload)
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Failed to update camera')
+  }
+  return res.json()
+}
+
+export async function deleteCamera(streamId: string): Promise<any> {
+  const res = await fetch(`/api/cameras/${encodeURIComponent(streamId)}`, {
+    method: 'DELETE'
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Failed to delete camera')
+  }
+  return res.json()
+}
+
+export async function getSystemSettings(): Promise<{ use_upstream_cameras: boolean }> {
+  const res = await fetch('/api/settings')
+  if (!res.ok) {
+    throw new Error('Failed to fetch settings')
+  }
+  return res.json()
+}
+
+export async function updateSystemSettings(useUpstreamCameras: boolean): Promise<any> {
+  const res = await fetch('/api/settings', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ use_upstream_cameras: useUpstreamCameras })
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Failed to update settings')
+  }
+  return res.json()
+}

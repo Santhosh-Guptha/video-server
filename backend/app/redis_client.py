@@ -148,6 +148,32 @@ class RedisManager:
                 pass
         RedisManager._memory_cache.pop(f"vms:last_push_seen:{stream_id}", None)
 
+    @staticmethod
+    async def get_setting_use_upstream() -> bool:
+        if redis_client:
+            try:
+                val = await redis_client.get("vms:setting:use_upstream_cameras")
+                if val is not None:
+                    return val.decode("utf-8").lower() == "true"
+            except Exception:
+                pass
+        
+        val = RedisManager._memory_cache.get("vms:setting:use_upstream_cameras")
+        if val is not None:
+            return val.lower() == "true"
+        return True
+
+    @staticmethod
+    async def set_setting_use_upstream(value: bool) -> None:
+        val_str = "true" if value else "false"
+        if redis_client:
+            try:
+                await redis_client.set("vms:setting:use_upstream_cameras", val_str)
+                return
+            except Exception:
+                pass
+        RedisManager._memory_cache["vms:setting:use_upstream_cameras"] = val_str
+
 def datetime_now_iso() -> str:
     from datetime import datetime
     return datetime.utcnow().isoformat()
