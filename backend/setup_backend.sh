@@ -132,7 +132,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=$BACKEND_DIR
-ExecStart=$VENV_PATH/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+ExecStart=$VENV_PATH/bin/uvicorn app.main:app --host 0.0.0.0 --port 8005
 Restart=always
 RestartSec=5
 Environment=PATH=$VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
