@@ -10,8 +10,16 @@ export default defineConfig({
       usePolling: true
     },
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
-      '/ws': { target: 'ws://127.0.0.1:8000', ws: true }
+      '/api': 'http://127.0.0.1:8005',
+      '/ws': { target: 'ws://127.0.0.1:8005', ws: true }
+    }
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 5173,
+    proxy: {
+      '/api': 'http://127.0.0.1:8005',
+      '/ws': { target: 'ws://127.0.0.1:8005', ws: true }
     }
   }
 })
