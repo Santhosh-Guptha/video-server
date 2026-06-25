@@ -636,6 +636,12 @@ async def download_recording(
     if start_ts >= end_ts:
         raise HTTPException(400, "start_time must be before end_time")
         
+    # Enforce maximum duration of 30 minutes
+    max_duration = 30 * 60  # 1800 seconds
+    requested_duration = end_ts - start_ts
+    if requested_duration > max_duration:
+        raise HTTPException(400, f"Requested duration exceeds the maximum limit of 30 minutes (requested: {requested_duration:.1f}s)")
+
     # Resolve stream_id
     from .webrtc import resolve_stream_by_identifier
     stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
@@ -657,6 +663,7 @@ async def download_recording(
         raise HTTPException(404, "No recordings found for the specified range")
         
     valid_files = []
+    valid_segments = []
     for seg in segments:
         p = Path(seg.file_path)
         if not p.is_absolute() or not p.exists():
@@ -665,49 +672,67 @@ async def download_recording(
             p = Path(settings.recording_dir) / rel_path
         if p.exists():
             valid_files.append(p)
+            valid_segments.append(seg)
             
     if not valid_files:
         raise HTTPException(404, "Recording files not found on disk")
         
-    # Case 1: Exactly 1 file
-    if len(valid_files) == 1:
-        file_path = valid_files[0]
-        return FileResponse(
-            path=file_path,
-            media_type="video/mp4",
-            filename=f"{stream_id}_{int(start_ts)}_{int(end_ts)}.mp4"
-        )
-        
-    # Case 2: Multiple files -> Concatenate using ffmpeg
+    # 3. Calculate start offset and duration for ffmpeg trimming
+    first_seg = valid_segments[0]
+    start_offset = max(0.0, start_ts - first_seg.start_ts)
+    duration = requested_duration
+
     temp_dir = tempfile.gettempdir()
-    output_filename = f"{stream_id}_{int(start_ts)}_{int(end_ts)}_merged.mp4"
+    output_filename = f"{stream_id}_{int(start_ts)}_{int(end_ts)}_trimmed.mp4"
     output_path = os.path.join(temp_dir, output_filename)
-    
-    list_file_path = os.path.join(temp_dir, f"{stream_id}_{int(start_ts)}_{int(end_ts)}_list.txt")
-    with open(list_file_path, "w", encoding="utf-8") as f:
-        for file_path in valid_files:
-            safe_path = str(file_path).replace("\\", "/")
-            f.write(f"file '{safe_path}'\n")
-            
+    list_file_path = None
+
     try:
-        cmd = [
-            settings.ffmpeg_path,
-            "-f", "concat",
-            "-safe", "0",
-            "-i", list_file_path,
-            "-c", "copy",
-            "-y",
-            output_path
-        ]
-        print(f"[download] Running ffmpeg concat: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            print(f"[download] ffmpeg error: {result.stderr}")
-            raise HTTPException(500, f"FFmpeg concat failed: {result.stderr}")
-            
+        # Case 1: Exactly 1 file
+        if len(valid_files) == 1:
+            cmd = [
+                settings.ffmpeg_path,
+                "-ss", f"{start_offset:.3f}",
+                "-i", str(valid_files[0]),
+                "-t", f"{duration:.3f}",
+                "-c", "copy",
+                "-y",
+                output_path
+            ]
+            print(f"[download] Running ffmpeg trim: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                print(f"[download] ffmpeg error: {result.stderr}")
+                raise HTTPException(500, f"FFmpeg trim failed: {result.stderr}")
+                
+        # Case 2: Multiple files -> Concatenate and trim using ffmpeg
+        else:
+            list_file_path = os.path.join(temp_dir, f"{stream_id}_{int(start_ts)}_{int(end_ts)}_list.txt")
+            with open(list_file_path, "w", encoding="utf-8") as f:
+                for file_path in valid_files:
+                    safe_path = str(file_path).replace("\\", "/")
+                    f.write(f"file '{safe_path}'\n")
+                    
+            cmd = [
+                settings.ffmpeg_path,
+                "-f", "concat",
+                "-safe", "0",
+                "-i", list_file_path,
+                "-ss", f"{start_offset:.3f}",
+                "-t", f"{duration:.3f}",
+                "-c", "copy",
+                "-y",
+                output_path
+            ]
+            print(f"[download] Running ffmpeg concat and trim: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode != 0:
+                print(f"[download] ffmpeg error: {result.stderr}")
+                raise HTTPException(500, f"FFmpeg concat and trim failed: {result.stderr}")
+                
         def cleanup():
             try:
-                if os.path.exists(list_file_path):
+                if list_file_path and os.path.exists(list_file_path):
                     os.remove(list_file_path)
                 if os.path.exists(output_path):
                     os.remove(output_path)
@@ -724,13 +749,13 @@ async def download_recording(
             background=background_tasks
         )
     except Exception as ex:
-        if os.path.exists(list_file_path):
+        if list_file_path and os.path.exists(list_file_path):
             os.remove(list_file_path)
         if os.path.exists(output_path):
             os.remove(output_path)
         if isinstance(ex, HTTPException):
             raise ex
-        raise HTTPException(500, f"Failed to merge segments: {ex}")
+        raise HTTPException(500, f"Failed to process download segments: {ex}")
 
 @app.get("/health")
 async def health():
