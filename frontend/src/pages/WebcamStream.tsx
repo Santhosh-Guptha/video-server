@@ -467,7 +467,7 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
                 value={selectedVideoId} 
                 onChange={e => setSelectedVideoId(e.target.value)} 
                 disabled={isStreaming || !videoEnabled}
-                style={selectStyle}
+                className="vms-select"
               >
                 {videoDevices.map(d => (
                   <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0, 5)}`}</option>
@@ -482,7 +482,7 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
                 value={selectedAudioId} 
                 onChange={e => setSelectedAudioId(e.target.value)} 
                 disabled={isStreaming || !audioEnabled}
-                style={selectStyle}
+                className="vms-select"
               >
                 {audioDevices.map(d => (
                   <option key={d.deviceId} value={d.deviceId}>{d.label || `Mic ${d.deviceId.slice(0, 5)}`}</option>
@@ -566,7 +566,7 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
                   value={streamId} 
                   onChange={e => setStreamId(e.target.value)} 
                   disabled={isStreaming}
-                  style={selectStyle}
+                  className="vms-select"
                 >
                   {edgeCameras.map(c => (
                     <option key={c.id} value={c.stream_id}>{c.name} ({c.stream_id})</option>
@@ -583,7 +583,7 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
                     onChange={e => setStreamId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))} 
                     disabled={isStreaming}
                     placeholder="e.g. office_webcam"
-                    style={inputStyle}
+                    className="vms-input"
                   />
                 </div>
                 <div>
@@ -593,7 +593,7 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
                     onChange={e => setCameraName(e.target.value)} 
                     disabled={isStreaming}
                     placeholder="e.g. My Laptop Webcam"
-                    style={inputStyle}
+                    className="vms-input"
                   />
                 </div>
               </>
@@ -814,31 +814,7 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
   )
 }
 
-const selectStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 12px',
-  borderRadius: '8px',
-  background: 'rgba(15, 23, 42, 0.7)',
-  border: '1px solid rgba(255, 255, 255, 0.08)',
-  color: '#e2e8f0',
-  fontSize: '0.82rem',
-  outline: 'none',
-  marginTop: '4px',
-  cursor: 'pointer'
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 12px',
-  borderRadius: '8px',
-  background: 'rgba(15, 23, 42, 0.7)',
-  border: '1px solid rgba(255, 255, 255, 0.08)',
-  color: '#e2e8f0',
-  fontSize: '0.82rem',
-  outline: 'none',
-  marginTop: '4px',
-  boxSizing: 'border-box'
-}
+// Styled via styles.css (.vms-input, .vms-select)
 
 const statItemStyle: React.CSSProperties = {
   display: 'flex',

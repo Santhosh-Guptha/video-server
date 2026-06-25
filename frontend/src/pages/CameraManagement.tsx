@@ -251,23 +251,23 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Display Name *</label>
-                <input value={name} onChange={e => setName(e.target.value)} required placeholder="e.g. Main Lobby" style={formInputStyle} />
+                <input value={name} onChange={e => setName(e.target.value)} required placeholder="e.g. Main Lobby" className="vms-input" />
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Source Camera ID (Unique Integer) *</label>
-                <input type="number" value={sourceCameraId} onChange={e => setSourceCameraId(Number(e.target.value))} required disabled={!!editingCamera} style={formInputStyle} />
+                <input type="number" value={sourceCameraId} onChange={e => setSourceCameraId(Number(e.target.value))} required disabled={!!editingCamera} className="vms-input" />
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Camera Make/Model</label>
-                <input value={make} onChange={e => setMake(e.target.value)} placeholder="e.g. Hikvision" style={formInputStyle} />
+                <input value={make} onChange={e => setMake(e.target.value)} placeholder="e.g. Hikvision" className="vms-input" />
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Stream ID (e.g. LOBBY_MAIN) *</label>
-                <input value={streamId} onChange={e => setStreamId(e.target.value)} required disabled={!!editingCamera} placeholder="e.g. LOBBY_MAIN" style={formInputStyle} />
+                <input value={streamId} onChange={e => setStreamId(e.target.value)} required disabled={!!editingCamera} placeholder="e.g. LOBBY_MAIN" className="vms-input" />
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Stream Profile</label>
-                <select value={profileType} onChange={e => setProfileType(e.target.value)} disabled={!!editingCamera} style={formInputStyle}>
+                <select value={profileType} onChange={e => setProfileType(e.target.value)} disabled={!!editingCamera} className="vms-select">
                   <option value="MAIN">MAIN (High Quality / Recording)</option>
                   <option value="SUB">SUB (Low Quality / Grid view)</option>
                   <option value="MOBILE">MOBILE</option>
@@ -275,26 +275,26 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Resolution</label>
-                <input value={resolution} onChange={e => setResolution(e.target.value)} placeholder="e.g. 1920x1080" style={formInputStyle} />
+                <input value={resolution} onChange={e => setResolution(e.target.value)} placeholder="e.g. 1920x1080" className="vms-input" />
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>FPS</label>
-                <input type="number" value={fps} onChange={e => setFps(Number(e.target.value))} style={formInputStyle} />
+                <input type="number" value={fps} onChange={e => setFps(Number(e.target.value))} className="vms-input" />
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Video Codec</label>
-                <select value={codec} onChange={e => setCodec(e.target.value)} style={formInputStyle}>
+                <select value={codec} onChange={e => setCodec(e.target.value)} className="vms-select">
                   <option value="H264">H264</option>
                   <option value="H265">H265 (Auto-transcoded for web if needed)</option>
                 </select>
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Bitrate (kbps)</label>
-                <input type="number" value={bitrate} onChange={e => setBitrate(e.target.value)} placeholder="e.g. 2048" style={formInputStyle} />
+                <input type="number" value={bitrate} onChange={e => setBitrate(e.target.value)} placeholder="e.g. 2048" className="vms-input" />
               </div>
               <div>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>RTSP Ingress URL *</label>
-                <input value={streamUrl} onChange={e => setStreamUrl(e.target.value)} required placeholder="rtsp://host:port/stream" style={formInputStyle} />
+                <input value={streamUrl} onChange={e => setStreamUrl(e.target.value)} required placeholder="rtsp://host:port/stream" className="vms-input" />
               </div>
             </div>
 
@@ -424,15 +424,3 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   )
 }
 
-const formInputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 14px',
-  borderRadius: '10px',
-  boxSizing: 'border-box',
-  background: 'rgba(15, 23, 42, 0.6)',
-  border: '1px solid rgba(255, 255, 255, 0.08)',
-  color: '#e2e8f0',
-  fontSize: '0.85rem',
-  outline: 'none',
-  marginTop: '4px'
-}
