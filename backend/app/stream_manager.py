@@ -74,10 +74,10 @@ class StreamManager:
                     is_valid = True
                 else:
                     camera = res.scalar_one_or_none()
-                    is_valid = camera and camera.synced_from_api and camera.active
+                    is_valid = camera and camera.active
                 
                 if not is_valid:
-                    print(f"[stream_manager] Rejected registering stream: stream_id={path_name} reason=not synchronized from Video Server API or inactive")
+                    print(f"[stream_manager] Rejected registering stream: stream_id={path_name} reason=inactive")
                     return
 
             url_strip = stream.stream_url.strip()

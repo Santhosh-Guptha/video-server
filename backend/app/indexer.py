@@ -65,7 +65,6 @@ async def index_recordings(session, recording_dir):
             select(CameraStream.stream_id)
             .join(Camera)
             .where(Camera.active == True)
-            .where(Camera.synced_from_api == True)
         )
     else:
         stream_res = await session.execute(select(CameraStream.stream_id))

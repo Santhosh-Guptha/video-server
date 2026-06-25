@@ -166,10 +166,10 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                         if settings.strict_camera_validation:
                             if stream:
                                 camera = stream.camera
-                                if camera and camera.active and camera.synced_from_api:
+                                if camera and camera.active:
                                     is_valid = True
                             if not is_valid:
-                                print(f"[edge_receiver] Rejected camera: camera_id={camera_id} reason=not synchronized from Video Server API")
+                                print(f"[edge_receiver] Rejected camera: camera_id={camera_id} reason=inactive")
                                 await RedisManager.increment_counter("rejected_edge_connections")
                         else:
                             # Open/Development Mode

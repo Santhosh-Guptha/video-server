@@ -492,8 +492,8 @@ async def record_segment_complete(
 
     if settings.strict_camera_validation:
         camera = stream.camera
-        if not camera or not camera.synced_from_api or not camera.active:
-            print(f"[webhook] Rejected indexing segment for stream: stream_id={payload.stream_id} reason=not synchronized from Video Server API or inactive")
+        if not camera or not camera.active:
+            print(f"[webhook] Rejected indexing segment for stream: stream_id={payload.stream_id} reason=inactive")
             return {"status": "ignored", "reason": "strict_validation_failed"}
         
     # 3. Resolve relative path (stream_id/date/filename) from the payload path
@@ -1715,12 +1715,12 @@ async def upload_edge_backlog(
     if settings.strict_camera_validation:
         if stream:
             camera = stream.camera
-            if camera and camera.active and camera.synced_from_api:
+            if camera and camera.active:
                 is_valid = True
         if not is_valid:
-            print(f"[upload] Rejected camera: camera_id={stream_id} reason=not synchronized from Video Server API")
+            print(f"[upload] Rejected camera: camera_id={stream_id} reason=inactive")
             await RedisManager.increment_counter("rejected_uploads")
-            raise HTTPException(status_code=403, detail="Forbidden: Device is inactive or not synchronized from Video Server API")
+            raise HTTPException(status_code=403, detail="Forbidden: Device is inactive")
     else:
         # Open/Development Mode
         if stream:

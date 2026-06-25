@@ -145,7 +145,6 @@ async def camera_health_watchdog_loop():
                         select(CameraStream)
                         .join(Camera)
                         .where(Camera.active == True)
-                        .where(Camera.synced_from_api == True)
                     )
                     active_streams = list(res.scalars().all())
 
