@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Loader2, Play, Volume2, VolumeX, Maximize2 } from 'lucide-react';
+import { AlertCircle, Loader2, Play, Volume2, VolumeX, Maximize2, X } from 'lucide-react';
 import { StreamHealthBadge, StreamHealthState } from './StreamHealthBadge';
 import { SessionStatsOverlay, PlayerStats } from './SessionStatsOverlay';
 
@@ -9,9 +9,11 @@ interface WebRTCPlayerProps {
   isFocused?: boolean;
   minimal?: boolean;
   onFallbackToHls: () => void;
+  onClose?: () => void;
+  onFocus?: () => void;
 }
 
-export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFallbackToHls }: WebRTCPlayerProps) {
+export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFallbackToHls, onClose, onFocus }: WebRTCPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const statsIntervalRef = useRef<number | null>(null);
@@ -327,7 +329,11 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   };
 
   return (
-    <div className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} style={{ width: '100%', height: '100%', position: 'relative' }}>
+    <div 
+      className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} 
+      onClick={onFocus} 
+      style={{ width: '100%', height: '100%', position: 'relative', cursor: onFocus ? 'pointer' : 'default' }}
+    >
       {!minimal && (
         <div className="playerHeader">
           <div>
@@ -335,6 +341,19 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
             <h3 className="panelTitle">Real-time WebRTC camera view</h3>
           </div>
           <div className="playerChips" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {onClose && (
+              <button
+                className="playerCloseBtn"
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose();
+                }}
+                title="Deselect camera"
+              >
+                <X size={16} />
+              </button>
+            )}
             <StreamHealthBadge status={health} errorMessage={errorMessage} />
             <span className="chip chipLive"><span className="dotPulse" />Live</span>
             <span className="chip" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}>WebRTC (WHEP)</span>
@@ -349,6 +368,29 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
             {posterLabel ?? 'Live feed'}
             <span style={{ marginLeft: '6px', fontSize: '9px', opacity: 0.8, color: '#38bdf8' }}>WebRTC</span>
           </div>
+        )}
+        {minimal && onClose && (
+          <button
+            className="playerCloseBtn"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            title="Deselect camera"
+            style={{
+              position: 'absolute',
+              top: '10px',
+              right: '10px',
+              zIndex: 12,
+              background: 'rgba(15, 23, 42, 0.75)',
+              backdropFilter: 'blur(4px)',
+              border: '1px solid rgba(148, 163, 184, 0.15)',
+              color: '#fca5a5'
+            }}
+          >
+            <X size={14} />
+          </button>
         )}
         
         {!loaded && (

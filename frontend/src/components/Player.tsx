@@ -26,59 +26,18 @@ export function Player({ src, posterLabel, isFocused, onClose, onFocus, minimal 
 
   if (useWebRTC && streamId) {
     return (
-      <div 
-        className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} 
-        onClick={onFocus} 
-        style={{ cursor: onFocus ? 'pointer' : 'default', width: '100%', height: '100%' }}
-      >
-        {onClose && !minimal && (
-          <button
-            className="playerCloseBtn"
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose()
-            }}
-            title="Deselect camera"
-            style={{ position: 'absolute', top: '16px', right: '16px', zIndex: 12 }}
-          >
-            <X size={16} />
-          </button>
-        )}
-        {onClose && minimal && (
-          <button
-            className="playerCloseBtn"
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose()
-            }}
-            title="Deselect camera"
-            style={{
-              position: 'absolute',
-              top: '10px',
-              right: '10px',
-              zIndex: 12,
-              background: 'rgba(15, 23, 42, 0.75)',
-              backdropFilter: 'blur(4px)',
-              border: '1px solid rgba(148, 163, 184, 0.15)',
-              color: '#fca5a5'
-            }}
-          >
-            <X size={14} />
-          </button>
-        )}
-        <WebRTCPlayer
-          streamId={streamId}
-          posterLabel={posterLabel}
-          isFocused={isFocused}
-          minimal={minimal}
-          onFallbackToHls={() => {
-            console.log(`[Player] WebRTC failed. Falling back to HLS for stream: ${streamId}`);
-            setUseWebRTC(false);
-          }}
-        />
-      </div>
+      <WebRTCPlayer
+        streamId={streamId}
+        posterLabel={posterLabel}
+        isFocused={isFocused}
+        minimal={minimal}
+        onClose={onClose}
+        onFocus={onFocus}
+        onFallbackToHls={() => {
+          console.log(`[Player] WebRTC failed. Falling back to HLS for stream: ${streamId}`);
+          setUseWebRTC(false);
+        }}
+      />
     )
   }
 
