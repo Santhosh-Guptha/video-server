@@ -812,6 +812,32 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
             output_path = stream_record_dir / filename
 
             is_hevc = stream.codec and stream.codec.lower() in ("hevc", "h265")
+
+            # Dynamic HEVC check fallback: if DB says H264, probe the actual stream to be sure
+            if not is_hevc:
+                try:
+                    cmd_probe = [
+                        "ffprobe", "-v", "error",
+                        "-rtsp_transport", "tcp",
+                        "-select_streams", "v:0",
+                        "-show_entries", "stream=codec_name",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        recovery_url
+                    ]
+                    proc_probe = await asyncio.create_subprocess_exec(
+                        *cmd_probe,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                    if proc_probe.returncode == 0:
+                        codec_name = stdout_probe.decode().strip()
+                        if codec_name.lower() in ("hevc", "h265"):
+                            is_hevc = True
+                            print(f"[recovery] [manual] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
+                except Exception as probe_err:
+                    print(f"[recovery] [manual] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
+
             codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-c:a", "copy"] if is_hevc else ["-c", "copy"]
 
             async with semaphore:

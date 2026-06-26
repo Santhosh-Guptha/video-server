@@ -99,21 +99,25 @@ async def camera_scheduler_loop():
                             await RedisManager.set_viewer_count(stream.stream_id, clients_count)
                             
                             # Dynamic codec detection based on active MediaMTX tracks
-                            tracks = stream_info.get("tracks") or []
-                            if isinstance(tracks, list):
-                                has_h265 = any(isinstance(t, str) and t.upper().startswith("H265") for t in tracks)
-                                has_h264 = any(isinstance(t, str) and t.upper().startswith("H264") for t in tracks)
-                                
+                            # Skip if we are currently transcoding with the local FPS transcoder
+                            if stream.stream_id in stream_manager._fps_transcoders:
                                 detected_codec = None
-                                if has_h265:
-                                    detected_codec = "H265"
-                                elif has_h264:
-                                    detected_codec = "H264"
+                            else:
+                                tracks = stream_info.get("tracks") or []
+                                if isinstance(tracks, list):
+                                    has_h265 = any(isinstance(t, str) and t.upper().startswith("H265") for t in tracks)
+                                    has_h264 = any(isinstance(t, str) and t.upper().startswith("H264") for t in tracks)
                                     
-                                if detected_codec and stream.codec != detected_codec:
-                                    print(f"[scheduler] Dynamically detected {detected_codec} codec for stream {stream.stream_id} (tracks: {tracks}, was: {stream.codec})")
-                                    stream.codec = detected_codec
-                                    await session.commit()
+                                    detected_codec = None
+                                    if has_h265:
+                                        detected_codec = "H265"
+                                    elif has_h264:
+                                        detected_codec = "H264"
+                                        
+                                    if detected_codec and stream.codec != detected_codec:
+                                        print(f"[scheduler] Dynamically detected {detected_codec} codec for stream {stream.stream_id} (tracks: {tracks}, was: {stream.codec})")
+                                        stream.codec = detected_codec
+                                        await session.commit()
                             
                             # Transition to ONLINE
                             if stream.status != StreamState.ONLINE:
@@ -286,6 +290,32 @@ async def camera_gap_recovery_loop():
 
                 codec = task.get("codec")
                 is_hevc = codec and codec.lower() in ("hevc", "h265")
+
+                # Dynamic HEVC check fallback: if DB says H264, probe the actual stream to be sure
+                if not is_hevc:
+                    try:
+                        cmd_probe = [
+                            "ffprobe", "-v", "error",
+                            "-rtsp_transport", "tcp",
+                            "-select_streams", "v:0",
+                            "-show_entries", "stream=codec_name",
+                            "-of", "default=noprint_wrappers=1:nokey=1",
+                            recovery_url
+                        ]
+                        proc_probe = await asyncio.create_subprocess_exec(
+                            *cmd_probe,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                        if proc_probe.returncode == 0:
+                            codec_name = stdout_probe.decode().strip()
+                            if codec_name.lower() in ("hevc", "h265"):
+                                is_hevc = True
+                                print(f"[recovery] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
+                    except Exception as probe_err:
+                        print(f"[recovery] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
+
                 codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-c:a", "copy"] if is_hevc else ["-c", "copy"]
 
                 async with semaphore:

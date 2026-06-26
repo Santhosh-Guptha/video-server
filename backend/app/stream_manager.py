@@ -151,9 +151,9 @@ class StreamManager:
                     stream.stream_source = "RTSP_PULL" if has_valid_rtsp else "EDGE_PUSH"
                 is_push = (stream.stream_source == "EDGE_PUSH")
 
-            # Check if actual FPS is greater than configured FPS to trigger limiting
+            # Check if actual FPS is greater than configured FPS to trigger limiting, and probe stream codec
             should_limit_fps = False
-            if not is_push and has_valid_rtsp and stream.fps:
+            if not is_push and has_valid_rtsp:
                 actual_fps = None
                 try:
                     import json
@@ -161,7 +161,7 @@ class StreamManager:
                         "ffprobe", "-v", "error",
                         "-rtsp_transport", "tcp",
                         "-select_streams", "v:0",
-                        "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+                        "-show_entries", "stream=avg_frame_rate,r_frame_rate,codec_name",
                         "-of", "json",
                         url_strip
                     ]
@@ -175,19 +175,29 @@ class StreamManager:
                         probe_data = json.loads(stdout_probe.decode())
                         streams_info = probe_data.get("streams", [])
                         if streams_info:
-                            avg_frame_rate = streams_info[0].get("avg_frame_rate", "0/0")
-                            n, d = map(int, avg_frame_rate.split("/"))
-                            if d > 0 and n > 0:
-                                actual_fps = n / d
-                            else:
-                                r_frame_rate = streams_info[0].get("r_frame_rate", "0/0")
-                                n, d = map(int, r_frame_rate.split("/"))
-                                if d > 0 and n > 0 and (n/d) < 1000:  # filter ticks
-                                    actual_fps = n / d
-                except Exception as probe_err:
-                    print(f"[stream_manager] Failed to probe FPS for {path_name}: {probe_err}")
+                            # 1. Update codec in database
+                            codec_name = streams_info[0].get("codec_name", "")
+                            if codec_name:
+                                detected_codec = "H265" if codec_name.lower() in ("hevc", "h265") else "H264"
+                                if stream.codec != detected_codec:
+                                    print(f"[stream_manager] Probed codec {detected_codec} (was {stream.codec}) for {path_name}")
+                                    stream.codec = detected_codec
 
-                if actual_fps and actual_fps > stream.fps:
+                            # 2. Check FPS
+                            if stream.fps:
+                                avg_frame_rate = streams_info[0].get("avg_frame_rate", "0/0")
+                                n, d = map(int, avg_frame_rate.split("/"))
+                                if d > 0 and n > 0:
+                                    actual_fps = n / d
+                                else:
+                                    r_frame_rate = streams_info[0].get("r_frame_rate", "0/0")
+                                    n, d = map(int, r_frame_rate.split("/"))
+                                    if d > 0 and n > 0 and (n/d) < 1000:  # filter ticks
+                                        actual_fps = n / d
+                except Exception as probe_err:
+                    print(f"[stream_manager] Failed to probe stream for {path_name}: {probe_err}")
+
+                if actual_fps and stream.fps and actual_fps > stream.fps:
                     should_limit_fps = True
                     print(f"[stream_manager] Stream {path_name} actual FPS ({actual_fps:.2f}) > configured ({stream.fps}). Enabling transcoder.")
 
