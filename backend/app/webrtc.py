@@ -234,35 +234,9 @@ async def report_stream_stats(
     )
     session.add(history)
 
-    # 3. Dynamically update CameraStream specs in the database based on real-time stats
-    try:
-        from .models import CameraStream
-        stream_res = await session.execute(
-            select(CameraStream).where(CameraStream.stream_id == stream_id)
-        )
-        stream = stream_res.scalar_one_or_none()
-        if stream:
-            updated = False
-            if payload.fps > 0:
-                rounded_fps = max(1, int(round(payload.fps)))
-                if stream.fps != rounded_fps:
-                    print(f"[webrtc] Dynamically updating stream {stream_id} FPS from {stream.fps} to {rounded_fps} (live reported: {payload.fps})")
-                    stream.fps = rounded_fps
-                    updated = True
-            if payload.resolution and stream.resolution != payload.resolution:
-                print(f"[webrtc] Dynamically updating stream {stream_id} resolution from {stream.resolution} to {payload.resolution}")
-                stream.resolution = payload.resolution
-                updated = True
-            if payload.bitrate > 0:
-                bitrate_val = int(round(payload.bitrate))
-                if not stream.bitrate or abs(stream.bitrate - bitrate_val) > 50:
-                    print(f"[webrtc] Dynamically updating stream {stream_id} bitrate from {stream.bitrate} to {bitrate_val} kbps")
-                    stream.bitrate = bitrate_val
-                    updated = True
-            if updated:
-                session.add(stream)
-    except Exception as update_err:
-        print(f"[webrtc] Failed to dynamically update stream specs in DB: {update_err}")
+    # 3. Log real-time specs, but do NOT overwrite database configurations
+    # because they represent the configured target rates, not transient metrics.
+    pass
 
     await session.commit()
     

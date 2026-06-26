@@ -1154,10 +1154,9 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
             await session.flush()
         else:
             stream.stream_url = stream_url
-            if stream.status != StreamState.ONLINE:
-                stream.resolution = res_str
-                stream.fps = fps_val
-                stream.bitrate = bitrate_val
+            stream.resolution = res_str
+            stream.fps = fps_val
+            stream.bitrate = bitrate_val
             if stream.codec != "H265":
                 stream.codec = codec_val
             stream.always_on = always_on_val

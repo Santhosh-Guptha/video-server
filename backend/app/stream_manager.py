@@ -57,7 +57,7 @@ class StreamManager:
             "-rtsp_transport", "tcp",
             "-i", stream.stream_url,
             "-an",
-            "-r", str(stream.fps),
+            "-vf", f"fps=fps={stream.fps}",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
