@@ -159,8 +159,9 @@ class StreamManager:
                     import json
                     cmd_probe = [
                         "ffprobe", "-v", "error",
+                        "-rtsp_transport", "tcp",
                         "-select_streams", "v:0",
-                        "-show_entries", "stream=avg_frame_rate",
+                        "-show_entries", "stream=avg_frame_rate,r_frame_rate",
                         "-of", "json",
                         url_strip
                     ]
@@ -169,15 +170,20 @@ class StreamManager:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=3.0)
+                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
                     if proc_probe.returncode == 0:
                         probe_data = json.loads(stdout_probe.decode())
                         streams_info = probe_data.get("streams", [])
                         if streams_info:
                             avg_frame_rate = streams_info[0].get("avg_frame_rate", "0/0")
                             n, d = map(int, avg_frame_rate.split("/"))
-                            if d > 0:
+                            if d > 0 and n > 0:
                                 actual_fps = n / d
+                            else:
+                                r_frame_rate = streams_info[0].get("r_frame_rate", "0/0")
+                                n, d = map(int, r_frame_rate.split("/"))
+                                if d > 0 and n > 0 and (n/d) < 1000:  # filter ticks
+                                    actual_fps = n / d
                 except Exception as probe_err:
                     print(f"[stream_manager] Failed to probe FPS for {path_name}: {probe_err}")
 
