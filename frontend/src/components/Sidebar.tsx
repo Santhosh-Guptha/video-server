@@ -1,4 +1,4 @@
-import { Camera, RefreshCw, Radar, Clock3, Wifi, Sliders, Video } from 'lucide-react'
+import { Camera, RefreshCw, Radar, Clock3, Wifi, Sliders, Video, LayoutGrid, Tv, Database } from 'lucide-react'
 
 type SidebarProps = {
   onRefresh: () => void
@@ -53,11 +53,19 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, ac
         </button>
         <button
           type="button"
+          className={`navItem ${activeTab === 'live_wall' ? 'active' : ''}`}
+          onClick={() => setActiveTab('live_wall')}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Tv size={14} /> Live Wall
+        </button>
+        <button
+          type="button"
           className={`navItem ${activeTab === 'live' ? 'active' : ''}`}
           onClick={() => setActiveTab('live')}
-          style={{ textAlign: 'left', width: '100%' }}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
         >
-          Live View
+          <LayoutGrid size={14} /> Live Grid
         </button>
         <button
           type="button"
@@ -66,6 +74,14 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, ac
           style={{ textAlign: 'left', width: '100%' }}
         >
           Playback
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'gap_recovery' ? 'active' : ''}`}
+          onClick={() => setActiveTab('gap_recovery')}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Database size={14} /> Gap Recovery
         </button>
         <button
           type="button"

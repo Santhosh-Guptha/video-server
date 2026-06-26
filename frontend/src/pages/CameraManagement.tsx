@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Plus, Edit, Trash2, Camera as CameraIcon, Save, X, Activity, Sliders, Database, AlertTriangle, Layers, Clock } from 'lucide-react'
+import { Plus, Edit, Trash2, Camera as CameraIcon, Save, X, Activity, Sliders, Database, AlertTriangle, Layers, Clock, Copy, Loader2 } from 'lucide-react'
 import type { Camera } from '../types'
-import { createCamera, updateCamera, deleteCamera, getSystemSettings, updateSystemSettings } from '../lib/api'
+import { createCamera, updateCamera, deleteCamera, getSystemSettings, updateSystemSettings, testRtspConnection } from '../lib/api'
 
 type Props = {
   cameras: Camera[]
@@ -46,6 +46,13 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     }
   }
 
+  // Ingress RTSP connection testing state
+  const [testingConnection, setTestingConnection] = useState(false)
+  const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string } | null>(null)
+
+  // Batch selection state
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+
   // Form states
   const [name, setName] = useState('')
   const [sourceCameraId, setSourceCameraId] = useState<number>(1)
@@ -74,6 +81,127 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     setStreamUrl('')
     setAlwaysOn(false)
     setActive(true)
+    setConnectionTestResult(null)
+  }
+
+  const handleTestConnection = async () => {
+    if (!streamUrl) {
+      setError('Please enter an RTSP URL to test')
+      return
+    }
+    setTestingConnection(true)
+    setConnectionTestResult(null)
+    try {
+      const res = await testRtspConnection(streamUrl)
+      setConnectionTestResult(res)
+    } catch (err: any) {
+      setConnectionTestResult({ success: false, message: err.message || 'Connection test failed' })
+    } finally {
+      setTestingConnection(false)
+    }
+  }
+
+  const handleCloneClick = (cam: Camera) => {
+    resetForm()
+    setError(null)
+    setSuccess(null)
+    setEditingCamera(null)
+    setShowAddForm(true)
+
+    // Pre-fill fields
+    setName(`${cam.name} (Clone)`)
+    
+    // Find next unique source_camera_id
+    const nextId = cameras.length > 0 ? Math.max(...cameras.map(c => c.source_camera_id)) + 1 : 1
+    setSourceCameraId(nextId)
+    setMake(cam.make || '')
+    setActive(cam.active)
+    
+    const stream = cam.streams[0]
+    if (stream) {
+      setStreamId(`${stream.stream_id}_clone`)
+      setProfileType(stream.profile_type)
+      setResolution(stream.resolution)
+      setFps(stream.fps)
+      setCodec(stream.codec)
+      setBitrate(stream.bitrate ? stream.bitrate.toString() : '')
+      setStreamUrl(stream.stream_url)
+      setAlwaysOn(!!stream.always_on)
+    }
+  }
+
+  const handleToggleSelectAll = () => {
+    if (selectedIds.length === cameras.length) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(cameras.map(c => c.streams[0]?.stream_id).filter(Boolean) as string[])
+    }
+  }
+
+  const handleToggleSelect = (sId: string) => {
+    setSelectedIds(prev => prev.includes(sId) ? prev.filter(id => id !== sId) : [...prev, sId])
+  }
+
+  const handleBatchActive = async (activeState: boolean) => {
+    if (selectedIds.length === 0) return
+    setLoading(true)
+    setError(null)
+    setSuccess(null)
+    let count = 0
+    try {
+      for (const sId of selectedIds) {
+        const cam = cameras.find(c => c.streams.some(s => s.stream_id === sId))
+        if (!cam) continue
+        const mainStream = cam.streams[0]
+        if (!mainStream) continue
+        await updateCamera(sId, {
+          name: cam.name,
+          active: activeState,
+          make: cam.make,
+          resolution: mainStream.resolution,
+          fps: mainStream.fps,
+          codec: mainStream.codec,
+          bitrate: mainStream.bitrate,
+          stream_url: mainStream.stream_url,
+          always_on: mainStream.always_on
+        })
+        count++
+      }
+      setSuccess(`Successfully updated active state for ${count} cameras!`)
+      setSelectedIds([])
+      onRefresh()
+    } catch (err: any) {
+      setError(err.message || 'Batch update active state failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    if (selectedIds.length === 0) return
+    if (!confirm(`Are you sure you want to delete ${selectedIds.length} cameras? This will permanently delete their configuration and recordings directories, and cannot be undone.`)) {
+      return
+    }
+    setLoading(true)
+    setError(null)
+    setSuccess(null)
+    let count = 0
+    try {
+      for (const sId of selectedIds) {
+        const cam = cameras.find(c => c.streams.some(s => s.stream_id === sId))
+        if (cam && !cam.synced_from_api) {
+          await deleteCamera(sId)
+          count++
+        }
+      }
+      setSuccess(`Successfully deleted ${count} local cameras!`)
+      setSelectedIds([])
+      onRefresh()
+    } catch (err: any) {
+      setError(err.message || 'Batch delete failed')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleAddClick = () => {
@@ -292,9 +420,56 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Bitrate (kbps)</label>
                 <input type="number" value={bitrate} onChange={e => setBitrate(e.target.value)} placeholder="e.g. 2048" className="vms-input" />
               </div>
-              <div>
+              <div style={{ gridColumn: 'span 2' }}>
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>RTSP Ingress URL *</label>
-                <input value={streamUrl} onChange={e => setStreamUrl(e.target.value)} required placeholder="rtsp://host:port/stream" className="vms-input" />
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <input
+                    value={streamUrl}
+                    onChange={e => setStreamUrl(e.target.value)}
+                    required
+                    placeholder="rtsp://host:port/stream"
+                    className="vms-input"
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestConnection}
+                    disabled={testingConnection || !streamUrl}
+                    className="batchBtn"
+                    style={{
+                      padding: '8px 16px',
+                      background: 'rgba(59, 130, 246, 0.1)',
+                      color: '#60a5fa',
+                      borderColor: 'rgba(59, 130, 246, 0.2)',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {testingConnection ? (
+                      <>
+                        <Loader2 className="spin" size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                        Testing...
+                      </>
+                    ) : 'Test Connection'}
+                  </button>
+                </div>
+                {connectionTestResult && (
+                  <div style={{
+                    marginTop: '8px',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    fontSize: '0.78rem',
+                    background: connectionTestResult.success ? 'rgba(52, 211, 153, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                    border: `1px solid ${connectionTestResult.success ? 'rgba(52, 211, 153, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
+                    color: connectionTestResult.success ? '#34d399' : '#f87171'
+                  }}>
+                    {connectionTestResult.message}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -334,9 +509,69 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       {/* Camera Inventory List */}
       {!showAddForm && !editingCamera && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#e2e8f0', margin: '10px 0 0 0' }}>
-            Registered Ingress Configurations ({cameras.length})
-          </h3>
+          
+          {/* Header & Select All */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '10px 0 0 0' }}>
+            <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#e2e8f0', margin: 0 }}>
+              Registered Ingress Configurations ({cameras.length})
+            </h3>
+            {cameras.length > 0 && (
+              <button
+                type="button"
+                onClick={handleToggleSelectAll}
+                className="batchBtn"
+                style={{ fontSize: '0.78rem', padding: '6px 12px' }}
+              >
+                {selectedIds.length === cameras.length ? 'Deselect All' : 'Select All'}
+              </button>
+            )}
+          </div>
+
+          {/* Batch Actions Toolbar */}
+          {selectedIds.length > 0 && (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '12px 18px', background: 'rgba(168, 85, 247, 0.12)', border: '1px solid rgba(168, 85, 247, 0.25)',
+              borderRadius: '12px', marginBottom: '4px'
+            }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#d8b4fe' }}>
+                {selectedIds.length} camera(s) selected
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => handleBatchActive(true)}
+                  disabled={loading}
+                  className="batchBtn start"
+                  style={{ padding: '6px 12px', fontSize: '0.78rem', background: 'rgba(52, 211, 153, 0.15)', color: '#34d399', borderColor: 'rgba(52, 211, 153, 0.3)' }}
+                >
+                  Enable Active
+                </button>
+                <button
+                  onClick={() => handleBatchActive(false)}
+                  disabled={loading}
+                  className="batchBtn"
+                  style={{ padding: '6px 12px', fontSize: '0.78rem', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+                >
+                  Disable Ingress
+                </button>
+                <button
+                  onClick={handleBatchDelete}
+                  disabled={loading}
+                  className="batchBtn"
+                  style={{ padding: '6px 12px', fontSize: '0.78rem', background: 'rgba(239, 68, 68, 0.25)', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+                >
+                  Delete Selected
+                </button>
+                <button
+                  onClick={() => setSelectedIds([])}
+                  className="batchBtn"
+                  style={{ padding: '6px 12px', fontSize: '0.78rem' }}
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+          )}
 
           {cameras.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', background: 'rgba(30, 41, 59, 0.2)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '16px' }}>
@@ -348,20 +583,39 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {cameras.map((cam) => {
                 const stream = cam.streams[0]
+                const streamIdVal = stream?.stream_id
+                const isChecked = streamIdVal ? selectedIds.includes(streamIdVal) : false
+                
                 return (
                   <div 
                     key={cam.id} 
                     style={{ 
                       padding: '16px 20px', 
-                      background: 'rgba(15, 23, 42, 0.3)', 
-                      border: '1px solid rgba(255,255,255,0.05)', 
+                      background: isChecked ? 'rgba(168, 85, 247, 0.05)' : 'rgba(15, 23, 42, 0.3)', 
+                      border: isChecked ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(255,255,255,0.05)', 
                       borderRadius: '16px',
                       display: 'flex',
                       justifyContent: 'space-between',
-                      alignItems: 'center'
+                      alignItems: 'center',
+                      transition: 'all 0.2s'
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                      {/* Checkbox column */}
+                      {streamIdVal && (
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => handleToggleSelect(streamIdVal)}
+                          style={{
+                            width: '16px',
+                            height: '16px',
+                            cursor: 'pointer',
+                            accentColor: '#a855f7'
+                          }}
+                        />
+                      )}
+                      
                       <div style={{ padding: '10px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
                         <CameraIcon size={20} />
                       </div>
@@ -376,13 +630,26 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                               Synced (Cloud)
                             </span>
                           )}
+                          {(() => {
+                            const isEdge = !cam.rtsp_url || cam.rtsp_url.trim() === "" || !cam.rtsp_url.trim().toLowerCase().startsWith("rtsp://");
+                            return (
+                              <span style={{
+                                padding: '2px 8px', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600,
+                                background: isEdge ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.12)',
+                                color: isEdge ? '#c084fc' : '#60a5fa',
+                                border: `1px solid ${isEdge ? 'rgba(168, 85, 247, 0.2)' : 'rgba(59, 130, 246, 0.2)'}`
+                              }}>
+                                {isEdge ? 'Edge Push' : 'RTSP Ingress'}
+                              </span>
+                            );
+                          })()}
                         </div>
                         <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '0.76rem', color: '#94a3b8' }}>
                           <span>Make: {cam.make || 'Generic'}</span>
                           <span>•</span>
                           <span>Stream ID: <code style={{ fontFamily: 'monospace', color: '#38bdf8' }}>{stream?.stream_id || '—'}</code></span>
                           <span>•</span>
-                          <span>RTSP Ingress: <code style={{ fontFamily: 'monospace' }}>{stream?.stream_url || '—'}</code></span>
+                          <span>Ingress URL: <code style={{ fontFamily: 'monospace' }}>{stream?.stream_url || '—'}</code></span>
                           {stream?.always_on && (
                             <>
                               <span>•</span>
@@ -394,6 +661,14 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px' }}>
+                      <button 
+                        onClick={() => handleCloneClick(cam)}
+                        className="batchBtn"
+                        title="Clone / Duplicate Camera Settings"
+                        style={{ padding: '8px', minWidth: 'auto', background: 'rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.15)', color: '#d8b4fe' }}
+                      >
+                        <Copy size={16} />
+                      </button>
                       <button 
                         onClick={() => handleEditClick(cam)}
                         className="batchBtn"

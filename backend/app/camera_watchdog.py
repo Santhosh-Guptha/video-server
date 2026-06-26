@@ -210,7 +210,9 @@ async def camera_health_watchdog_loop():
                                 async for session in get_session():
                                     stream_db = await session.get(CameraStream, stream.id)
                                     if stream_db:
-                                        stream_db.stream_source = "RTSP_PULL"
+                                        url_strip = (stream_db.stream_url or "").strip()
+                                        has_valid_pull = url_strip.startswith(("rtsp://", "rtsps://", "rtmp://"))
+                                        stream_db.stream_source = "RTSP_PULL" if has_valid_pull else "EDGE_PUSH"
                                         await session.commit()
                                         await stream_manager.set_stream_state(
                                             session, stream_db, StreamState.ONLINE
@@ -329,12 +331,14 @@ async def edge_push_watchdog_loop():
                         # Update stream state
                         stream_db = await session.get(CameraStream, stream.id)
                         if stream_db:
-                            stream_db.stream_source = "RTSP_PULL"
+                            url_strip = (stream_db.stream_url or "").strip()
+                            has_valid_pull = url_strip.startswith(("rtsp://", "rtsps://", "rtmp://"))
+                            stream_db.stream_source = "RTSP_PULL" if has_valid_pull else "EDGE_PUSH"
                             await session.commit()
                             await stream_manager.set_stream_state(
                                 session, stream_db,
-                                StreamState.CONNECTING if _is_valid_rtsp(rtsp_url) else StreamState.OFFLINE,
-                                None if _is_valid_rtsp(rtsp_url) else "Edge push disconnected, no RTSP fallback"
+                                StreamState.CONNECTING if has_valid_pull else StreamState.OFFLINE,
+                                None if has_valid_pull else "Edge push disconnected, no RTSP fallback"
                             )
 
                         # Clear the stale push heartbeat from Redis

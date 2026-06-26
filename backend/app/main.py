@@ -1,10 +1,11 @@
 import json
 import time
+from datetime import datetime
 import http.client
 http.client._MAXHEADERS = 100000
 from pathlib import Path
 from typing import Annotated
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select, delete, text, or_
@@ -171,6 +172,97 @@ def configure_mediamtx_paths_dynamically():
 
 @app.on_event("startup")
 async def startup():
+    # 1. Detect upstream API URL change and clean up if it did
+    import os
+    import shutil
+    from pathlib import Path
+    
+    last_url_file = Path("./data/last_upstream_url.txt")
+    current_url = settings.upstream_camera_api_url.strip()
+    url_changed = False
+    
+    if last_url_file.exists():
+        try:
+            last_url = last_url_file.read_text().strip()
+            if last_url and last_url != current_url:
+                url_changed = True
+                print(f"[startup] DETECTED UPSTREAM CAMERA API URL CHANGE:")
+                print(f"  Old URL: {last_url}")
+                print(f"  New URL: {current_url}")
+        except Exception as e:
+            print(f"[startup] Error reading last upstream URL file: {e}")
+    else:
+        # If tracker file doesn't exist, but database exists and is not the default, trigger initial cleanup
+        db_file = Path("./data/app.db")
+        if db_file.exists() and current_url != "https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver":
+            url_changed = True
+            print(f"[startup] First run of tracking, but DB exists and current URL is not the old default. Triggering cleanup.")
+
+    if url_changed:
+        print("[startup] TRIGGERING AUTOMATIC WIPE OF DATABASE AND RECORDINGS...")
+        
+        # A. Clear SQLite database files
+        db_file = Path("./data/app.db")
+        for suffix in ["", "-journal", "-shm", "-wal"]:
+            p = Path(str(db_file) + suffix)
+            if p.exists():
+                try:
+                    p.unlink()
+                    print(f"[startup] Deleted database file: {p}")
+                except Exception as ex:
+                    print(f"[startup] Error deleting database file {p}: {ex}")
+                    
+        # B. Clear recordings directory content
+        rec_dir = Path(settings.recording_dir)
+        if rec_dir.exists():
+            print(f"[startup] Clearing recordings directory: {rec_dir}")
+            for item in rec_dir.iterdir():
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                except Exception as ex:
+                    print(f"[startup] Error deleting recording item {item}: {ex}")
+                    
+        # C. Clear HLS directory content
+        hls_dir = Path(settings.hls_dir)
+        if hls_dir.exists():
+            print(f"[startup] Clearing HLS directory: {hls_dir}")
+            for item in hls_dir.iterdir():
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                except Exception as ex:
+                    print(f"[startup] Error deleting HLS item {item}: {ex}")
+                    
+        # D. Clear backup_cameras.json file
+        backup_cameras_file = Path(os.path.dirname(os.path.abspath(__file__))) / "backup_cameras.json"
+        if backup_cameras_file.exists():
+            try:
+                backup_cameras_file.unlink()
+                print(f"[startup] Deleted cached backup camera config: {backup_cameras_file}")
+            except Exception as ex:
+                print(f"[startup] Error deleting backup camera file: {ex}")
+
+        # E. Clear Redis DB cache
+        try:
+            from .redis_client import redis_client
+            if redis_client:
+                await redis_client.flushdb()
+                print("[startup] Flushed Redis database cache.")
+        except Exception as rx:
+            print(f"[startup] Error flushing Redis database: {rx}")
+
+    # Write current URL to tracking file
+    try:
+        last_url_file.parent.mkdir(parents=True, exist_ok=True)
+        last_url_file.write_text(current_url)
+    except Exception as e:
+        print(f"[startup] Error writing last upstream URL to file: {e}")
+
     # Dynamically configure MediaMTX path mapping and hooks
     try:
         configure_mediamtx_paths_dynamically()
@@ -622,6 +714,190 @@ async def get_recovered_stats(
     }
 
 
+# ----------------------------------------------------
+# Manual Recording Gap Scanning & Recovery Endpoints
+# ----------------------------------------------------
+@app.get("/api/recordings/{stream_id}/gaps")
+async def get_recording_gaps(
+    stream_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    start_time: float | None = None,
+    end_time: float | None = None
+):
+    now = time.time()
+    start_ts = start_time if start_time is not None else (now - 24 * 3600)
+    end_ts = end_time if end_time is not None else now
+
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
+    if not stream:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+
+    # Fetch segments
+    seg_res = await session.execute(
+        select(RecordingSegment)
+        .where(RecordingSegment.stream_id == stream.stream_id)
+        .where(RecordingSegment.start_ts >= start_ts)
+        .where(RecordingSegment.end_ts <= end_ts)
+        .order_by(RecordingSegment.start_ts.asc())
+    )
+    segments = list(seg_res.scalars().all())
+
+    gaps = []
+    if not segments:
+        return []
+
+    for i in range(len(segments) - 1):
+        curr = segments[i]
+        nxt = segments[i+1]
+        
+        gap_start = curr.end_ts
+        gap_end = nxt.start_ts
+        gap_duration = gap_end - gap_start
+        
+        if gap_duration >= 5.0:
+            seg_time = settings.segment_time_seconds
+            # Align temp_start to segment boundary
+            temp_start = (gap_start // seg_time) * seg_time
+            while temp_start < gap_end:
+                next_end = temp_start + seg_time
+                if next_end <= gap_end:
+                    dt_start = datetime.fromtimestamp(temp_start)
+                    dt_end = datetime.fromtimestamp(next_end)
+                    gaps.append({
+                        "start_ts": temp_start,
+                        "end_ts": next_end,
+                        "duration": seg_time,
+                        "formatted_start": dt_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        "formatted_end": dt_end.strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                temp_start += seg_time
+    return gaps
+
+
+async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
+    print(f"[recovery] [manual] Starting manual recovery task for {stream_id} ({len(gap_chunks)} chunks)...")
+    from .db import get_session
+    from .models import CameraStream, Camera, RecordingSegment
+    from .providers import get_playback_recovery_provider
+    
+    # We resolve inside the background session
+    async for session in get_session():
+        res = await session.execute(
+            select(CameraStream)
+            .options(selectinload(CameraStream.camera))
+            .where(CameraStream.stream_id == stream_id)
+        )
+        stream = res.scalar_one_or_none()
+        if not stream:
+            print(f"[recovery] [manual] Stream {stream_id} not found in database inside background task.")
+            return
+
+        semaphore = asyncio.Semaphore(3)
+
+        async def download_chunk(chunk):
+            temp_start = chunk["start_ts"]
+            temp_end = chunk["end_ts"]
+            
+            # Resolve vendor provider
+            make_val = stream.camera.make if stream.camera else None
+            provider = get_playback_recovery_provider(make_val)
+            recovery_url = provider.build_playback_url(stream, temp_start, temp_end)
+            
+            dt_start = datetime.fromtimestamp(temp_start)
+            day_str = dt_start.strftime("%Y-%m-%d")
+            stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
+            stream_record_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{dt_start.strftime('%Y%m%d_%H%M')}_recovered.mp4"
+            output_path = stream_record_dir / filename
+
+            is_hevc = stream.codec and stream.codec.lower() in ("hevc", "h265")
+            codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-c:a", "copy"] if is_hevc else ["-c", "copy"]
+
+            async with semaphore:
+                print(f"[recovery] [manual] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {is_hevc})...")
+                cmd = [
+                    settings.ffmpeg_path,
+                    "-y", # Overwrite existing/corrupted clips
+                    "-hide_banner",
+                    "-loglevel", "warning",
+                    "-rtsp_transport", "tcp",
+                    "-stimeout", "15000000", # 15 seconds socket timeout
+                    "-i", recovery_url,
+                    "-t", str(settings.segment_time_seconds),
+                ] + codec_args + [str(output_path)]
+
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
+                    if proc.returncode == 0:
+                        print(f"[recovery] [manual] [{stream_id}] Successfully recovered: {filename}")
+                        
+                        parts = Path(output_path).parts
+                        relative_path = "/".join(parts[-3:])
+                        
+                        async for insert_session in get_session():
+                            stmt_check = select(RecordingSegment).where(
+                                RecordingSegment.stream_id == stream_id,
+                                RecordingSegment.file_path == relative_path
+                            )
+                            res_check = await insert_session.execute(stmt_check)
+                            existing_seg = res_check.scalar_one_or_none()
+                            if not existing_seg:
+                                new_seg = RecordingSegment(
+                                    stream_id=stream_id,
+                                    file_path=relative_path,
+                                    start_ts=temp_start,
+                                    end_ts=temp_end
+                                )
+                                insert_session.add(new_seg)
+                                await insert_session.commit()
+                                print(f"[recovery] [manual] [{stream_id}] Indexed segment: {filename}")
+                    else:
+                        print(f"[recovery] [manual] [{stream_id}] FFmpeg exit code {proc.returncode} for: {filename}")
+                        if output_path.exists():
+                            output_path.unlink()
+                except asyncio.TimeoutError:
+                    print(f"[recovery] [manual] [{stream_id}] Timeout downloading: {filename}")
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    if output_path.exists():
+                        output_path.unlink()
+                except Exception as e:
+                    print(f"[recovery] [manual] [{stream_id}] Error running FFmpeg: {e}")
+                    if output_path.exists():
+                        output_path.unlink()
+
+        for chunk in gap_chunks:
+            await download_chunk(chunk)
+
+
+@app.post("/api/recordings/{stream_id}/recover")
+async def recover_recording_gaps(
+    stream_id: str,
+    payload: list[dict],
+    background_tasks: BackgroundTasks,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
+    if not stream:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+
+    background_tasks.add_task(
+        run_manual_recovery,
+        stream.stream_id,
+        payload
+    )
+    return {"status": "started", "queued_count": len(payload)}
+
+
 @app.get("/api/recordings/file")
 async def recording_file(path: str):
     p = Path(path)
@@ -696,6 +972,7 @@ async def download_recording(
             parts = Path(seg.file_path).parts
             rel_path = "/".join(parts[-3:])
             p = Path(settings.recording_dir) / rel_path
+        p = p.resolve().absolute()
         if p.exists():
             valid_files.append(p)
             valid_segments.append(seg)
@@ -877,11 +1154,12 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
             await session.flush()
         else:
             stream.stream_url = stream_url
-            stream.resolution = res_str
-            stream.fps = fps_val
+            if stream.status != StreamState.ONLINE:
+                stream.resolution = res_str
+                stream.fps = fps_val
+                stream.bitrate = bitrate_val
             if stream.codec != "H265":
                 stream.codec = codec_val
-            stream.bitrate = bitrate_val
             stream.always_on = always_on_val
             await session.flush()
 
@@ -1021,6 +1299,7 @@ async def hls_playlist(
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
     target_stream_id = stream_id
+    stream = None
     try:
         from .webrtc import resolve_stream_by_identifier
         stream = await resolve_stream_by_identifier(stream_id, session)
@@ -1048,6 +1327,34 @@ async def hls_playlist(
                         "Expires": "0"
                     }
                 )
+            
+            # If the playlist is not found (404), trigger fast dynamic recovery by re-registering config
+            if response.status_code == 404 and stream:
+                print(f"[main] HLS stream {stream_id} not found in MediaMTX (404). Triggering fast recovery...")
+                from .stream_manager import stream_manager
+                await stream_manager.add_stream(session, stream)
+                
+                if stream.codec and stream.codec.upper() == "H265":
+                    from .transcoder import transcoder_manager
+                    target_stream_id = await transcoder_manager.ensure_transcoder(
+                        stream_id, session, increment_viewer=False
+                    )
+
+                # Wait up to 1.5 seconds (checking every 0.3s) for MediaMTX to initialize the stream
+                for _ in range(5):
+                    await asyncio.sleep(0.3)
+                    retry_resp = await client.get(f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/index.m3u8")
+                    if retry_resp.status_code == 200:
+                        print(f"[main] Fast recovery succeeded for HLS stream {stream_id}!")
+                        return Response(
+                            content=retry_resp.content,
+                            media_type="application/vnd.apple.mpegurl",
+                            headers={
+                                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                                "Pragma": "no-cache",
+                                "Expires": "0"
+                            }
+                        )
         except Exception as e:
             print(f"[main] Error proxying index.m3u8 for {stream_id}: {e}")
     raise HTTPException(404, "Playlist not ready")
@@ -1916,6 +2223,49 @@ async def update_settings(
             print(f"[main] Failed to sync upstream cameras after enabling setting: {e}")
             
     return {"status": "ok", "use_upstream_cameras": payload.use_upstream_cameras}
+
+
+@app.post("/api/cameras/test-rtsp")
+async def test_rtsp_connection(payload: dict):
+    rtsp_url = payload.get("rtsp_url")
+    if not rtsp_url:
+        raise HTTPException(status_code=400, detail="Missing rtsp_url")
+    
+    url_to_parse = rtsp_url.strip()
+    if not url_to_parse.startswith(("rtsp://", "rtsps://", "rtmp://")):
+        url_to_parse = f"rtsp://{url_to_parse}"
+        
+    url_to_parse = url_to_parse.replace("rtsp://", "http://").replace("rtsps://", "https://")
+    import urllib.parse
+    import socket
+    try:
+        parsed = urllib.parse.urlparse(url_to_parse)
+        host = parsed.hostname
+        port = parsed.port or 554
+    except Exception as e:
+        return {"success": False, "message": f"Invalid RTSP URL format: {str(e)}"}
+    
+    if not host:
+        return {"success": False, "message": "Could not parse host/IP from RTSP URL"}
+        
+    try:
+        socket.setdefaulttimeout(3.0)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((host, port))
+        
+        # Send RTSP OPTIONS request
+        options_req = f"OPTIONS {rtsp_url} RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: VMS-Tester\r\n\r\n"
+        s.sendall(options_req.encode())
+        response = s.recv(1024).decode(errors='ignore')
+        s.close()
+        
+        if "RTSP/1.0" in response or "200" in response or "401" in response or response.strip():
+            first_line = response.splitlines()[0] if response.splitlines() else "Connected"
+            return {"success": True, "message": f"Connected successfully! RTSP response: {first_line}"}
+        else:
+            return {"success": True, "message": "Connected successfully (TCP port open)."}
+    except Exception as e:
+        return {"success": False, "message": f"Connection failed: {str(e)}"}
 
 
 @app.post("/api/cameras", response_model=CameraOut)

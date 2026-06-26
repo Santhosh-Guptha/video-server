@@ -1,4 +1,4 @@
-import { Play, Square, CalendarClock, FileVideo2, CheckCircle2, XCircle } from 'lucide-react'
+import { Play, Square, CalendarClock, FileVideo2, CheckCircle2, XCircle, X } from 'lucide-react'
 import type { Camera, RecordingSegment } from '../types'
 
 const codecLabel = (codec?: string | null) => {
@@ -15,9 +15,10 @@ type Props = {
   onStartLive: () => void
   onStopLive: () => void
   onOpenPlayback: () => void
+  onClose?: () => void
 }
 
-export function CameraDetails({ camera, recordings, onStartLive, onStopLive, onOpenPlayback }: Props) {
+export function CameraDetails({ camera, recordings, onStartLive, onStopLive, onOpenPlayback, onClose }: Props) {
   if (!camera) {
     return (
       <section className="detailsPanel">
@@ -35,16 +36,27 @@ export function CameraDetails({ camera, recordings, onStartLive, onStopLive, onO
   })()
 
   return (
-    <section className="detailsPanel" id="live">
-      <div className="panelHead">
-        <div>
+    <section className="detailsPanel" id="live" style={{ border: 'none', background: 'transparent', padding: 0, boxShadow: 'none' }}>
+      <div className="panelHead" style={{ width: '100%' }}>
+        <div style={{ flex: 1 }}>
           <div className="eyebrow">Live session</div>
-          <h2 className="panelTitle">{camera.name}</h2>
-          <div className="panelSub">{camera.stream_id} • {camera.stream_type}</div>
+          <h2 className="panelTitle" style={{ fontSize: '1.2rem', margin: '4px 0' }}>{camera.name}</h2>
+          <div className="panelSub" style={{ fontSize: '0.8rem', opacity: 0.8 }}>{camera.stream_id} • {camera.stream_type}</div>
         </div>
-        <div className={`statusLarge ${camera.active ? 'ok' : 'off'}`}>
-          {camera.active ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-          {camera.active ? 'Online' : 'Offline'}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+          {onClose && (
+            <button 
+              onClick={onClose} 
+              style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px' }}
+              title="Close Drawer"
+            >
+              <X size={18} />
+            </button>
+          )}
+          <div className={`statusLarge ${camera.active ? 'ok' : 'off'}`} style={{ padding: '4px 10px', fontSize: '0.78rem' }}>
+            {camera.active ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+            {camera.active ? 'Online' : 'Offline'}
+          </div>
         </div>
       </div>
 

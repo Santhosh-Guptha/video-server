@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
-import { AlertCircle, Loader2, Maximize2, Volume2, VolumeX, Play, X } from 'lucide-react'
+import { AlertCircle, Loader2, Maximize2, Volume2, VolumeX, Play, X, Camera } from 'lucide-react'
 import { WebRTCPlayer } from './WebRTCPlayer'
 
 type PlayerProps = {
@@ -59,6 +59,24 @@ function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: H
   const hlsRef = useRef<Hls | null>(null)
   const [muted, setMuted] = useState(true)
   const [loaded, setLoaded] = useState(false)
+  const [aspectRatio, setAspectRatio] = useState<'contain' | 'cover' | 'fill'>('contain')
+
+  const takeSnapshot = () => {
+    const video = videoRef.current
+    if (!video) return
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 1920
+    canvas.height = video.videoHeight || 1080
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const url = canvas.toDataURL('image/png')
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `snapshot_hls_${Date.now()}.png`
+      a.click()
+    }
+  }
 
   useEffect(() => {
     const video = videoRef.current
@@ -190,7 +208,7 @@ function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: H
             <div className="overlayText">Buffering HLS stream…</div>
           </div>
         )}
-        <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} style={{ width: '100%', height: '100%', objectFit: aspectRatio }} />
         <div className="fakeStamp" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
           <span className="recordingDot" style={{ marginRight: '0' }} /> LIVE
         </div>
@@ -204,6 +222,15 @@ function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: H
           </button>
           <button className="miniBtn" type="button" onClick={() => videoRef.current?.play().catch(() => {})}>
             <Play size={16} /> Play
+          </button>
+          <button className="miniBtn" type="button" onClick={takeSnapshot} title="Capture Snapshot">
+            <Camera size={16} /> Snapshot
+          </button>
+          <button className="miniBtn" type="button" onClick={() => {
+            const next = aspectRatio === 'contain' ? 'cover' : aspectRatio === 'cover' ? 'fill' : 'contain'
+            setAspectRatio(next)
+          }} title="Toggle Aspect Ratio">
+            Aspect: {aspectRatio.toUpperCase()}
           </button>
           <button className="miniBtn" type="button" onClick={() => videoRef.current?.requestFullscreen?.()}>
             <Maximize2 size={16} /> Fullscreen

@@ -261,7 +261,8 @@ async def camera_gap_recovery_loop():
                                         "stream_id": stream_id,
                                         "recovery_url": recovery_url,
                                         "start_ts": temp_start,
-                                        "end_ts": next_end
+                                        "end_ts": next_end,
+                                        "codec": stream.codec
                                     })
                                 temp_start += settings.segment_time_seconds
 
@@ -283,18 +284,22 @@ async def camera_gap_recovery_loop():
                 filename = f"{dt_start.strftime('%Y%m%d_%H%M')}_recovered.mp4"
                 output_path = stream_record_dir / filename
 
+                codec = task.get("codec")
+                is_hevc = codec and codec.lower() in ("hevc", "h265")
+                codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-c:a", "copy"] if is_hevc else ["-c", "copy"]
+
                 async with semaphore:
-                    print(f"[recovery] [{stream_id}] Downloading gap segment: {filename}...")
+                    print(f"[recovery] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {is_hevc})...")
                     cmd = [
                         settings.ffmpeg_path,
+                        "-y", # Overwrite existing/corrupted clips
                         "-hide_banner",
                         "-loglevel", "warning",
                         "-rtsp_transport", "tcp",
+                        "-stimeout", "15000000", # 15 seconds socket timeout
                         "-i", recovery_url,
                         "-t", str(settings.segment_time_seconds),
-                        "-c", "copy",
-                        str(output_path)
-                    ]
+                    ] + codec_args + [str(output_path)]
 
                     try:
                         proc = await asyncio.create_subprocess_exec(

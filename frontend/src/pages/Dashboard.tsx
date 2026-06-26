@@ -196,7 +196,7 @@ export function Dashboard({
             <div>
               <span style={{ fontSize: '12px', color: '#64748b' }}>Active Edge Pushes</span>
               <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#a855f7' }}>
-                {cameras.filter(c => c.raw_json.includes('"edgePush"')).length} nodes
+                {cameras.filter(c => !c.rtsp_url || c.rtsp_url.trim() === "" || !c.rtsp_url.trim().toLowerCase().startsWith("rtsp://")).length} nodes
               </div>
             </div>
             <div>
@@ -237,7 +237,25 @@ export function Dashboard({
                     <Check size={12} strokeWidth={3} />
                   </span>
                   <div>
-                    <div className="camName">{camera.name}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <div className="camName">{camera.name}</div>
+                      {(() => {
+                        const isEdge = !camera.rtsp_url || camera.rtsp_url.trim() === "" || !camera.rtsp_url.trim().toLowerCase().startsWith("rtsp://");
+                        return (
+                          <span style={{
+                            fontSize: '0.62rem',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontWeight: 700,
+                            background: isEdge ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                            color: isEdge ? '#c084fc' : '#60a5fa',
+                            border: `1px solid ${isEdge ? 'rgba(168, 85, 247, 0.2)' : 'rgba(59, 130, 246, 0.2)'}`
+                          }}>
+                            {isEdge ? 'EDGE PUSH' : 'RTSP PULL'}
+                          </span>
+                        );
+                      })()}
+                    </div>
                     <div className="camSub">
                       ID: {camera.source_camera_id} • {camera.stream_id}
                     </div>

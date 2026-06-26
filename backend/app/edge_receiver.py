@@ -1,4 +1,5 @@
 import asyncio
+import os
 import httpx
 import struct
 import json
@@ -162,8 +163,27 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                         res = await db_session.execute(stmt)
                         stream = res.scalar_one_or_none()
 
+                        # Check if camera ID is in local edge push whitelist
+                        whitelisted_cams = set()
+                        possible_paths = [
+                            "edge_push_config.json",
+                            "../edge-push/edge-push/edge_push_config.json",
+                            "edge-push/edge-push/edge_push_config.json",
+                        ]
+                        for p in possible_paths:
+                            if os.path.exists(p):
+                                try:
+                                    with open(p, "r") as f:
+                                        data = json.load(f)
+                                    whitelisted_cams = {item.get("cameraId") for item in data if item.get("cameraId")}
+                                    break
+                                except Exception as e:
+                                    print(f"[edge_receiver] Error loading whitelist from {p}: {e}")
+                        
+                        is_whitelisted = camera_id in whitelisted_cams
+
                         is_valid = False
-                        if settings.strict_camera_validation:
+                        if settings.strict_camera_validation and not is_whitelisted:
                             if stream:
                                 camera = stream.camera
                                 if camera and camera.active:
@@ -172,7 +192,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                 print(f"[edge_receiver] Rejected camera: camera_id={camera_id} reason=inactive")
                                 await RedisManager.increment_counter("rejected_edge_connections")
                         else:
-                            # Open/Development Mode
+                            # Open Mode OR Whitelisted camera (auto-register if missing)
                             if stream:
                                 is_valid = True
                             else:
@@ -200,7 +220,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                         profile_type=ProfileType.MAIN,
                                         resolution="1920x1080",
                                         fps=15,
-                                        codec="H264",
+                                        codec="H265" if encoder_type == 10 else "H264",
                                         stream_url="",
                                         status=StreamState.REGISTERED,
                                         always_on=True,
@@ -210,6 +230,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                     await stream_manager.add_stream(db_session, stream)
                                     await db_session.commit()
                                     is_valid = True
+                                    print(f"[edge_receiver] Auto-registered whitelisted/open-mode camera: {camera_id} (codec={stream.codec})")
                                 except Exception as auto_reg_err:
                                     await db_session.rollback()
                                     print(f"[edge_receiver] Auto-registration failed for {camera_id}: {auto_reg_err}")

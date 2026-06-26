@@ -233,6 +233,37 @@ async def report_stream_stats(
         decoder_latency=payload.decoder_latency
     )
     session.add(history)
+
+    # 3. Dynamically update CameraStream specs in the database based on real-time stats
+    try:
+        from .models import CameraStream
+        stream_res = await session.execute(
+            select(CameraStream).where(CameraStream.stream_id == stream_id)
+        )
+        stream = stream_res.scalar_one_or_none()
+        if stream:
+            updated = False
+            if payload.fps > 0:
+                rounded_fps = max(1, int(round(payload.fps)))
+                if stream.fps != rounded_fps:
+                    print(f"[webrtc] Dynamically updating stream {stream_id} FPS from {stream.fps} to {rounded_fps} (live reported: {payload.fps})")
+                    stream.fps = rounded_fps
+                    updated = True
+            if payload.resolution and stream.resolution != payload.resolution:
+                print(f"[webrtc] Dynamically updating stream {stream_id} resolution from {stream.resolution} to {payload.resolution}")
+                stream.resolution = payload.resolution
+                updated = True
+            if payload.bitrate > 0:
+                bitrate_val = int(round(payload.bitrate))
+                if not stream.bitrate or abs(stream.bitrate - bitrate_val) > 50:
+                    print(f"[webrtc] Dynamically updating stream {stream_id} bitrate from {stream.bitrate} to {bitrate_val} kbps")
+                    stream.bitrate = bitrate_val
+                    updated = True
+            if updated:
+                session.add(stream)
+    except Exception as update_err:
+        print(f"[webrtc] Failed to dynamically update stream specs in DB: {update_err}")
+
     await session.commit()
     
     return {"status": "ok"}
@@ -284,12 +315,16 @@ async def get_stream_stats(
         avg_rtt = sum(m["rtt"] for m in realtime_metrics if m.get("rtt") is not None) / count if any(m.get("rtt") is not None for m in realtime_metrics) else None
         avg_loss = sum(m["packet_loss"] for m in realtime_metrics) / count
         
+        # Extract resolution if reported in any metrics
+        resolution = next((m["resolution"] for m in realtime_metrics if m.get("resolution")), None)
+        
         return {
             "active_viewers": count,
             "avg_fps": round(avg_fps, 2),
             "avg_bitrate_kbps": round(avg_bitrate, 2),
             "avg_rtt_ms": round(avg_rtt, 2) if avg_rtt is not None else None,
             "avg_packet_loss": round(avg_loss, 4),
+            "resolution": resolution,
             "source": "realtime"
         }
         
@@ -299,6 +334,7 @@ async def get_stream_stats(
         "avg_bitrate_kbps": 0,
         "avg_rtt_ms": None,
         "avg_packet_loss": 0,
+        "resolution": None,
         "source": "inactive"
     }
 

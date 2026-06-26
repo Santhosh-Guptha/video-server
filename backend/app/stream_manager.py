@@ -41,8 +41,66 @@ def double_escape_rtsp_url(url: str) -> str:
     return f"{scheme}://{escaped_userinfo}@{host}"
 
 class StreamManager:
+    _fps_transcoders = {}
+
     def __init__(self, api_url: str = settings.mediamtx_api_url):
         self.api_url = api_url
+
+    async def start_fps_transcoder(self, stream: CameraStream) -> None:
+        path_name = stream.stream_id
+        await self.stop_fps_transcoder(path_name)
+        
+        ffmpeg_cmd = [
+            settings.ffmpeg_path,
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-rtsp_transport", "tcp",
+            "-i", stream.stream_url,
+            "-an",
+            "-r", str(stream.fps),
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-pix_fmt", "yuv420p",
+            "-g", "25",
+            "-f", "rtsp",
+            "-rtsp_transport", "tcp",
+            f"rtsp://127.0.0.1:8554/{path_name}"
+        ]
+        print(f"[stream_manager] Starting FPS-limiting transcoder for {path_name}: {' '.join(ffmpeg_cmd)}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *ffmpeg_cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE
+            )
+            self._fps_transcoders[path_name] = proc
+            
+            async def log_stderr(p, sid):
+                try:
+                    while True:
+                        line = await p.stderr.readline()
+                        if not line:
+                            break
+                        print(f"[transcoder-fps:{sid}] {line.decode(errors='ignore').strip()}")
+                except Exception:
+                    pass
+            asyncio.create_task(log_stderr(proc, path_name))
+        except Exception as ffmpeg_err:
+            print(f"[stream_manager] Failed to start FFmpeg transcoder for {path_name}: {ffmpeg_err}")
+
+    async def stop_fps_transcoder(self, stream_id: str) -> None:
+        proc = self._fps_transcoders.pop(stream_id, None)
+        if proc:
+            print(f"[stream_manager] Stopping FPS transcoder for {stream_id}")
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=3.0)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
     async def add_stream(self, session: AsyncSession, stream: CameraStream) -> None:
         """
@@ -66,7 +124,6 @@ class StreamManager:
         try:
             if settings.strict_camera_validation:
                 from .models import Camera
-                from unittest.mock import AsyncMock, MagicMock
                 res = await session.execute(
                     select(Camera).where(Camera.id == stream.camera_id)
                 )
@@ -94,7 +151,42 @@ class StreamManager:
                     stream.stream_source = "RTSP_PULL" if has_valid_rtsp else "EDGE_PUSH"
                 is_push = (stream.stream_source == "EDGE_PUSH")
 
-            source_type = "EDGE_PUSH" if is_push else "RTSP_PULL"
+            # Check if actual FPS is greater than configured FPS to trigger limiting
+            should_limit_fps = False
+            if not is_push and has_valid_rtsp and stream.fps:
+                actual_fps = None
+                try:
+                    import json
+                    cmd_probe = [
+                        "ffprobe", "-v", "error",
+                        "-select_streams", "v:0",
+                        "-show_entries", "stream=avg_frame_rate",
+                        "-of", "json",
+                        url_strip
+                    ]
+                    proc_probe = await asyncio.create_subprocess_exec(
+                        *cmd_probe,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=3.0)
+                    if proc_probe.returncode == 0:
+                        probe_data = json.loads(stdout_probe.decode())
+                        streams_info = probe_data.get("streams", [])
+                        if streams_info:
+                            avg_frame_rate = streams_info[0].get("avg_frame_rate", "0/0")
+                            n, d = map(int, avg_frame_rate.split("/"))
+                            if d > 0:
+                                actual_fps = n / d
+                except Exception as probe_err:
+                    print(f"[stream_manager] Failed to probe FPS for {path_name}: {probe_err}")
+
+                if actual_fps and actual_fps > stream.fps:
+                    should_limit_fps = True
+                    print(f"[stream_manager] Stream {path_name} actual FPS ({actual_fps:.2f}) > configured ({stream.fps}). Enabling transcoder.")
+
+            is_push_source = is_push or should_limit_fps
+            source_type = "EDGE_PUSH" if is_push else ("RTSP_PULL" if not should_limit_fps else "FPS_LIMIT_TRANSCODE")
             
             # 1. Sync StreamRegistry
             res = await session.execute(
@@ -136,9 +228,9 @@ class StreamManager:
             record_flag = should_record(stream)
 
             payload = {
-                "source": "publisher" if is_push else stream.stream_url,
+                "source": "publisher" if is_push_source else stream.stream_url,
                 "sourceProtocol": "tcp",
-                "sourceOnDemand": False if is_push else source_on_demand,
+                "sourceOnDemand": False if is_push_source else source_on_demand,
                 "record": record_flag,
                 "runOnDemand": "",
                 "runOnUnDemand": ""
@@ -150,6 +242,8 @@ class StreamManager:
                     response = await client.post(url, json=payload)
                     if response.status_code in (200, 201):
                         print(f"[stream_manager] Registered path {path_name} in MediaMTX. On-demand: {source_on_demand}")
+                        if should_limit_fps:
+                            await self.start_fps_transcoder(stream)
                         await self.set_stream_state(session, stream, StreamState.CONNECTING)
                     else:
                         if "already exists" in response.text or response.status_code == 400:
@@ -174,6 +268,8 @@ class StreamManager:
                                     existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
                                     
                                     print(f"[stream_manager] Path {path_name} already exists with identical config. Skipping registration.")
+                                    if should_limit_fps:
+                                        await self.start_fps_transcoder(stream)
                                     await self.set_stream_state(session, stream, StreamState.CONNECTING)
                                     return
                                 else:
@@ -182,6 +278,8 @@ class StreamManager:
                                     patch_resp = await client.patch(patch_url, json=payload)
                                     if patch_resp.status_code in (200, 201):
                                         print(f"[stream_manager] Patched path {path_name} config successfully.")
+                                        if should_limit_fps:
+                                            await self.start_fps_transcoder(stream)
                                         await self.set_stream_state(session, stream, StreamState.CONNECTING)
                                         return
                             
@@ -191,6 +289,8 @@ class StreamManager:
                             response = await client.post(url, json=payload)
                             if response.status_code in (200, 201):
                                 print(f"[stream_manager] Re-registered path {path_name} in MediaMTX after deletion fallback. On-demand: {source_on_demand}")
+                                if should_limit_fps:
+                                    await self.start_fps_transcoder(stream)
                                 await self.set_stream_state(session, stream, StreamState.CONNECTING)
                                 return
                         print(f"[stream_manager] Failed to register path {path_name}: {response.text}")
@@ -236,7 +336,10 @@ class StreamManager:
             
             await session.commit()
 
-            # 2. MediaMTX delete
+            # 2. Stop any running FPS-limiting transcoder
+            await self.stop_fps_transcoder(path_name)
+
+            # 3. MediaMTX delete
             async with httpx.AsyncClient() as client:
                 url = f"{self.api_url}/v3/config/paths/delete/{path_name}"
                 try:
@@ -248,7 +351,7 @@ class StreamManager:
                 except Exception as e:
                     print(f"[stream_manager] Error deleting path {path_name}: {e}")
 
-            # 3. Stop any running transcoder for H.265 streams
+            # 4. Stop any running transcoder for H.265 streams
             if stream.codec and stream.codec.upper() == "H265":
                 try:
                     from .transcoder import transcoder_manager

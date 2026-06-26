@@ -1,0 +1,20 @@
+[
+  {
+    "cameraId": "EDGE_CAM_01",
+    "rtspUrl": "rtsp://admin:XX2317%40xx2317@172.20.100.175:554/ch01_third.264",
+    "width": 640,
+    "height": 360,
+    "pushHost": "172.20.100.235",
+    "pushPort": 9999,
+    "pushType": "RAW_PUSH"
+  },
+  {
+    "cameraId": "EDGE_CAM_02",
+    "rtspUrl": "rtsp://admin:XX2317%40xx2317@172.20.100.180:554/ch01_third.264",
+    "width": 640,
+    "height": 480,
+    "pushHost": "172.20.100.235",
+    "pushPort": 9999,
+    "pushType": "RAW_PUSH"
+  }
+]

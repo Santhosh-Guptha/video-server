@@ -58,6 +58,15 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
   // Enumerate devices on mount
   useEffect(() => {
     async function getDevices() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        if (window.isSecureContext === false) {
+          setErrorMsg('Webcam access blocked: Browsers disable media capture on insecure remote origins (HTTP). Access via HTTPS or add ' + window.location.origin + ' to your browser\'s secure origin overrides (e.g. chrome://flags/#unsafely-treat-insecure-origin-as-secure).');
+        } else {
+          setErrorMsg('Media devices API is not supported or accessible on this browser/environment.');
+        }
+        return
+      }
+
       try {
         // Request permissions first to get labels
         await navigator.mediaDevices.getUserMedia({ audio: true, video: true })
@@ -65,7 +74,16 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
             // Immediately stop tracks to free device
             stream.getTracks().forEach(track => track.stop())
           })
-          .catch(err => console.warn('Initial permission request failed:', err))
+          .catch(err => {
+            console.warn('Initial permission request failed:', err)
+            if (err.name === 'NotAllowedError') {
+              setErrorMsg('Camera and microphone permission was denied. Please grant permission in your browser settings.');
+            } else if (err.name === 'NotFoundError') {
+              setErrorMsg('No camera or microphone devices were found.');
+            } else {
+              setErrorMsg(`Media access permission error: ${err.message || err.name}`);
+            }
+          })
 
         const devices = await navigator.mediaDevices.enumerateDevices()
         const video = devices.filter(d => d.kind === 'videoinput')
@@ -76,9 +94,9 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
 
         if (video.length > 0) setSelectedVideoId(video[0].deviceId)
         if (audio.length > 0) setSelectedAudioId(audio[0].deviceId)
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to enumerate media devices:', err)
-        setErrorMsg('Could not access media devices. Ensure camera and microphone permissions are granted.')
+        setErrorMsg(`Could not access media devices: ${err.message || err.name}`);
       }
     }
     getDevices()
@@ -89,6 +107,10 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
     if (isStreaming) return // Don't interrupt active streaming
 
     async function startPreview() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        return
+      }
+
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(t => t.stop())
         localStreamRef.current = null
@@ -119,8 +141,18 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream
         }
-      } catch (err) {
+        setErrorMsg(null) // Clear any previous preview errors if successful
+      } catch (err: any) {
         console.error('Failed to start local preview:', err)
+        if (err.name === 'NotAllowedError') {
+          setErrorMsg('Camera and microphone permission was denied. Please grant permission in your browser settings.');
+        } else if (err.name === 'NotFoundError') {
+          setErrorMsg('No camera or microphone devices were found matching selected constraints.');
+        } else if (err.name === 'OverconstrainedError') {
+          setErrorMsg('The selected camera resolution or constraints are not supported by the hardware.');
+        } else {
+          setErrorMsg(`Failed to start camera preview: ${err.message || err.name}`);
+        }
       }
     }
 

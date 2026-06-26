@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { Calendar, Film, Loader2, AlertCircle, FileVideo, ChevronDown, Clock, Activity, Play, Pause, RotateCcw, RotateCw } from 'lucide-react'
+import { Calendar, Film, Loader2, AlertCircle, FileVideo, ChevronDown, Clock, Activity, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react'
 import type { Camera, RecordingSegment } from '../types'
 
 type Props = {
@@ -36,7 +36,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
   const [currentSegment, setCurrentSegment] = useState<RecordingSegment | null>(null)
   const [currentAbsoluteTs, setCurrentAbsoluteTs] = useState<number>(0)
   const [isDragging, setIsDragging] = useState(false)
-  const [zoomLevel, setZoomLevel] = useState<'24h' | '6h' | '1h'>('24h')
+  const [zoomLevel, setZoomLevel] = useState<string>('24h')
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0)
   const [videoSrc, setVideoSrc] = useState<string>('')
   const [isPaused, setIsPaused] = useState(true)
@@ -95,7 +95,12 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
           const dates: string[] = await res.json()
           setAvailableDates(dates)
           if (dates.length > 0) {
-            setSelectedDate(dates[dates.length - 1])
+            const lastDate = dates[dates.length - 1]
+            setSelectedDate(lastDate)
+            // Auto-load timeline logs for the selected date
+            setTimeout(() => {
+              loadTimelineData(undefined, lastDate)
+            }, 100)
           } else {
             setSelectedDate('')
           }
@@ -126,14 +131,24 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     }
   }, [selectedDate])
 
+  const ZOOM_LEVELS = useMemo(() => [
+    { key: '24h', label: '24h', duration: 86400 },
+    { key: '12h', label: '12h', duration: 43200 },
+    { key: '6h', label: '6h', duration: 21600 },
+    { key: '3h', label: '3h', duration: 10800 },
+    { key: '1h', label: '1h', duration: 3600 },
+    { key: '30m', label: '30m', duration: 1800 },
+    { key: '10m', label: '10m', duration: 600 },
+    { key: '2m', label: '2m', duration: 120 }
+  ], [])
+
   // Calculate the active window depending on current playhead & zoom resolution
   const timelineWindow = useMemo(() => {
     const { start: dayStart, end: dayEnd } = dayBoundaries
     if (!selectedDate) return { start: 0, end: 0, duration: 86400 }
 
-    let duration = 86400
-    if (zoomLevel === '6h') duration = 21600
-    if (zoomLevel === '1h') duration = 3600
+    const activeLevel = ZOOM_LEVELS.find(z => z.key === zoomLevel) || ZOOM_LEVELS[0];
+    const duration = activeLevel.duration;
 
     if (zoomLevel === '24h') {
       return { start: dayStart, end: dayEnd, duration }
@@ -154,15 +169,20 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     }
 
     return { start: wStart, end: wEnd, duration }
-  }, [zoomLevel, currentAbsoluteTs, dayBoundaries, selectedDate])
+  }, [zoomLevel, currentAbsoluteTs, dayBoundaries, selectedDate, ZOOM_LEVELS])
 
   // Fetch timeline segments and coverage statistics
-  async function loadTimelineData(targetTsToPlay?: number) {
-    if (!streamId || !selectedDate) return
+  async function loadTimelineData(targetTsToPlay?: number, dateOverride?: string) {
+    const activeDate = dateOverride || selectedDate
+    if (!streamId || !activeDate) return
     setLoading(true)
     try {
+      const dtStart = new Date(`${activeDate}T00:00:00`)
+      const startTs = Math.floor(dtStart.getTime() / 1000)
+      const endTs = startTs + 86400
+
       // 1. Fetch raw segments for matching (so we have file paths)
-      const rawRes = await fetch(`/api/playback/${encodeURIComponent(streamId)}?start_ts=${dayBoundaries.start}&end_ts=${dayBoundaries.end}`)
+      const rawRes = await fetch(`/api/playback/${encodeURIComponent(streamId)}?start_ts=${startTs}&end_ts=${endTs}`)
       let rawSegs: RecordingSegment[] = []
       if (rawRes.ok) {
         rawSegs = await rawRes.json()
@@ -170,7 +190,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
       }
 
       // 2. Fetch timeline coverage metrics
-      const timelineRes = await fetch(`/api/playback/${encodeURIComponent(streamId)}/timeline?date=${selectedDate}`)
+      const timelineRes = await fetch(`/api/playback/${encodeURIComponent(streamId)}/timeline?date=${activeDate}`)
       if (timelineRes.ok) {
         const payload: TimelinePayload = await timelineRes.json()
         setTimeline(payload)
@@ -179,12 +199,21 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
         // 3. Initiate playback if requested
         if (targetTsToPlay !== undefined) {
           playSegmentAtTimestamp(targetTsToPlay, rawSegs)
+          const dateObj = new Date(targetTsToPlay * 1000)
+          const hh = String(dateObj.getHours()).padStart(2, '0')
+          const mm = String(dateObj.getMinutes()).padStart(2, '0')
+          setSelectedTime(`${hh}:${mm}`)
         } else {
           // Play from beginning of recorded footage
           if (payload.first_recording_ts) {
             playSegmentAtTimestamp(payload.first_recording_ts, rawSegs)
+            const dateObj = new Date(payload.first_recording_ts * 1000)
+            const hh = String(dateObj.getHours()).padStart(2, '0')
+            const mm = String(dateObj.getMinutes()).padStart(2, '0')
+            setSelectedTime(`${hh}:${mm}`)
           } else {
-            playSegmentAtTimestamp(dayBoundaries.start, rawSegs)
+            playSegmentAtTimestamp(startTs, rawSegs)
+            setSelectedTime('00:00')
           }
         }
       }
@@ -277,6 +306,16 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     
     const currentAbs = currentSegment.start_ts + video.currentTime
     setCurrentAbsoluteTs(currentAbs)
+
+    // Update the time picker time if it is not currently focused by the user
+    if (document.activeElement !== null && document.activeElement.tagName === 'INPUT' && (document.activeElement as HTMLInputElement).type === 'time') {
+      // User is typing/seeking in time input, do not overwrite
+    } else {
+      const dateObj = new Date(currentAbs * 1000)
+      const hh = String(dateObj.getHours()).padStart(2, '0')
+      const mm = String(dateObj.getMinutes()).padStart(2, '0')
+      setSelectedTime(`${hh}:${mm}`)
+    }
   }
 
   // Handle Segment transitions when the current file ends
@@ -509,6 +548,38 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     }
   }
 
+  // Frame Stepping
+  const handleStepFrame = (direction: 'forward' | 'backward') => {
+    const video = videoRef.current
+    if (!video) return
+    
+    if (!video.paused) {
+      video.pause()
+      setIsPaused(true)
+    }
+
+    const frameTime = 1 / 30 // assuming standard 30fps
+    const newTime = direction === 'forward'
+      ? Math.min(video.duration || 0, video.currentTime + frameTime)
+      : Math.max(0, video.currentTime - frameTime)
+
+    video.currentTime = newTime
+    if (currentSegment) {
+      setCurrentAbsoluteTs(currentSegment.start_ts + newTime)
+    }
+  }
+
+  // Timeline Zoom Adjustment
+  const handleZoomChange = (direction: 'in' | 'out') => {
+    const keys = ['24h', '12h', '6h', '3h', '1h', '30m', '10m', '2m']
+    const idx = keys.indexOf(zoomLevel)
+    if (direction === 'in' && idx < keys.length - 1) {
+      setZoomLevel(keys[idx + 1])
+    } else if (direction === 'out' && idx > 0) {
+      setZoomLevel(keys[idx - 1])
+    }
+  }
+
   // Format durations into human-readable hours and minutes
   function formatDuration(sec: number) {
     const hrs = Math.floor(sec / 3600)
@@ -564,7 +635,25 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                       }}
                     >
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span style={{ fontWeight: 600 }}>{cam.name}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontWeight: 600 }}>{cam.name}</span>
+                          {(() => {
+                            const isEdge = !cam.rtsp_url || cam.rtsp_url.trim() === "" || !cam.rtsp_url.trim().toLowerCase().startsWith("rtsp://");
+                            return (
+                              <span style={{
+                                fontSize: '0.62rem',
+                                padding: '1px 5px',
+                                borderRadius: '4px',
+                                fontWeight: 700,
+                                background: isEdge ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                                color: isEdge ? '#c084fc' : '#60a5fa',
+                                border: `1px solid ${isEdge ? 'rgba(168, 85, 247, 0.2)' : 'rgba(59, 130, 246, 0.2)'}`
+                              }}>
+                                {isEdge ? 'EDGE PUSH' : 'RTSP PULL'}
+                              </span>
+                            );
+                          })()}
+                        </div>
                         <span style={{ fontSize: '0.72rem', opacity: 0.6 }}>{cam.stream_id} ({cam.stream_type})</span>
                       </div>
                     </div>
@@ -678,6 +767,54 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                     />
                   </div>
 
+                  {/* Recorded Clips Select (Available clips only) */}
+                  {rawSegments.length > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="controlLabel" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Film size={14} /> Available Clips:
+                      </span>
+                      <select
+                        value={currentSegment ? currentSegment.start_ts.toString() : ''}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          if (val) {
+                            const ts = parseInt(val, 10)
+                            playSegmentAtTimestamp(ts, rawSegments)
+                            const dateObj = new Date(ts * 1000)
+                            const hh = String(dateObj.getHours()).padStart(2, '0')
+                            const mm = String(dateObj.getMinutes()).padStart(2, '0')
+                            setSelectedTime(`${hh}:${mm}`)
+                          }
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '12px',
+                          border: '1px solid rgba(148,163,184,0.16)',
+                          background: 'rgba(2,6,23,0.5)',
+                          color: '#fff',
+                          fontSize: '0.9rem',
+                          outline: 'none',
+                          cursor: 'pointer',
+                          maxWidth: '260px'
+                        }}
+                      >
+                        <option value="" disabled>-- Select footage segment --</option>
+                        {rawSegments.map((seg) => {
+                          const start = new Date(seg.start_ts * 1000)
+                          const end = new Date(seg.end_ts * 1000)
+                          const dur = Math.round(seg.end_ts - seg.start_ts)
+                          const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+                          const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+                          return (
+                            <option key={seg.id} value={seg.start_ts}>
+                              {`${startStr} - ${endStr} (${dur}s)`}
+                            </option>
+                          )
+                        })}
+                      </select>
+                    </div>
+                  )}
+
                   <button
                     className="primaryBtn"
                     onClick={handleLoadPlayback}
@@ -787,18 +924,51 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                   
                   {/* Zoom controls */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className="controlLabel" style={{ fontSize: '0.78rem' }}>Timeline Span:</span>
-                    <div className="btnToggleGroup">
-                      {(['24h', '6h', '1h'] as const).map((z) => (
-                        <button
-                          key={z}
-                          className={`toggleBtn ${zoomLevel === z ? 'active' : ''}`}
-                          onClick={() => setZoomLevel(z)}
-                          style={{ padding: '4px 10px', fontSize: '0.78rem' }}
-                        >
-                          {z.toUpperCase()}
-                        </button>
-                      ))}
+                    <span className="controlLabel" style={{ fontSize: '0.78rem' }}>Timeline Zoom:</span>
+                    <div className="btnToggleGroup" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      <button
+                        className="toggleBtn"
+                        type="button"
+                        onClick={() => handleZoomChange('out')}
+                        disabled={zoomLevel === '24h'}
+                        style={{ padding: '4px 10px', fontSize: '0.9rem', fontWeight: 'bold' }}
+                        title="Zoom Out"
+                      >
+                        -
+                      </button>
+                      <select
+                        value={zoomLevel}
+                        onChange={(e) => setZoomLevel(e.target.value)}
+                        style={{
+                          background: 'rgba(2, 6, 23, 0.6)',
+                          color: '#fff',
+                          border: '1px solid rgba(148, 163, 184, 0.2)',
+                          borderRadius: '8px',
+                          fontSize: '0.78rem',
+                          padding: '4px 8px',
+                          outline: 'none',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <option value="24h">24h</option>
+                        <option value="12h">12h</option>
+                        <option value="6h">6h</option>
+                        <option value="3h">3h</option>
+                        <option value="1h">1h</option>
+                        <option value="30m">30m</option>
+                        <option value="10m">10m</option>
+                        <option value="2m">2m</option>
+                      </select>
+                      <button
+                        className="toggleBtn"
+                        type="button"
+                        onClick={() => handleZoomChange('in')}
+                        disabled={zoomLevel === '2m'}
+                        style={{ padding: '4px 10px', fontSize: '0.9rem', fontWeight: 'bold' }}
+                        title="Zoom In"
+                      >
+                        +
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -821,6 +991,43 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                   >
                     Your browser does not support the video tag.
                   </video>
+                  
+                  {/* Absolute Time Overlay showing the exact video ingest time */}
+                  {currentAbsoluteTs > 0 && videoSrc && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '16px',
+                      left: '16px',
+                      background: 'rgba(15, 23, 42, 0.85)',
+                      backdropFilter: 'blur(8px)',
+                      color: '#f8fafc',
+                      padding: '8px 14px',
+                      borderRadius: '12px',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      pointerEvents: 'none',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      zIndex: 10
+                    }}>
+                      <span style={{ display: 'inline-block', width: '8px', height: '8px', background: '#10b981', borderRadius: '50%', boxShadow: '0 0 8px #10b981' }}></span>
+                      <span style={{ color: '#94a3b8' }}>Camera Time:</span>
+                      <span style={{ color: '#fff', fontFamily: 'monospace', letterSpacing: '0.5px' }}>
+                        {new Date(currentAbsoluteTs * 1000).toLocaleString([], {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                          hour12: false
+                        })}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* On-Screen Video Controls */}
@@ -828,7 +1035,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '16px',
+                  gap: '12px',
                   marginBottom: '20px',
                   padding: '10px 20px',
                   background: 'rgba(15, 23, 42, 0.6)',
@@ -843,15 +1050,33 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
-                      padding: '8px 16px',
+                      padding: '8px 14px',
                       borderRadius: '12px',
-                      fontSize: '0.85rem',
+                      fontSize: '0.82rem',
                       fontWeight: 600,
                       cursor: 'pointer'
                     }}
                   >
-                    <RotateCcw size={16} />
+                    <RotateCcw size={14} />
                     <span>-10s</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleStepFrame('backward')}
+                    className="toggleBtn"
+                    title="Step Backward 1 Frame"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '12px',
+                      padding: 0,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <SkipBack size={16} />
                   </button>
 
                   <button
@@ -875,6 +1100,24 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                   </button>
 
                   <button
+                    onClick={() => handleStepFrame('forward')}
+                    className="toggleBtn"
+                    title="Step Forward 1 Frame"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '12px',
+                      padding: 0,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <SkipForward size={16} />
+                  </button>
+
+                  <button
                     onClick={() => handleSeek(10)}
                     className="toggleBtn"
                     title="Forward 10s (Right Arrow)"
@@ -882,15 +1125,15 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
-                      padding: '8px 16px',
+                      padding: '8px 14px',
                       borderRadius: '12px',
-                      fontSize: '0.85rem',
+                      fontSize: '0.82rem',
                       fontWeight: 600,
                       cursor: 'pointer'
                     }}
                   >
                     <span>+10s</span>
-                    <RotateCw size={16} />
+                    <RotateCw size={14} />
                   </button>
                 </div>
 

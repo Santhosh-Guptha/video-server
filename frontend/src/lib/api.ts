@@ -95,3 +95,16 @@ export async function updateSystemSettings(useUpstreamCameras: boolean): Promise
   }
   return res.json()
 }
+
+export async function testRtspConnection(rtspUrl: string): Promise<{ success: boolean; message: string }> {
+  const res = await fetch('/api/cameras/test-rtsp', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ rtsp_url: rtspUrl })
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Failed to test RTSP connection')
+  }
+  return res.json()
+}

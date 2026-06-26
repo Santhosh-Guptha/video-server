@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Loader2, Play, Volume2, VolumeX, Maximize2, X } from 'lucide-react';
+import { AlertCircle, Loader2, Play, Volume2, VolumeX, Maximize2, X, Camera } from 'lucide-react';
 import { StreamHealthBadge, StreamHealthState } from './StreamHealthBadge';
 import { SessionStatsOverlay, PlayerStats } from './SessionStatsOverlay';
 
@@ -26,6 +26,24 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [stats, setStats] = useState<PlayerStats>({ protocol: 'WHEP', reconnections: 0 });
+  const [aspectRatio, setAspectRatio] = useState<'contain' | 'cover' | 'fill'>('contain');
+
+  const takeSnapshot = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `snapshot_${streamId}_${Date.now()}.png`;
+      a.click();
+    }
+  };
 
   // Keep track of previous stats values for delta calculations
   const prevStatsRef = useRef<{
@@ -411,7 +429,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
           autoPlay 
           playsInline 
           muted={muted}
-          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+          style={{ width: '100%', height: '100%', objectFit: aspectRatio }}
         />
         
         <div className="fakeStamp" style={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -433,6 +451,15 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
           </button>
           <button className="miniBtn" type="button" onClick={() => videoRef.current?.play().catch(() => {})}>
             <Play size={16} /> Play
+          </button>
+          <button className="miniBtn" type="button" onClick={takeSnapshot} title="Capture Snapshot">
+            <Camera size={16} /> Snapshot
+          </button>
+          <button className="miniBtn" type="button" onClick={() => {
+            const next = aspectRatio === 'contain' ? 'cover' : aspectRatio === 'cover' ? 'fill' : 'contain';
+            setAspectRatio(next);
+          }} title="Toggle Aspect Ratio">
+            Aspect: {aspectRatio.toUpperCase()}
           </button>
           <button className="miniBtn" type="button" onClick={() => videoRef.current?.requestFullscreen?.()}>
             <Maximize2 size={16} /> Fullscreen
