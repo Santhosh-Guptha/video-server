@@ -851,7 +851,7 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                     "-stimeout", "15000000", # 15 seconds socket timeout
                     "-i", recovery_url,
                     "-t", str(settings.segment_time_seconds),
-                ] + codec_args + [str(output_path)]
+                ] + codec_args + ["-movflags", "+faststart", str(output_path)]
 
                 try:
                     proc = await asyncio.create_subprocess_exec(
