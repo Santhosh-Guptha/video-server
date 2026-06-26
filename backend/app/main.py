@@ -628,6 +628,18 @@ async def record_segment_complete(
         await session.commit()
         print(f"[webhook] Indexed segment: {relative_path} (Duration: {duration}s)")
         await PlaybackTimelineService.invalidate_cache_for_timestamp(payload.stream_id, start_ts)
+        
+        # Trigger self-healing check in background if enabled
+        if settings.enable_self_healing_recordings:
+            asyncio.create_task(
+                check_and_heal_segment(
+                    payload.stream_id,
+                    str(p),
+                    duration,
+                    start_ts,
+                    end_ts
+                )
+            )
     except IntegrityError:
         await session.rollback()
         print(f"[webhook] Duplicate segment ignored: {relative_path}")
@@ -902,6 +914,90 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
 
         for chunk in gap_chunks:
             await download_chunk(chunk)
+
+
+async def check_and_heal_segment(stream_id: str, file_path: str, duration: float, start_ts: float, end_ts: float):
+    if not settings.enable_self_healing_recordings:
+        return
+
+    # Only run on live recordings, not on recovered ones
+    if "_live" not in file_path:
+        return
+
+    print(f"[self-healing] Checking segment for freeze/corruption: {file_path}")
+    try:
+        # 1. Check if duration is short (premature file close due to RTSP disconnect)
+        is_corrupt = False
+        reason = ""
+        
+        if duration < (settings.segment_time_seconds - 5.0):
+            is_corrupt = True
+            reason = f"short duration ({duration:.1f}s < {settings.segment_time_seconds - 5.0}s)"
+        
+        # 2. Check for freeze/greyscreen if not already declared corrupt
+        if not is_corrupt:
+            cmd = [
+                settings.ffmpeg_path,
+                "-i", file_path,
+                "-vf", "freezedetect=noise=0.03:d=5",
+                "-f", "null",
+                "-"
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            # 15s timeout for a 60s file check is safe
+            _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+            stderr_text = stderr_data.decode(errors='ignore')
+            
+            freeze_durations = []
+            for line in stderr_text.splitlines():
+                if "lavfi.freezedetect.freeze_duration" in line:
+                    try:
+                        parts = line.split("freeze_duration:")
+                        if len(parts) > 1:
+                            dur = float(parts[1].strip())
+                            freeze_durations.append(dur)
+                    except Exception:
+                        pass
+            
+            total_freeze = sum(freeze_durations)
+            if total_freeze >= 5.0:
+                is_corrupt = True
+                reason = f"frozen/greyscreen detected (Total freeze: {total_freeze:.1f}s)"
+
+        if is_corrupt:
+            print(f"[self-healing] [{stream_id}] Replacing corrupt segment {file_path} from camera. Reason: {reason}")
+            
+            # Delete file on disk
+            p = Path(file_path)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception as file_ex:
+                    print(f"[self-healing] Failed to delete file {file_path}: {file_ex}")
+            
+            # Delete database segment record
+            parts = Path(file_path).parts
+            relative_path = "/".join(parts[-3:])
+            
+            async for session in get_session():
+                stmt = delete(RecordingSegment).where(
+                    RecordingSegment.stream_id == stream_id,
+                    RecordingSegment.file_path == relative_path
+                )
+                await session.execute(stmt)
+                await session.commit()
+                await PlaybackTimelineService.invalidate_cache_for_timestamp(stream_id, start_ts)
+            
+            # Queue manual recovery task
+            payload = [{"start_ts": start_ts, "end_ts": end_ts}]
+            asyncio.create_task(run_manual_recovery(stream_id, payload))
+            
+    except Exception as ex:
+        print(f"[self-healing] Error running self-healing check on {file_path}: {ex}")
 
 
 @app.post("/api/recordings/{stream_id}/recover")

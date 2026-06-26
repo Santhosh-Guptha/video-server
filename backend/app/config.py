@@ -103,6 +103,7 @@ class Settings(BaseSettings):
 
     # ── Recording policy constants ─────────────────────────────────────────────
     enable_recording: bool = True
+    enable_self_healing_recordings: bool = False
 
     # ── Playback timeline policy constants ─────────────────────────────────────
     timeline_cache_seconds: int = 60
