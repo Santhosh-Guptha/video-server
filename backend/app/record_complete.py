@@ -27,7 +27,7 @@ def main():
     # Let's try localhost first (or default to localhost:8000). 
     # We can read an env variable or default to localhost:8000.
     import os
-    backend_url = os.environ.get("BACKEND_WEBHOOK_URL", "http://localhost:8000")
+    backend_url = os.environ.get("BACKEND_WEBHOOK_URL", "http://localhost:8005")
     url = f"{backend_url.rstrip('/')}/api/recordings/segment-complete"
 
     req = urllib.request.Request(
