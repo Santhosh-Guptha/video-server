@@ -5,8 +5,12 @@ from urllib.parse import urlparse
 import onvif
 from onvif import ONVIFCamera
 
-# Set WSDL directory from onvif package
-WSDL_DIR = os.path.join(os.path.dirname(onvif.__file__), 'wsdl')
+# Set WSDL directory from onvif package with fallback to site-packages root
+package_dir = os.path.dirname(onvif.__file__)
+WSDL_DIR = os.path.join(package_dir, 'wsdl')
+if not os.path.exists(os.path.join(WSDL_DIR, 'devicemgmt.wsdl')):
+    WSDL_DIR = os.path.join(os.path.dirname(package_dir), 'wsdl')
+
 
 def parse_camera_ip(rtsp_url: str) -> str:
     """Parses the hostname/IP from the camera RTSP URL."""
