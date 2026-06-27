@@ -2670,6 +2670,39 @@ async def create_camera(
         always_on=payload.always_on,
         status=StreamState.REGISTERED
     )
+    # Apply settings directly to physical camera via ONVIF
+    try:
+        from .camera_configurator import apply_camera_configuration
+        from urllib.parse import urlparse, unquote
+        
+        parsed = urlparse(payload.stream_url)
+        username = unquote(parsed.username) if parsed.username else ""
+        password = unquote(parsed.password) if parsed.password else ""
+        
+        # Parse width/height from resolution
+        width, height = 1920, 1080
+        if "x" in payload.resolution:
+            w_str, h_str = payload.resolution.split("x", 1)
+            width, height = int(w_str), int(h_str)
+            
+        target_bitrate_kbps = int(payload.bitrate) if payload.bitrate else None
+        
+        await apply_camera_configuration(
+            rtsp_url=payload.stream_url,
+            username=username,
+            password=password,
+            stream_type=payload.profile_type,
+            target_width=width,
+            target_height=height,
+            target_fps=payload.fps,
+            target_bitrate_kbps=target_bitrate_kbps
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to configure physical camera: {type(e).__name__}: {str(e)}"
+        )
+
     session.add(stream)
     await session.commit()
 
@@ -2718,6 +2751,39 @@ async def update_camera(
     stream.bitrate = payload.bitrate
     stream.stream_url = payload.stream_url
     stream.always_on = payload.always_on
+
+    # Apply settings directly to physical camera via ONVIF
+    try:
+        from .camera_configurator import apply_camera_configuration
+        from urllib.parse import urlparse, unquote
+        
+        parsed = urlparse(payload.stream_url)
+        username = unquote(parsed.username) if parsed.username else ""
+        password = unquote(parsed.password) if parsed.password else ""
+        
+        # Parse width/height from resolution
+        width, height = 1920, 1080
+        if "x" in payload.resolution:
+            w_str, h_str = payload.resolution.split("x", 1)
+            width, height = int(w_str), int(h_str)
+            
+        target_bitrate_kbps = int(payload.bitrate) if payload.bitrate else None
+        
+        await apply_camera_configuration(
+            rtsp_url=payload.stream_url,
+            username=username,
+            password=password,
+            stream_type=stream.profile_type.name,
+            target_width=width,
+            target_height=height,
+            target_fps=payload.fps,
+            target_bitrate_kbps=target_bitrate_kbps
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to configure physical camera: {type(e).__name__}: {str(e)}"
+        )
 
     await session.commit()
 
