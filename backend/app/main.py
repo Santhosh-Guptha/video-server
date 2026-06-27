@@ -1231,114 +1231,117 @@ async def download_recording(
 async def health():
     return {"status": "ok"}
 
+_sync_lock = asyncio.Lock()
+
 @app.post("/api/cameras/sync", response_model=SyncResponse)
 async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
-    raw_cameras = await fetch_upstream_cameras()
-    updated_count = 0
-    
-    for raw in raw_cameras:
-        source_id = int(raw.get("cameraId") or raw.get("id"))
-        name = str(raw.get("name") or f"Camera {source_id}")
-        active = bool(raw.get("active", True))
-
-        # 1. Sync Camera Parent Row
-        make = raw.get("make")
-        res = await session.execute(
-            select(Camera).where(Camera.source_camera_id == source_id)
-        )
-        camera = res.scalar_one_or_none()
-        if not camera:
-            camera = Camera(
-                source_camera_id=source_id,
-                name=name,
-                active=active,
-                make=make,
-                synced_from_api=True
-            )
-            session.add(camera)
-            await session.flush()
-        else:
-            camera.name = name
-            camera.active = active
-            camera.make = make
-            camera.synced_from_api = True
-            await session.flush()
-
-        # 2. Sync CameraStream Child Row
-        stream_id = str(raw.get("streamId") or f"{raw.get('serverCameraId','camera')}_{raw.get('streamType','NORMAL')}")
-        stream_url = str(raw.get("rtspUrl") or "").strip()
-        if not stream_url.startswith(("rtsp://", "rtsps://", "rtmp://")):
-            stream_url = f"rtsp://{stream_url}"
-
-        # Inject username/password if present
-        username = raw.get("username")
-        password = raw.get("password")
-        if username and password:
-            try:
-                protocol, rest = stream_url.split("://", 1)
-                encoded_username = quote(str(username), safe="")
-                encoded_password = quote(str(password), safe="")
-                stream_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
-            except Exception:
-                pass
-
-        stream_res = await session.execute(
-            select(CameraStream).where(CameraStream.stream_id == stream_id)
-        )
-        stream = stream_res.scalar_one_or_none()
+    async with _sync_lock:
+        raw_cameras = await fetch_upstream_cameras()
+        updated_count = 0
         
-        profile = map_stream_profile(raw.get("streamType"))
-        res_str = f"{raw.get('width', 1920)}x{raw.get('height', 1080)}"
-        fps_val = int(raw.get("fps", 15)) if raw.get("fps") is not None else 15
-        codec_val = "H265" if "h265" in (raw.get("archiveType") or "").lower() else "H264"
-        bitrate_val = int(raw.get("bitrate") // 1000) if raw.get("bitrate") else None
+        for raw in raw_cameras:
+            source_id = int(raw.get("cameraId") or raw.get("id"))
+            name = str(raw.get("name") or f"Camera {source_id}")
+            active = bool(raw.get("active", True))
 
-        # Determine always_on based on archiveDays
-        archive_days = raw.get("archiveDays")
-        always_on_val = False
-        if archive_days is not None:
-            try:
-                if int(archive_days) > 0:
-                    always_on_val = True
-            except (ValueError, TypeError):
-                pass
-
-        if not stream:
-            stream = CameraStream(
-                camera_id=camera.id,
-                stream_id=stream_id,
-                profile_type=profile,
-                resolution=res_str,
-                fps=fps_val,
-                codec=codec_val,
-                bitrate=bitrate_val,
-                stream_url=stream_url,
-                stream_mode="AUTO",
-                always_on=always_on_val,
-                status=StreamState.REGISTERED
+            # 1. Sync Camera Parent Row
+            make = raw.get("make")
+            res = await session.execute(
+                select(Camera).where(Camera.source_camera_id == source_id)
             )
-            session.add(stream)
-            await session.flush()
-        else:
-            stream.stream_url = stream_url
-            stream.resolution = res_str
-            stream.fps = fps_val
-            stream.bitrate = bitrate_val
-            if stream.codec != "H265":
-                stream.codec = codec_val
-            stream.always_on = always_on_val
-            await session.flush()
+            camera = res.scalar_one_or_none()
+            if not camera:
+                camera = Camera(
+                    source_camera_id=source_id,
+                    name=name,
+                    active=active,
+                    make=make,
+                    synced_from_api=True
+                )
+                session.add(camera)
+                await session.flush()
+            else:
+                camera.name = name
+                camera.active = active
+                camera.make = make
+                camera.synced_from_api = True
+                await session.flush()
 
-        # Register in MediaMTX config
-        if camera.active:
-            await stream_manager.add_stream(session, stream)
-        else:
-            await stream_manager.remove_stream(session, stream)
+            # 2. Sync CameraStream Child Row
+            stream_id = str(raw.get("streamId") or f"{raw.get('serverCameraId','camera')}_{raw.get('streamType','NORMAL')}")
+            stream_url = str(raw.get("rtspUrl") or "").strip()
+            if not stream_url.startswith(("rtsp://", "rtsps://", "rtmp://")):
+                stream_url = f"rtsp://{stream_url}"
 
-        updated_count += 1
+            # Inject username/password if present
+            username = raw.get("username")
+            password = raw.get("password")
+            if username and password:
+                try:
+                    protocol, rest = stream_url.split("://", 1)
+                    encoded_username = quote(str(username), safe="")
+                    encoded_password = quote(str(password), safe="")
+                    stream_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+                except Exception:
+                    pass
 
-    await session.commit()
-    return SyncResponse(total=len(raw_cameras), created_or_updated=updated_count, source=settings.upstream_camera_api_url)
+            stream_res = await session.execute(
+                select(CameraStream).where(CameraStream.stream_id == stream_id)
+            )
+            stream = stream_res.scalar_one_or_none()
+            
+            profile = map_stream_profile(raw.get("streamType"))
+            res_str = f"{raw.get('width', 1920)}x{raw.get('height', 1080)}"
+            fps_val = int(raw.get("fps", 15)) if raw.get("fps") is not None else 15
+            codec_val = "H265" if "h265" in (raw.get("archiveType") or "").lower() else "H264"
+            bitrate_val = int(raw.get("bitrate") // 1000) if raw.get("bitrate") else None
+
+            # Determine always_on based on archiveDays
+            archive_days = raw.get("archiveDays")
+            always_on_val = False
+            if archive_days is not None:
+                try:
+                    if int(archive_days) > 0:
+                        always_on_val = True
+                except (ValueError, TypeError):
+                    pass
+
+            if not stream:
+                stream = CameraStream(
+                    camera_id=camera.id,
+                    stream_id=stream_id,
+                    profile_type=profile,
+                    resolution=res_str,
+                    fps=fps_val,
+                    codec=codec_val,
+                    bitrate=bitrate_val,
+                    stream_url=stream_url,
+                    stream_mode="AUTO",
+                    always_on=always_on_val,
+                    status=StreamState.REGISTERED
+                )
+                session.add(stream)
+                await session.flush()
+            else:
+                stream.stream_url = stream_url
+                stream.resolution = res_str
+                stream.fps = fps_val
+                stream.bitrate = bitrate_val
+                if stream.codec != "H265":
+                    stream.codec = codec_val
+                stream.always_on = always_on_val
+                await session.flush()
+
+            # Register in MediaMTX config
+            if camera.active:
+                await stream_manager.add_stream(session, stream)
+            else:
+                await stream_manager.remove_stream(session, stream)
+
+            updated_count += 1
+
+        await session.commit()
+        return SyncResponse(total=len(raw_cameras), created_or_updated=updated_count, source=settings.upstream_camera_api_url)
 
 @app.get("/api/cameras/sync", response_model=SyncResponse)
 async def sync_cameras_get(session: Annotated[AsyncSession, Depends(get_session)]):
