@@ -212,7 +212,8 @@ EOF
     "$VENV_PATH/bin/pip" install --upgrade pip
     "$VENV_PATH/bin/pip" install -r "$PROJECT_DIR/backend/requirements.txt"
 
-    # Generate backend environment variables (.env)
+    # Generate backend environment variables (.env) with unique NODE_ID
+    NODE_ID="node_$(hostname | tr '-' '_')_$(echo $CORE_IP | tr '.' '_')"
     cat <<EOF > "$PROJECT_DIR/backend/.env"
 DATABASE_URL=postgresql+asyncpg://vms_admin:vms_secure_password@localhost:5432/vms_db
 REDIS_URL=redis://localhost:6379/0
@@ -222,6 +223,7 @@ UPSTREAM_CAMERA_API_URL=https://iportal-poc.iviscloud.net/api/cameras/camera-vid
 TURN_SERVER_URL=turn:${CORE_IP}:3478
 TURN_SERVER_USERNAME=admin
 TURN_SERVER_CREDENTIAL=admin123
+NODE_ID=${NODE_ID}
 EOF
 
     # Configure cluster policy mapping to standalone transcoder
@@ -246,6 +248,7 @@ ExecStart=$VENV_PATH/bin/uvicorn app.main:app --host 0.0.0.0 --port 8005
 Restart=always
 RestartSec=5
 Environment=PATH=$VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=NODE_ID=${NODE_ID}
 
 [Install]
 WantedBy=multi-user.target
