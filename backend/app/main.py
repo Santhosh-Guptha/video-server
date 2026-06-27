@@ -1425,6 +1425,125 @@ async def get_camera(stream_id: str, session: Annotated[AsyncSession, Depends(ge
     )
     return camera_res.scalar_one()
 
+
+@app.post("/api/cameras/{identifier}/apply-upstream-config")
+async def apply_upstream_camera_config(
+    identifier: str, 
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    import uuid
+    from .webrtc import resolve_stream_by_identifier
+    from .camera_configurator import apply_camera_configuration
+    
+    # 1. Resolve camera
+    camera = None
+    stream = await resolve_stream_by_identifier(identifier, session)
+    if stream:
+        camera_res = await session.execute(
+            select(Camera)
+            .where(Camera.id == stream.camera_id)
+            .options(selectinload(Camera.streams))
+        )
+        camera = camera_res.scalar_one_or_none()
+        
+    if not camera:
+        try:
+            camera_uuid = uuid.UUID(identifier)
+            camera_res = await session.execute(
+                select(Camera)
+                .where(Camera.id == camera_uuid)
+                .options(selectinload(Camera.streams))
+            )
+            camera = camera_res.scalar_one_or_none()
+        except ValueError:
+            pass
+            
+    if not camera:
+        try:
+            camera_source_id = int(identifier)
+            camera_res = await session.execute(
+                select(Camera)
+                .where(Camera.source_camera_id == camera_source_id)
+                .options(selectinload(Camera.streams))
+            )
+            camera = camera_res.scalar_one_or_none()
+        except ValueError:
+            pass
+            
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found by any of the identifiers (stream_id, UUID, or source_camera_id)")
+
+    # 2. Fetch latest upstream configuration
+    try:
+        raw_cameras = await fetch_upstream_cameras()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch upstream configurations: {e}")
+
+    # 3. Find matching upstream entries
+    matching_raws = [rc for rc in raw_cameras if int(rc.get("cameraId") or rc.get("id")) == camera.source_camera_id]
+    if not matching_raws:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No configurations found upstream for camera source ID {camera.source_camera_id}"
+        )
+
+    results = []
+    errors = []
+
+    for raw_config in matching_raws:
+        stream_type = raw_config.get("streamType", "HD")
+        rtsp_url = raw_config.get("rtspUrl", "")
+        username = raw_config.get("username", "")
+        password = raw_config.get("password", "")
+        target_width = int(raw_config.get("width") or 1920)
+        target_height = int(raw_config.get("height") or 1080)
+        target_fps = int(raw_config.get("fps") or 15)
+        
+        target_bitrate = raw_config.get("bitrate")
+        target_bitrate_kbps = int(target_bitrate // 1000) if target_bitrate else None
+        
+        try:
+            res = await apply_camera_configuration(
+                rtsp_url=rtsp_url,
+                username=username,
+                password=password,
+                stream_type=stream_type,
+                target_width=target_width,
+                target_height=target_height,
+                target_fps=target_fps,
+                target_bitrate_kbps=target_bitrate_kbps
+            )
+            results.append({"stream_type": stream_type, "status": "success", "details": res})
+        except Exception as e:
+            errors.append({"stream_type": stream_type, "status": "failed", "error": str(e)})
+
+    # Also update the stream configuration in the local database to match the new settings
+    for res_item in results:
+        details = res_item["details"]
+        if details["status"] == "configured":
+            s_type = res_item["stream_type"]
+            db_profile = ProfileType.MAIN if s_type.upper() in ("MAIN", "HD") else ProfileType.SUB
+            
+            # Find local camera stream matching this profile
+            for local_stream in camera.streams:
+                if local_stream.profile_type == db_profile:
+                    new_settings = details["new_settings"]
+                    local_stream.resolution = new_settings["resolution"]
+                    local_stream.fps = new_settings["fps"]
+                    if new_settings["bitrate"] is not None:
+                        local_stream.bitrate = new_settings["bitrate"]
+                    session.add(local_stream)
+            await session.commit()
+
+    return {
+        "camera_id": camera.id,
+        "name": camera.name,
+        "source_camera_id": camera.source_camera_id,
+        "results": results,
+        "errors": errors
+    }
+
+
 @app.post("/api/cameras/{stream_id}/live/start")
 async def start_live(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
     from .webrtc import resolve_stream_by_identifier
