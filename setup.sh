@@ -128,7 +128,7 @@ EOF
 # Run database migrations
 log_info "Running Alembic migrations..."
 cd "$PROJECT_DIR/backend"
-"$VENV_PATH/bin/alembic upgrade head"
+"$VENV_PATH/bin/alembic" upgrade head
 cd "$PROJECT_DIR"
 
 # Create video-backend systemd service
