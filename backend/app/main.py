@@ -280,18 +280,33 @@ async def startup():
     from . import db
     
     async def apply_dynamic_schema_upgrades(conn):
+        def get_columns(sync_conn, table_name):
+            from sqlalchemy import inspect
+            insp = inspect(sync_conn)
+            try:
+                return [c["name"] for c in insp.get_columns(table_name)]
+            except Exception:
+                return []
+
+        existing_cameras_cols = await conn.run_sync(lambda sync_conn: get_columns(sync_conn, "cameras"))
+        existing_streams_cols = await conn.run_sync(lambda sync_conn: get_columns(sync_conn, "camera_streams"))
+
+        # Cameras upgrades
+        if "make" not in existing_cameras_cols:
+            try:
+                await conn.execute(text("ALTER TABLE cameras ADD COLUMN make VARCHAR(128);"))
+            except Exception as ex:
+                print(f"[db_upgrade] Error adding make: {ex}")
+        if "synced_from_api" not in existing_cameras_cols:
+            try:
+                await conn.execute(text("ALTER TABLE cameras ADD COLUMN synced_from_api BOOLEAN DEFAULT FALSE NOT NULL;"))
+            except Exception as ex:
+                print(f"[db_upgrade] Error adding synced_from_api: {ex}")
         try:
-            await conn.execute(text("ALTER TABLE cameras ADD COLUMN make VARCHAR(128);"))
+            await conn.execute(text("UPDATE cameras SET synced_from_api = TRUE WHERE synced_from_api IS NULL;"))
         except Exception:
             pass
-        try:
-            await conn.execute(text("ALTER TABLE cameras ADD COLUMN synced_from_api BOOLEAN DEFAULT FALSE NOT NULL;"))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text("UPDATE cameras SET synced_from_api = TRUE;"))
-        except Exception:
-            pass
+
         # CameraStream upgrades
         cols_to_add = [
             ("profile", "VARCHAR(64)", "NULL"),
@@ -305,14 +320,16 @@ async def startup():
             ("archive_type", "VARCHAR(32)", "DEFAULT 'continuous'"),
             ("preferred_live_codec", "VARCHAR(16)", "DEFAULT 'H264'"),
             ("preferred_playback_codec", "VARCHAR(16)", "DEFAULT 'H264'"),
-            ("last_probe", "TIMESTAMP WITH TIME ZONE", "NULL"),
+            ("last_probe", "TIMESTAMP WITH TIME ZONE" if conn.dialect.name == 'postgresql' else "TIMESTAMP", "NULL"),
             ("probe_version", "VARCHAR(16)", "DEFAULT '1.0'")
         ]
         for col_name, col_type, col_constraints in cols_to_add:
-            try:
-                await conn.execute(text(f"ALTER TABLE camera_streams ADD COLUMN {col_name} {col_type} {col_constraints};"))
-            except Exception:
-                pass
+            if col_name not in existing_streams_cols:
+                try:
+                    await conn.execute(text(f"ALTER TABLE camera_streams ADD COLUMN {col_name} {col_type} {col_constraints};"))
+                    print(f"[db_upgrade] Added column {col_name} to camera_streams")
+                except Exception as ex:
+                    print(f"[db_upgrade] Error adding column {col_name}: {ex}")
 
     try:
         async with db.engine.begin() as conn:
