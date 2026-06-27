@@ -50,7 +50,23 @@ async def get_onvif_camera_client(ip: str, username: str, password: str, overrid
         try:
             # We wrap the blocking zeep initialization in an executor with timeout
             def init_cam():
-                cam = ONVIFCamera(ip, port, username, password, WSDL_DIR)
+                from zeep.transports import Transport
+                from urllib.parse import urlparse, urlunparse
+                
+                # Set short timeouts to quickly skip unreachable local discovery endpoints (e.g. event service)
+                transport = Transport(timeout=5.0, operation_timeout=5.0)
+                cam = ONVIFCamera(ip, port, username, password, WSDL_DIR, transport=transport)
+                
+                # Rewrite xaddrs to use the public IP/port (vital for NAT/port-forwarded cameras)
+                for ns, xaddr in list(cam.xaddrs.items()):
+                    try:
+                        parsed_xaddr = urlparse(xaddr)
+                        new_netloc = f"{ip}:{port}"
+                        new_xaddr = urlunparse(parsed_xaddr._replace(netloc=new_netloc))
+                        cam.xaddrs[ns] = new_xaddr
+                    except Exception:
+                        pass
+                
                 # Test call to verify connection and auth
                 media = cam.create_media_service()
                 media.GetProfiles()
@@ -58,7 +74,7 @@ async def get_onvif_camera_client(ip: str, username: str, password: str, overrid
 
             cam = await asyncio.wait_for(
                 asyncio.to_thread(init_cam),
-                timeout=15.0
+                timeout=35.0
             )
             return cam, port
         except Exception as e:
