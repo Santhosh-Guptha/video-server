@@ -37,7 +37,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$CUR_DIR
-ExecStart=$CUR_DIR/venv/bin/uvicorn transcoding-server.api.app:app --host 0.0.0.0 --port 8500 --workers 2
+ExecStart=$CUR_DIR/venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8500 --workers 2
 Restart=always
 RestartSec=5
 Environment=PYTHONPATH=$CUR_DIR
