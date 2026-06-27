@@ -42,10 +42,12 @@ fi
 
 # 3. PostgreSQL Database Configuration
 log_info "2. Setting up PostgreSQL database and role..."
+systemctl stop video-backend.service video-frontend.service mediamtx.service || true
 systemctl start postgresql
 systemctl enable postgresql
 
-# Drop and recreate database and role for a clean start
+# Terminate active connections and drop/recreate database and role for a clean start
+sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'vms_db' AND pid <> pg_backend_pid();" || true
 sudo -u postgres psql -c "DROP DATABASE IF EXISTS vms_db;"
 sudo -u postgres psql -c "DROP USER IF EXISTS vms_admin;"
 sudo -u postgres psql -c "CREATE USER vms_admin WITH PASSWORD 'vms_secure_password';"
