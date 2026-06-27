@@ -12,12 +12,11 @@ echo "    STARTING VMS TRANSCODING SERVER SETUP"
 echo "=========================================================="
 
 # Make all child scripts executable
-chmod +x scripts/*.sh
+chmod +x transcoding-server/scripts/*.sh
 
-# Execute the installation script
+# Enter the transcoding-server directory to execute install and diagnostics
+cd transcoding-server
 ./scripts/install.sh
-
-# Execute the diagnostic script to print system state
 ./scripts/diagnostics.sh
 
 echo "=========================================================="
