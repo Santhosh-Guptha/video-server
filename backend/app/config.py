@@ -1,3 +1,4 @@
+from typing import Any
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -129,55 +130,85 @@ PROFILE_MAP = {
 
 # ── Dynamic policy helpers ───────────────────────────────────────────────────
 def resolve_live_profile(layout_size: int = 0) -> str:
-    if settings.enable_adaptive_profile and layout_size > 0:
-        profile_name = settings.focus_view_profile if layout_size == 1 else settings.grid_view_profile
+    from .policy_loader import PolicyLoader
+    enable_adaptive = PolicyLoader.get("stream_policy.yaml", "enable_adaptive_profile", settings.enable_adaptive_profile)
+    focus_view = PolicyLoader.get("stream_policy.yaml", "focus_view_profile", settings.focus_view_profile)
+    grid_view = PolicyLoader.get("stream_policy.yaml", "grid_view_profile", settings.grid_view_profile)
+    live_profile = PolicyLoader.get("stream_policy.yaml", "live_stream_profile", settings.live_stream_profile)
+    
+    if enable_adaptive and layout_size > 0:
+        profile_name = focus_view if layout_size == 1 else grid_view
     else:
-        profile_name = settings.live_stream_profile
+        profile_name = live_profile
     return PROFILE_MAP.get(profile_name.upper(), "SUB")
 
 def resolve_playback_profile() -> str:
-    return PROFILE_MAP.get(settings.playback_profile.upper(), "MAIN")
+    from .policy_loader import PolicyLoader
+    playback_prof = PolicyLoader.get("playback_policy.yaml", "playback_profile", settings.playback_profile)
+    return PROFILE_MAP.get(playback_prof.upper(), "MAIN")
 
 def get_recording_profiles() -> list:
-    if settings.record_hd_only:
+    from .policy_loader import PolicyLoader
+    hd_only = PolicyLoader.get("recording_policy.yaml", "record_hd_only", settings.record_hd_only)
+    rec_normal = PolicyLoader.get("recording_policy.yaml", "record_normal", settings.record_normal)
+    rec_mobile = PolicyLoader.get("recording_policy.yaml", "record_mobile", settings.record_mobile)
+    
+    if hd_only:
         return ["MAIN"]
     profiles = ["MAIN"]
-    if settings.record_normal:
+    if rec_normal:
         profiles.append("SUB")
-    if settings.record_mobile:
+    if rec_mobile:
         profiles.append("MOBILE")
     return profiles
 
 def should_record_profile(profile_type_value: str) -> bool:
     return profile_type_value in get_recording_profiles()
 
+# ── Dynamic module attribute resolver ─────────────────────────────────────────
+# This maps requests for config settings dynamically to the active policy files.
+_DYNAMIC_POLICY_MAP = {
+    "STRICT_CAMERA_VALIDATION": ("security_policy.yaml", "strict_camera_validation", settings.strict_camera_validation),
+    "ALLOW_UNKNOWN_EDGE_DEVICES": ("security_policy.yaml", "allow_unknown_edge_devices", settings.allow_unknown_edge_devices),
+    "RECORD_HD_ONLY": ("recording_policy.yaml", "record_hd_only", settings.record_hd_only),
+    "RECORD_NORMAL": ("recording_policy.yaml", "record_normal", settings.record_normal),
+    "RECORD_MOBILE": ("recording_policy.yaml", "record_mobile", settings.record_mobile),
+    "LIVE_STREAM_PROFILE": ("stream_policy.yaml", "live_stream_profile", settings.live_stream_profile),
+    "ENABLE_ADAPTIVE_PROFILE": ("stream_policy.yaml", "enable_adaptive_profile", settings.enable_adaptive_profile),
+    "FOCUS_VIEW_PROFILE": ("stream_policy.yaml", "focus_view_profile", settings.focus_view_profile),
+    "GRID_VIEW_PROFILE": ("stream_policy.yaml", "grid_view_profile", settings.grid_view_profile),
+    "MOBILE_VIEW_PROFILE": ("stream_policy.yaml", "mobile_view_profile", settings.mobile_view_profile),
+    "PLAYBACK_PROFILE": ("playback_policy.yaml", "playback_profile", settings.playback_profile),
+    "PLAYBACK_ALLOW_NORMAL_FALLBACK": ("playback_policy.yaml", "playback_allow_normal_fallback", settings.playback_allow_normal_fallback),
+    "PLAYBACK_ALLOW_MOBILE_FALLBACK": ("playback_policy.yaml", "playback_allow_mobile_fallback", settings.playback_allow_mobile_fallback),
+    "PLAYBACK_SPEEDS": ("playback_policy.yaml", "playback_speeds", settings.playback_speeds),
+    "ENABLE_WEBRTC": ("stream_policy.yaml", "enable_webrtc", settings.enable_webrtc),
+    "ENABLE_HLS_FALLBACK": ("stream_policy.yaml", "enable_hls_fallback", settings.enable_hls_fallback),
+    "WEBRTC_CONNECTION_TIMEOUT_SECONDS": ("session_policy.yaml", "webrtc_connection_timeout_seconds", settings.webrtc_connection_timeout_seconds),
+    "MAX_WEBRTC_SESSIONS_PER_CAMERA": ("session_policy.yaml", "max_webrtc_sessions_per_camera", settings.max_webrtc_sessions_per_camera),
+    "TRANSCODER_VCODEC": ("transcoder_policy.yaml", "transcoder_vcodec", settings.transcoder_vcodec),
+    "TRANSCODER_PRESET": ("transcoder_policy.yaml", "transcoder_preset", settings.transcoder_preset),
+    "TRANSCODER_TUNE": ("transcoder_policy.yaml", "transcoder_tune", settings.transcoder_tune),
+    "TRANSCODER_IDLE_TIMEOUT_SECONDS": ("session_policy.yaml", "transcoder_grace_period_seconds", settings.transcoder_grace_period_seconds),
+    "MAX_ACTIVE_TRANSCODERS": ("transcoder_policy.yaml", "max_active_transcoders", settings.max_active_transcoders),
+    "SEGMENT_DURATION_SECONDS": ("recording_policy.yaml", "segment_time_seconds", settings.segment_time_seconds),
+    "ENABLE_RECORDING": ("recording_policy.yaml", "enable_recording", settings.enable_recording),
+    "ENABLE_RTSP_HEALTH_CHECK": ("watchdog_policy.yaml", "enable_rtsp_health_check", settings.enable_rtsp_health_check),
+    "CAMERA_PING_INTERVAL_SECONDS": ("watchdog_policy.yaml", "camera_ping_interval_seconds", settings.camera_ping_interval_seconds),
+    "CAMERA_PING_TIMEOUT_SECONDS": ("watchdog_policy.yaml", "camera_ping_timeout_seconds", settings.camera_ping_timeout_seconds),
+    "ENABLE_RETENTION": ("storage_policy.yaml", "enable_retention", settings.enable_retention),
+    "DEFAULT_RETENTION_DAYS": ("storage_policy.yaml", "default_retention_days", settings.default_retention_days),
+}
+
+def __getattr__(name: str) -> Any:
+    if name in _DYNAMIC_POLICY_MAP:
+        from .policy_loader import PolicyLoader
+        policy_file, key, default_val = _DYNAMIC_POLICY_MAP[name]
+        return PolicyLoader.get(policy_file, key, default_val)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 # ── UPPERCASE Compatibility Aliases for policy values ──────────────────────────
-STRICT_CAMERA_VALIDATION = settings.strict_camera_validation
-ALLOW_UNKNOWN_EDGE_DEVICES = settings.allow_unknown_edge_devices
-RECORD_HD_ONLY = settings.record_hd_only
-RECORD_NORMAL = settings.record_normal
-RECORD_MOBILE = settings.record_mobile
-LIVE_STREAM_PROFILE = settings.live_stream_profile
-ENABLE_ADAPTIVE_PROFILE = settings.enable_adaptive_profile
-FOCUS_VIEW_PROFILE = settings.focus_view_profile
-GRID_VIEW_PROFILE = settings.grid_view_profile
-MOBILE_VIEW_PROFILE = settings.mobile_view_profile
-PLAYBACK_PROFILE = settings.playback_profile
-PLAYBACK_ALLOW_NORMAL_FALLBACK = settings.playback_allow_normal_fallback
-PLAYBACK_ALLOW_MOBILE_FALLBACK = settings.playback_allow_mobile_fallback
-PLAYBACK_SPEEDS = settings.playback_speeds
-ENABLE_WEBRTC = settings.enable_webrtc
-ENABLE_HLS_FALLBACK = settings.enable_hls_fallback
-WEBRTC_CONNECTION_TIMEOUT_SECONDS = settings.webrtc_connection_timeout_seconds
-MAX_WEBRTC_SESSIONS_PER_CAMERA = settings.max_webrtc_sessions_per_camera
-ENABLE_H265_TRANSCODING = settings.enable_h265_transcoding
-TRANSCODER_VCODEC = settings.transcoder_vcodec
-TRANSCODER_PRESET = settings.transcoder_preset
-TRANSCODER_TUNE = settings.transcoder_tune
-TRANSCODER_IDLE_TIMEOUT_SECONDS = settings.transcoder_grace_period_seconds
-MAX_ACTIVE_TRANSCODERS = settings.max_active_transcoders
-SEGMENT_DURATION_SECONDS = settings.segment_time_seconds
-ENABLE_RECORDING = settings.enable_recording
+# Non-policy static values are left here; policy values fall through to __getattr__.
 RECORDING_RECOVERY_INTERVAL_HOURS = settings.recovery_interval_seconds / 3600.0
 TIMELINE_CACHE_SECONDS = settings.timeline_cache_seconds
 TIMELINE_MERGE_THRESHOLD_SECONDS = settings.timeline_merge_threshold_seconds
@@ -186,14 +217,10 @@ ENABLE_EDGE_PUSH = settings.enable_edge_push
 EDGE_PUSH_PRIORITY = settings.edge_push_priority
 EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS = settings.edge_push_heartbeat_timeout_seconds
 EDGE_PUSH_CHECK_INTERVAL_SECONDS = settings.edge_push_check_interval_seconds
-ENABLE_RTSP_HEALTH_CHECK = settings.enable_rtsp_health_check
-CAMERA_PING_INTERVAL_SECONDS = settings.camera_ping_interval_seconds
-CAMERA_PING_TIMEOUT_SECONDS = settings.camera_ping_timeout_seconds
 CAMERA_PING_MAX_CONCURRENT = settings.camera_ping_max_concurrent
 UPSTREAM_SYNC_INTERVAL_MINUTES = settings.upstream_sync_interval_minutes
-ENABLE_RETENTION = settings.enable_retention
-DEFAULT_RETENTION_DAYS = settings.default_retention_days
 INDEXER_INTERVAL_SECONDS = settings.indexer_interval_seconds
 MEDIAMTX_PATCH_ONLY = settings.mediamtx_patch_only
 ALLOW_DELETE_ADD_RECONFIGURATION = settings.allow_delete_add_reconfiguration
+ENABLE_H265_TRANSCODING = True
 

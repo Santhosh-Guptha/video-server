@@ -1,0 +1,19 @@
+capabilities:
+  android_native:
+    supports_h264: true
+    supports_h265: true
+  chrome:
+    supports_h264: true
+    supports_h265: false
+  desktop_client:
+    supports_h264: true
+    supports_h265: true
+  firefox:
+    supports_h264: true
+    supports_h265: false
+  ios_native:
+    supports_h264: true
+    supports_h265: true
+  safari:
+    supports_h264: true
+    supports_h265: true

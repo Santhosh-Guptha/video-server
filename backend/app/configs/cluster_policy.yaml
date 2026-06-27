@@ -1,0 +1,5 @@
+backup_gateway_url: http://localhost:8501
+cloud_enabled: true
+cloud_gateway_url: http://localhost:8500
+connection_timeout_seconds: 5
+fallback_timeout_seconds: 3

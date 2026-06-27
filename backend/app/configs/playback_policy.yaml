@@ -1,0 +1,10 @@
+enable_playback_transcoding: true
+playback_allow_mobile_fallback: false
+playback_allow_normal_fallback: true
+playback_profile: HD
+playback_speeds:
+- 0.5
+- 1.0
+- 2.0
+- 4.0
+- 8.0

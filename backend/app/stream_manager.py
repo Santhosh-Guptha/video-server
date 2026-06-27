@@ -102,7 +102,7 @@ class StreamManager:
                 except Exception:
                     pass
 
-    async def add_stream(self, session: AsyncSession, stream: CameraStream) -> None:
+    async def add_stream(self, session: AsyncSession, stream: CameraStream, force_probe: bool = False) -> None:
         """
         Registers a camera stream path dynamically in MediaMTX.
         Transitions the stream state to CONNECTING.
@@ -153,15 +153,15 @@ class StreamManager:
 
             # Check if actual FPS is greater than configured FPS to trigger limiting, and probe stream codec
             should_limit_fps = False
-            if not is_push and has_valid_rtsp:
+            needs_probe = force_probe or stream.last_probe is None or not stream.codec
+            if not is_push and has_valid_rtsp and needs_probe:
                 actual_fps = None
                 try:
                     import json
                     cmd_probe = [
                         "ffprobe", "-v", "error",
                         "-rtsp_transport", "tcp",
-                        "-select_streams", "v:0",
-                        "-show_entries", "stream=avg_frame_rate,r_frame_rate,codec_name",
+                        "-show_entries", "stream=codec_name,codec_type,avg_frame_rate,r_frame_rate,profile,level,pix_fmt,channels",
                         "-of", "json",
                         url_strip
                     ]
@@ -174,26 +174,49 @@ class StreamManager:
                     if proc_probe.returncode == 0:
                         probe_data = json.loads(stdout_probe.decode())
                         streams_info = probe_data.get("streams", [])
-                        if streams_info:
-                            # 1. Update codec in database
-                            codec_name = streams_info[0].get("codec_name", "")
+                        
+                        video_stream = None
+                        audio_stream = None
+                        for s_info in streams_info:
+                            if s_info.get("codec_type") == "video" and not video_stream:
+                                video_stream = s_info
+                            elif s_info.get("codec_type") == "audio" and not audio_stream:
+                                audio_stream = s_info
+                                
+                        if video_stream:
+                            codec_name = video_stream.get("codec_name", "")
                             if codec_name:
                                 detected_codec = "H265" if codec_name.lower() in ("hevc", "h265") else "H264"
                                 if stream.codec != detected_codec:
                                     print(f"[stream_manager] Probed codec {detected_codec} (was {stream.codec}) for {path_name}")
                                     stream.codec = detected_codec
-
-                            # 2. Check FPS
-                            if stream.fps:
-                                avg_frame_rate = streams_info[0].get("avg_frame_rate", "0/0")
-                                n, d = map(int, avg_frame_rate.split("/"))
-                                if d > 0 and n > 0:
+                            
+                            stream.profile = video_stream.get("profile")
+                            level_val = video_stream.get("level")
+                            stream.level = str(level_val) if level_val is not None else None
+                            stream.pixel_format = video_stream.get("pix_fmt")
+                            stream.gop = int(stream.fps * 2) if stream.fps else 30
+                            
+                            # Check FPS
+                            avg_frame_rate = video_stream.get("avg_frame_rate", "0/0")
+                            n, d = map(int, avg_frame_rate.split("/"))
+                            if d > 0 and n > 0:
+                                actual_fps = n / d
+                            else:
+                                r_frame_rate = video_stream.get("r_frame_rate", "0/0")
+                                n, d = map(int, r_frame_rate.split("/"))
+                                if d > 0 and n > 0 and (n/d) < 1000:
                                     actual_fps = n / d
-                                else:
-                                    r_frame_rate = streams_info[0].get("r_frame_rate", "0/0")
-                                    n, d = map(int, r_frame_rate.split("/"))
-                                    if d > 0 and n > 0 and (n/d) < 1000:  # filter ticks
-                                        actual_fps = n / d
+                                    
+                        if audio_stream:
+                            stream.audio_codec = audio_stream.get("codec_name")
+                            stream.audio_channels = audio_stream.get("channels")
+                            
+                        # Update probe status
+                        from datetime import datetime
+                        stream.last_probe = datetime.utcnow()
+                        stream.probe_version = "1.0"
+                        await session.commit()
                 except Exception as probe_err:
                     print(f"[stream_manager] Failed to probe stream for {path_name}: {probe_err}")
 

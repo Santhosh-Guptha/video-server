@@ -1,0 +1,4 @@
+ai_cluster_url: http://localhost:8999
+ai_fps_limit: 10
+ai_inference_engine: local
+enable_ai_analytics: true

@@ -12,6 +12,19 @@ class CameraStreamOut(BaseModel):
     fps: int
     codec: str
     bitrate: Optional[int] = None
+    profile: Optional[str] = None
+    level: Optional[str] = None
+    pixel_format: Optional[str] = None
+    gop: Optional[int] = None
+    audio_codec: Optional[str] = None
+    audio_channels: Optional[int] = None
+    browser_compatible: bool = True
+    transcoding_required: bool = False
+    archive_type: Optional[str] = "continuous"
+    preferred_live_codec: Optional[str] = "H264"
+    preferred_playback_codec: Optional[str] = "H264"
+    last_probe: Optional[datetime] = None
+    probe_version: Optional[str] = "1.0"
     stream_url: str
     status: str
     error_message: Optional[str] = None
@@ -137,6 +150,9 @@ class CameraCreate(BaseModel):
     stream_url: str
     stream_mode: str = "AUTO"
     always_on: bool = False
+    archive_type: Optional[str] = "continuous"
+    preferred_live_codec: Optional[str] = "H264"
+    preferred_playback_codec: Optional[str] = "H264"
 
 class CameraUpdate(BaseModel):
     name: str
@@ -148,6 +164,9 @@ class CameraUpdate(BaseModel):
     bitrate: Optional[int] = None
     stream_url: str
     always_on: bool
+    archive_type: Optional[str] = "continuous"
+    preferred_live_codec: Optional[str] = "H264"
+    preferred_playback_codec: Optional[str] = "H264"
 
 class SettingsUpdate(BaseModel):
     use_upstream_cameras: bool

@@ -1,0 +1,4 @@
+enable_prometheus: true
+log_level: INFO
+metrics_history_days: 7
+prometheus_port: 8000

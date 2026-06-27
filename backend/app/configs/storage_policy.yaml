@@ -1,0 +1,5 @@
+default_retention_days: 30
+enable_low_disk_eviction: true
+enable_retention: true
+low_disk_space_threshold_gb: 5.0
+target_free_space_gb: 10.0

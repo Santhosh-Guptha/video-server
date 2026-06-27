@@ -1,0 +1,5 @@
+enable_adaptive_profile: true
+focus_view_profile: HD
+grid_view_profile: NORMAL
+live_stream_profile: NORMAL
+mobile_view_profile: MOBILE

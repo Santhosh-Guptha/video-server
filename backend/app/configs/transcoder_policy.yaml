@@ -1,0 +1,7 @@
+hw_acceleration_enabled: false
+hw_acceleration_type: cuda
+max_active_transcoders: 10
+max_streams_per_gpu: 8
+transcoder_preset: ultrafast
+transcoder_tune: zerolatency
+transcoder_vcodec: libx264

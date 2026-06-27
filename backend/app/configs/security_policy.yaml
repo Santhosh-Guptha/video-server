@@ -1,0 +1,4 @@
+api_key_secret: vms_secure_secret_key
+node_header: X-Node-ID
+tenant_header: X-Tenant-ID
+token_expiry_hours: 24

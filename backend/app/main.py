@@ -172,6 +172,13 @@ def configure_mediamtx_paths_dynamically():
 
 @app.on_event("startup")
 async def startup():
+    # Start remote transcoding client background health check loop
+    try:
+        from .transcoding_client import TranscodingClient
+        TranscodingClient.start_background_loop()
+        print("[startup] Transcoding client background health check loop started.")
+    except Exception as e:
+        print(f"[startup] Failed to start transcoding client background loop: {e}")
     # 1. Detect upstream API URL change and clean up if it did
     import os
     import shutil
@@ -285,6 +292,27 @@ async def startup():
             await conn.execute(text("UPDATE cameras SET synced_from_api = TRUE;"))
         except Exception:
             pass
+        # CameraStream upgrades
+        cols_to_add = [
+            ("profile", "VARCHAR(64)", "NULL"),
+            ("level", "VARCHAR(16)", "NULL"),
+            ("pixel_format", "VARCHAR(32)", "NULL"),
+            ("gop", "INTEGER", "NULL"),
+            ("audio_codec", "VARCHAR(32)", "NULL"),
+            ("audio_channels", "INTEGER", "NULL"),
+            ("browser_compatible", "BOOLEAN", "DEFAULT TRUE NOT NULL"),
+            ("transcoding_required", "BOOLEAN", "DEFAULT FALSE NOT NULL"),
+            ("archive_type", "VARCHAR(32)", "DEFAULT 'continuous'"),
+            ("preferred_live_codec", "VARCHAR(16)", "DEFAULT 'H264'"),
+            ("preferred_playback_codec", "VARCHAR(16)", "DEFAULT 'H264'"),
+            ("last_probe", "TIMESTAMP WITH TIME ZONE", "NULL"),
+            ("probe_version", "VARCHAR(16)", "DEFAULT '1.0'")
+        ]
+        for col_name, col_type, col_constraints in cols_to_add:
+            try:
+                await conn.execute(text(f"ALTER TABLE camera_streams ADD COLUMN {col_name} {col_type} {col_constraints};"))
+            except Exception:
+                pass
 
     try:
         async with db.engine.begin() as conn:
@@ -1411,13 +1439,38 @@ async def restart_live(stream_id: str, session: Annotated[AsyncSession, Depends(
     await stream_manager.restart_stream(session, stream)
     return {"stream_id": stream.stream_id, "status": "restarted"}
 
+@app.post("/api/cameras/{stream_id}/refresh-codec")
+async def refresh_codec(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
+    if not stream:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+        
+    # Force run ffprobe and update database fields
+    from .stream_manager import stream_manager
+    await stream_manager.add_stream(session, stream, force_probe=True)
+    
+    return {
+        "status": "success",
+        "stream_id": stream.stream_id,
+        "codec": stream.codec,
+        "profile": stream.profile,
+        "level": stream.level,
+        "pixel_format": stream.pixel_format,
+        "gop": stream.gop,
+        "audio_codec": stream.audio_codec,
+        "audio_channels": stream.audio_channels,
+        "last_probe": stream.last_probe.isoformat() if stream.last_probe else None
+    }
+
 # ----------------------------------------------------
 # MediaMTX HLS Reverse Proxy Endpoints
 # ----------------------------------------------------
 @app.get("/api/streams/{stream_id}/live/index.m3u8")
 async def hls_playlist(
     stream_id: str,
-    session: Annotated[AsyncSession, Depends(get_session)]
+    session: Annotated[AsyncSession, Depends(get_session)],
+    supports_h265: bool = False
 ):
     target_stream_id = stream_id
     stream = None
@@ -1427,11 +1480,16 @@ async def hls_playlist(
         if stream:
             stream_id = stream.stream_id
             target_stream_id = stream_id
-            if stream.codec and stream.codec.upper() == "H265":
-                from .transcoder import transcoder_manager
-                target_stream_id = await transcoder_manager.ensure_transcoder(
-                    stream_id, session, increment_viewer=False
-                )
+            
+            client_profile = {"supports_h265": supports_h265}
+            from .stream_router import StreamRouter
+            hls_sess_id = f"hls_{stream_id}_{int(time.time())}"
+            target_stream_id = await StreamRouter.route_live(
+                stream=stream,
+                session_id=hls_sess_id,
+                client_profile=client_profile,
+                db_session=session
+            )
     except Exception as e:
         print(f"[main] Error ensuring transcoder for H.265 HLS stream {stream_id}: {e}")
 
@@ -1455,11 +1513,15 @@ async def hls_playlist(
                 from .stream_manager import stream_manager
                 await stream_manager.add_stream(session, stream)
                 
-                if stream.codec and stream.codec.upper() == "H265":
-                    from .transcoder import transcoder_manager
-                    target_stream_id = await transcoder_manager.ensure_transcoder(
-                        stream_id, session, increment_viewer=False
-                    )
+                client_profile = {"supports_h265": supports_h265}
+                from .stream_router import StreamRouter
+                hls_sess_id = f"hls_{stream_id}_{int(time.time())}"
+                target_stream_id = await StreamRouter.route_live(
+                    stream=stream,
+                    session_id=hls_sess_id,
+                    client_profile=client_profile,
+                    db_session=session
+                )
 
                 # Wait up to 1.5 seconds (checking every 0.3s) for MediaMTX to initialize the stream
                 for _ in range(5):
@@ -1493,7 +1555,13 @@ async def hls_segment(
         if stream:
             stream_id = stream.stream_id
             target_stream_id = stream_id
-            if stream.codec and stream.codec.upper() == "H265":
+            
+            # Check if there is an active cloud or local transcoding session for this stream
+            from .session_registry import SessionRegistry
+            sessions = await SessionRegistry.get_sessions_for_stream(stream_id)
+            is_transcoded = any(s.source_type in ("cloud", "local") for s in sessions)
+            
+            if is_transcoded or (stream.codec and stream.codec.upper() == "H265"):
                 target_stream_id = f"{stream_id}_h264"
     except Exception as e:
         print(f"[main] Error checking codec for HLS segment {stream_id}: {e}")
@@ -1744,7 +1812,8 @@ async def stream_playback(
     stream_id: str,
     start_ts: float,
     end_ts: float,
-    session: Annotated[AsyncSession, Depends(get_session)]
+    session: Annotated[AsyncSession, Depends(get_session)],
+    supports_h265: bool = False
 ):
     from .webrtc import resolve_stream_by_identifier
     stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
@@ -1785,6 +1854,11 @@ async def stream_playback(
     if not segments:
         raise HTTPException(status_code=404, detail="No recording segments found for this range or after it")
 
+    # Determine playback routing and transcoding needs
+    from .stream_router import StreamRouter
+    client_profile = {"supports_h265": supports_h265}
+    routing_specs = await StreamRouter.route_playback(stream, start_ts, end_ts, client_profile)
+
     concat_content = ""
     for seg in segments:
         p = Path(seg.file_path)
@@ -1800,16 +1874,34 @@ async def stream_playback(
     tmp_file.write(concat_content)
     tmp_file.close()
 
-    cmd = [
-        settings.ffmpeg_path,
-        "-f", "concat",
-        "-safe", "0",
-        "-i", tmp_file.name,
-        "-c", "copy",
-        "-f", "mp4",
-        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-        "pipe:1"
-    ]
+    # Formulate FFmpeg command: transcode H265 only if client profile dictates
+    if routing_specs["transcode"]:
+        cmd = [
+            settings.ffmpeg_path,
+            "-f", "concat",
+            "-safe", "0",
+            "-i", tmp_file.name,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-pix_fmt", "yuv420p",
+            "-g", "25",
+            "-c:a", "copy",
+            "-f", "mp4",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "pipe:1"
+        ]
+    else:
+        cmd = [
+            settings.ffmpeg_path,
+            "-f", "concat",
+            "-safe", "0",
+            "-i", tmp_file.name,
+            "-c", "copy",
+            "-f", "mp4",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "pipe:1"
+        ]
 
     print(f"[stream] Running: {' '.join(cmd)}")
 
@@ -1852,10 +1944,11 @@ async def play_playback_camera(
     camera_id: str,
     start_ts: float,
     end_ts: float,
-    session: Annotated[AsyncSession, Depends(get_session)]
+    session: Annotated[AsyncSession, Depends(get_session)],
+    supports_h265: bool = False
 ):
     """Serve playback stream for a camera ID (which matches stream_id in the DB)."""
-    return await stream_playback(camera_id, start_ts, end_ts, session)
+    return await stream_playback(camera_id, start_ts, end_ts, session, supports_h265)
 
 
 @app.get("/api/edge/status")
@@ -2103,7 +2196,7 @@ async def register_edge_camera(
     await session.flush()
 
     # Add stream to MediaMTX config
-    await stream_manager.add_stream(session, new_stream)
+    await stream_manager.add_stream(session, new_stream, force_probe=True)
     await session.commit()
 
     # Clean up from unregistered_attempts in memory
@@ -2194,7 +2287,7 @@ async def upload_edge_backlog(
             )
             session.add(stream)
             await session.flush()
-            await stream_manager.add_stream(session, stream)
+            await stream_manager.add_stream(session, stream, force_probe=True)
             await session.commit()
 
     # 2. Timestamp Extraction
@@ -2451,7 +2544,7 @@ async def create_camera(
 
     # Register stream in MediaMTX if active and streams exist
     if camera.active and camera.streams:
-        await stream_manager.add_stream(session, camera.streams[0])
+        await stream_manager.add_stream(session, camera.streams[0], force_probe=True)
 
     return camera
 
@@ -2503,7 +2596,7 @@ async def update_camera(
         if was_active and not camera.active:
             await stream_manager.remove_stream(session, target_stream)
         elif camera.active:
-            await stream_manager.add_stream(session, target_stream)
+            await stream_manager.add_stream(session, target_stream, force_probe=True)
 
     return camera
 

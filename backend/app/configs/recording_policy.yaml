@@ -1,0 +1,5 @@
+enable_recording: true
+record_hd_only: true
+record_mobile: false
+record_normal: false
+segment_time_seconds: 60

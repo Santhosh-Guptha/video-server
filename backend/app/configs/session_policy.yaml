@@ -1,0 +1,4 @@
+heartbeat_interval_seconds: 15
+max_webrtc_sessions_per_camera: 100
+transcoder_grace_period_seconds: 60
+webrtc_connection_timeout_seconds: 10
