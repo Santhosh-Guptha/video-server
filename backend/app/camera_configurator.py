@@ -58,7 +58,7 @@ async def get_onvif_camera_client(ip: str, username: str, password: str, overrid
 
             cam = await asyncio.wait_for(
                 asyncio.to_thread(init_cam),
-                timeout=4.0
+                timeout=15.0
             )
             return cam, port
         except Exception as e:
