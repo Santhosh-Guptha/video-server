@@ -77,16 +77,8 @@ if [ ! -f "$MEDIAMTX_DIR/mediamtx" ]; then
     cd "$PROJECT_DIR"
 fi
 
-# Write MediaMTX configuration
-cat <<EOF > "$MEDIAMTX_DIR/mediamtx.yml"
-paths:
-  all:
-    readUser:
-    readPass:
-    runOnDemand:
-    runOnDemandStartTimeout: 10s
-    runOnDemandCloseAfter: 10s
-EOF
+# Copy MediaMTX configuration
+cp "$PROJECT_DIR/backend/app/mediamtx.yml" "$MEDIAMTX_DIR/mediamtx.yml"
 
 # Create MediaMTX service
 cat <<EOF > /etc/systemd/system/mediamtx.service
