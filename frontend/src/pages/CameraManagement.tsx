@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Plus, Edit, Trash2, Camera as CameraIcon, Save, X, Activity, Sliders, Database, AlertTriangle, Layers, Clock, Copy, Loader2 } from 'lucide-react'
 import type { Camera } from '../types'
-import { createCamera, updateCamera, deleteCamera, getSystemSettings, updateSystemSettings, testRtspConnection } from '../lib/api'
+import { createCamera, updateCamera, deleteCamera, getSystemSettings, updateSystemSettings, testRtspConnection, applyUpstreamConfig } from '../lib/api'
 
 type Props = {
   cameras: Camera[]
@@ -17,6 +17,36 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
 
   const [useUpstreamCameras, setUseUpstreamCameras] = useState(true)
   const [settingLoading, setSettingLoading] = useState(false)
+  const [syncingCameraId, setSyncingCameraId] = useState<string | null>(null)
+
+  const handleSyncUpstreamConfig = async (streamId: string) => {
+    setSyncingCameraId(streamId)
+    setError(null)
+    setSuccess(null)
+    try {
+      const res = await applyUpstreamConfig(streamId)
+      // Check if there are errors from specific streams
+      if (res.errors && res.errors.length > 0) {
+        const errorMsgs = res.errors.map((e: any) => `${e.stream_type}: ${e.error}`).join('; ')
+        setError(`Synced completed with errors: ${errorMsgs}`)
+      } else {
+        const details = res.results.map((r: any) => {
+          const d = r.details
+          if (d.status === 'already_configured') {
+            return `${r.stream_type}: already up to date`
+          }
+          return `${r.stream_type}: configured (old: ${d.old_settings.resolution}@${d.old_settings.fps}fps, new: ${d.new_settings.resolution}@${d.new_settings.fps}fps)`
+        }).join(', ')
+        setSuccess(`Camera settings synchronized successfully! [${details}]`)
+      }
+      onRefresh()
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync camera config with upstream')
+    } finally {
+      setSyncingCameraId(null)
+    }
+  }
+
 
   useEffect(() => {
     async function loadSettings() {
@@ -661,6 +691,27 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px' }}>
+                      {cam.synced_from_api && stream && (
+                        <button 
+                          onClick={() => handleSyncUpstreamConfig(stream.stream_id)}
+                          disabled={syncingCameraId === stream.stream_id}
+                          className="batchBtn"
+                          title="Sync Configuration with Upstream (Apply to Camera)"
+                          style={{ 
+                            padding: '8px', 
+                            minWidth: 'auto', 
+                            background: 'rgba(56,189,248,0.06)', 
+                            borderColor: 'rgba(56,189,248,0.15)', 
+                            color: '#38bdf8' 
+                          }}
+                        >
+                          {syncingCameraId === stream.stream_id ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <Database size={16} />
+                          )}
+                        </button>
+                      )}
                       <button 
                         onClick={() => handleCloneClick(cam)}
                         className="batchBtn"

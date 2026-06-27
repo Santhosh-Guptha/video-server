@@ -108,3 +108,16 @@ export async function testRtspConnection(rtspUrl: string): Promise<{ success: bo
   }
   return res.json()
 }
+
+export async function applyUpstreamConfig(streamId: string): Promise<any> {
+  const res = await fetch(`/api/cameras/${encodeURIComponent(streamId)}/apply-upstream-config`, {
+    method: 'POST',
+    headers: JSON_HEADERS
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Failed to apply upstream configuration')
+  }
+  return res.json()
+}
+
