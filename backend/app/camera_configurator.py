@@ -59,7 +59,9 @@ async def get_onvif_camera_client(ip: str, username: str, password: str) -> tupl
             last_exception = e
             continue
 
-    raise Exception(f"Failed to connect to ONVIF service on ports {common_ports}. Last error: {last_exception}")
+    err_msg = f"{type(last_exception).__name__}: {last_exception}" if last_exception else "Unknown error"
+    raise Exception(f"Failed to connect to ONVIF service on ports {common_ports}. Last error: {err_msg}")
+
 
 async def apply_camera_configuration(
     rtsp_url: str,
