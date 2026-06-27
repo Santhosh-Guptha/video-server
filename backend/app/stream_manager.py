@@ -213,7 +213,6 @@ class StreamManager:
                             stream.audio_channels = audio_stream.get("channels")
                             
                         # Update probe status
-                        from datetime import datetime
                         stream.last_probe = datetime.utcnow()
                         stream.probe_version = "1.0"
                         await session.commit()
