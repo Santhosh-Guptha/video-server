@@ -29,15 +29,16 @@ class TranscodingWorkerPool:
         session_id: str,
         source_url: str,
         target_url: str,
-        session_type: str = "live"
+        session_type: str = "live",
+        node_id: str = "default"
     ) -> bool:
         """
         Starts a transcoding session. Reuses existing transcoders if they are already running,
         incrementing the viewer count. Otherwise, spawns a new FFmpeg process.
         """
         pool = cls._live_pool if session_type == "live" else cls._playback_pool
-        # For playback, we use the stream_id + timeframe key to group viewers watching the same segment
-        session_key = stream_id if session_type == "live" else f"{stream_id}_{session_id}"
+        # For playback, we use the node_id + stream_id + timeframe key to group viewers watching the same segment
+        session_key = f"{node_id}_{stream_id}" if session_type == "live" else f"{node_id}_{stream_id}_{session_id}"
 
         async with cls._lock:
             state = pool.get(session_key)
@@ -120,10 +121,10 @@ class TranscodingWorkerPool:
                 return False
 
     @classmethod
-    async def stop_transcoder(cls, stream_id: str, session_id: str, session_type: str = "live") -> bool:
+    async def stop_transcoder(cls, stream_id: str, session_id: str, session_type: str = "live", node_id: str = "default") -> bool:
         """Decrements viewer count. Spawns a background task to check for idle shutdowns."""
         pool = cls._live_pool if session_type == "live" else cls._playback_pool
-        session_key = stream_id if session_type == "live" else f"{stream_id}_{session_id}"
+        session_key = f"{node_id}_{stream_id}" if session_type == "live" else f"{node_id}_{stream_id}_{session_id}"
 
         async with cls._lock:
             state = pool.get(session_key)

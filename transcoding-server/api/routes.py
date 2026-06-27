@@ -77,7 +77,8 @@ async def start_transcoder(
         session_id=payload.session_id,
         source_url=payload.source_url,
         target_url=payload.target_url,
-        session_type=payload.session_type
+        session_type=payload.session_type,
+        node_id=auth_data.get("node_id", "default")
     )
     if not success:
         raise HTTPException(status_code=500, detail="Failed to spawn transcoding FFmpeg process.")
@@ -93,7 +94,8 @@ async def stop_transcoder(
     success = await TranscodingWorkerPool.stop_transcoder(
         stream_id=payload.stream_id,
         session_id=payload.session_id,
-        session_type=payload.session_type
+        session_type=payload.session_type,
+        node_id=auth_data.get("node_id", "default")
     )
     if not success:
         raise HTTPException(status_code=404, detail="Active transcoder session not found in pools.")
