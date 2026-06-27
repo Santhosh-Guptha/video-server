@@ -2623,8 +2623,13 @@ async def test_rtsp_connection(payload: dict):
         response = s.recv(1024).decode(errors='ignore')
         s.close()
         
-        if "RTSP/1.0" in response or "200" in response or "401" in response or response.strip():
-            first_line = response.splitlines()[0] if response.splitlines() else "Connected"
+        first_line = response.splitlines()[0] if response.splitlines() else "Connected"
+        if "401" in first_line or "Unauthorized" in first_line:
+            return {"success": False, "message": f"Authentication failed: {first_line}. The password might be incorrect!"}
+        elif "403" in first_line or "Forbidden" in first_line:
+            return {"success": False, "message": f"Access forbidden: {first_line}."}
+            
+        if "RTSP/1.0" in response or "200" in response or response.strip():
             return {"success": True, "message": f"Connected successfully! RTSP response: {first_line}"}
         else:
             return {"success": True, "message": "Connected successfully (TCP port open)."}
