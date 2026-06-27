@@ -1498,10 +1498,20 @@ async def apply_upstream_camera_config(
         target_width = int(raw_config.get("width") or 1920)
         target_height = int(raw_config.get("height") or 1080)
         target_fps = int(raw_config.get("fps") or 15)
-        
         target_bitrate = raw_config.get("bitrate")
         target_bitrate_kbps = int(target_bitrate // 1000) if target_bitrate else None
-        
+
+        onvif_url = raw_config.get("onvifUrl", "")
+        onvif_port = None
+        if onvif_url:
+            try:
+                from urllib.parse import urlparse
+                parsed_onvif = urlparse(onvif_url)
+                if parsed_onvif.port:
+                    onvif_port = int(parsed_onvif.port)
+            except Exception:
+                pass
+
         try:
             res = await apply_camera_configuration(
                 rtsp_url=rtsp_url,
@@ -1511,7 +1521,8 @@ async def apply_upstream_camera_config(
                 target_width=target_width,
                 target_height=target_height,
                 target_fps=target_fps,
-                target_bitrate_kbps=target_bitrate_kbps
+                target_bitrate_kbps=target_bitrate_kbps,
+                onvif_port=onvif_port
             )
             results.append({"stream_type": stream_type, "status": "success", "details": res})
         except Exception as e:
@@ -2687,6 +2698,20 @@ async def create_camera(
             
         target_bitrate_kbps = int(payload.bitrate) if payload.bitrate else None
         
+        # Try to find the ONVIF port from the upstream config for this source_camera_id
+        onvif_port = None
+        try:
+            raw_cameras = await fetch_upstream_cameras()
+            matching_raws = [rc for rc in raw_cameras if int(rc.get("cameraId") or rc.get("id")) == payload.source_camera_id]
+            if matching_raws:
+                onvif_url = matching_raws[0].get("onvifUrl", "")
+                if onvif_url:
+                    parsed_onvif = urlparse(onvif_url)
+                    if parsed_onvif.port:
+                        onvif_port = int(parsed_onvif.port)
+        except Exception as upstream_err:
+            print(f"[configurator] Failed to fetch upstream config for port lookup: {upstream_err}")
+
         await apply_camera_configuration(
             rtsp_url=payload.stream_url,
             username=username,
@@ -2695,7 +2720,8 @@ async def create_camera(
             target_width=width,
             target_height=height,
             target_fps=payload.fps,
-            target_bitrate_kbps=target_bitrate_kbps
+            target_bitrate_kbps=target_bitrate_kbps,
+            onvif_port=onvif_port
         )
     except Exception as e:
         raise HTTPException(
@@ -2769,6 +2795,20 @@ async def update_camera(
             
         target_bitrate_kbps = int(payload.bitrate) if payload.bitrate else None
         
+        # Try to find the ONVIF port from the upstream config for this source_camera_id
+        onvif_port = None
+        try:
+            raw_cameras = await fetch_upstream_cameras()
+            matching_raws = [rc for rc in raw_cameras if int(rc.get("cameraId") or rc.get("id")) == camera.source_camera_id]
+            if matching_raws:
+                onvif_url = matching_raws[0].get("onvifUrl", "")
+                if onvif_url:
+                    parsed_onvif = urlparse(onvif_url)
+                    if parsed_onvif.port:
+                        onvif_port = int(parsed_onvif.port)
+        except Exception as upstream_err:
+            print(f"[configurator] Failed to fetch upstream config for port lookup: {upstream_err}")
+
         await apply_camera_configuration(
             rtsp_url=payload.stream_url,
             username=username,
@@ -2777,7 +2817,8 @@ async def update_camera(
             target_width=width,
             target_height=height,
             target_fps=payload.fps,
-            target_bitrate_kbps=target_bitrate_kbps
+            target_bitrate_kbps=target_bitrate_kbps,
+            onvif_port=onvif_port
         )
     except Exception as e:
         raise HTTPException(

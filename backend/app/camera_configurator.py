@@ -32,12 +32,18 @@ def parse_camera_ip(rtsp_url: str) -> str:
         return match.group(1)
     return ""
 
-async def get_onvif_camera_client(ip: str, username: str, password: str) -> tuple[ONVIFCamera, int]:
+async def get_onvif_camera_client(ip: str, username: str, password: str, override_port: int | None = None) -> tuple[ONVIFCamera, int]:
     """
     Tries to connect to the camera on common ONVIF ports.
+    If override_port is provided, it is tried first.
     Returns the ONVIFCamera client and the successful port.
     """
     common_ports = [80, 8899, 8000, 5000, 8081]
+    if override_port:
+        if override_port in common_ports:
+            common_ports.remove(override_port)
+        common_ports = [override_port] + common_ports
+
     last_exception = None
 
     for port in common_ports:
@@ -71,7 +77,8 @@ async def apply_camera_configuration(
     target_width: int,
     target_height: int,
     target_fps: int,
-    target_bitrate_kbps: int | None = None
+    target_bitrate_kbps: int | None = None,
+    onvif_port: int | None = None
 ) -> dict:
     """
     Connects to the physical camera via ONVIF, checks the current configuration,
@@ -82,7 +89,7 @@ async def apply_camera_configuration(
         raise Exception(f"Could not parse IP address from RTSP URL: {rtsp_url}")
 
     # Connect to camera
-    cam, port = await get_onvif_camera_client(ip, username, password)
+    cam, port = await get_onvif_camera_client(ip, username, password, override_port=onvif_port)
     
     # Run media queries in a thread pool since they make blocking SOAP requests
     def configure_process():
