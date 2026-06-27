@@ -30,7 +30,7 @@ app.mount("/metrics", metrics_app)
 async def startup_event():
     print("[app] Transcoding Server starting up...")
     # Warm up GPUScheduler metrics
-    from ..scheduler.gpu_scheduler import GPUScheduler
+    from scheduler.gpu_scheduler import GPUScheduler
     await GPUScheduler.update_metrics()
     
     # Run the background metrics update loop
@@ -40,7 +40,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     print("[app] Transcoding Server shutting down... cleaning up active processes...")
-    from ..workers.ffmpeg_worker import TranscodingWorkerPool
+    from workers.ffmpeg_worker import TranscodingWorkerPool
     # Kill all running FFmpeg child processes on clean shutdown
     live_sessions = TranscodingWorkerPool._live_pool
     playback_sessions = TranscodingWorkerPool._playback_pool
