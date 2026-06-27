@@ -32,7 +32,13 @@ echo "=========================================================="
 # 2. System dependencies installation
 log_info "1. Installing system dependencies..."
 apt-get update -y
-apt-get install -y python3-pip python3-venv ffmpeg redis-server postgresql postgresql-contrib curl jq wget bc nodejs npm git
+apt-get install -y python3-pip python3-venv ffmpeg redis-server postgresql postgresql-contrib curl jq wget bc nodejs git
+
+# Install npm separately only if not already bundled (e.g. NodeSource nodejs already bundles npm)
+if ! command -v npm &> /dev/null; then
+    log_info "npm not found. Installing standalone npm..."
+    apt-get install -y npm || log_warn "Failed to install standalone npm, proceeding..."
+fi
 
 # 3. PostgreSQL Database Configuration
 log_info "2. Setting up PostgreSQL database and role..."
