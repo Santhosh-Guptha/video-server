@@ -674,10 +674,16 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                             );
                           })()}
                         </div>
-                        <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '0.76rem', color: '#94a3b8' }}>
+                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '6px', fontSize: '0.76rem', color: '#94a3b8' }}>
                           <span>Make: {cam.make || 'Generic'}</span>
                           <span>•</span>
                           <span>Stream ID: <code style={{ fontFamily: 'monospace', color: '#38bdf8' }}>{stream?.stream_id || '—'}</code></span>
+                          <span>•</span>
+                          <span>Resolution: <strong style={{ color: '#38bdf8' }}>{stream?.resolution || '—'}</strong></span>
+                          <span>•</span>
+                          <span>FPS: <strong style={{ color: '#38bdf8' }}>{stream?.fps || '—'}</strong></span>
+                          <span>•</span>
+                          <span>Bitrate: <strong style={{ color: '#38bdf8' }}>{stream?.bitrate ? `${stream.bitrate} kbps` : 'Variable'}</strong></span>
                           <span>•</span>
                           <span>Ingress URL: <code style={{ fontFamily: 'monospace' }}>{stream?.stream_url || '—'}</code></span>
                           {stream?.always_on && (
@@ -691,7 +697,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px' }}>
-                      {cam.synced_from_api && stream && (
+                      {stream && (
                         <button 
                           onClick={() => handleSyncUpstreamConfig(stream.stream_id)}
                           disabled={syncingCameraId === stream.stream_id}
@@ -712,14 +718,6 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                           )}
                         </button>
                       )}
-                      <button 
-                        onClick={() => handleCloneClick(cam)}
-                        className="batchBtn"
-                        title="Clone / Duplicate Camera Settings"
-                        style={{ padding: '8px', minWidth: 'auto', background: 'rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.15)', color: '#d8b4fe' }}
-                      >
-                        <Copy size={16} />
-                      </button>
                       <button 
                         onClick={() => handleEditClick(cam)}
                         className="batchBtn"
