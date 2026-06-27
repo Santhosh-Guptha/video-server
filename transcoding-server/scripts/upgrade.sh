@@ -15,7 +15,7 @@ git pull origin main || git pull || echo "[WARNING] Could not pull from git orig
 echo "Updating python packages..."
 if [ -d "venv" ]; then
     source venv/bin/activate
-    pip install -r requirements.txt || pip install fastapi uvicorn httpx prometheus-client pyyaml pydantic
+    pip install -r requirements.txt || pip install fastapi uvicorn httpx prometheus-client pyyaml pydantic pytest pytest-asyncio
 fi
 
 # 3. Reload daemon

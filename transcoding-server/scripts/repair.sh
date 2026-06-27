@@ -20,7 +20,7 @@ fi
 source venv/bin/activate
 echo "Reinstalling/repairing python dependencies..."
 pip install --upgrade pip
-pip install fastapi uvicorn httpx prometheus-client pyyaml pydantic
+pip install fastapi uvicorn httpx prometheus-client pyyaml pydantic pytest pytest-asyncio
 
 # 3. Check FFmpeg link
 echo "3. Verifying FFmpeg links..."

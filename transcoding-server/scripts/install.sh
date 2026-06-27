@@ -23,7 +23,7 @@ echo "2. Setting up python virtual environment..."
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install fastapi uvicorn httpx prometheus-client pyyaml pydantic
+pip install fastapi uvicorn httpx prometheus-client pyyaml pydantic pytest pytest-asyncio
 
 # 4. Generate systemd Service file
 echo "3. Creating systemd service file..."
