@@ -103,7 +103,7 @@ def configure_mediamtx_paths_dynamically():
     rec_dir = Path(settings.recording_dir).resolve().absolute()
     backend_dir = Path(__file__).resolve().parent.parent
     
-    target_record_path = f"{rec_dir}/%path/%Y-%m-%d/%Y%m%d_%H%M_live"
+    target_record_path = f"{rec_dir}/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live"
     target_hook_cmd = f"/bin/bash {backend_dir}/app/segment_hook.sh \"$MTX_PATH\" \"$MTX_SEGMENT_PATH\""
     
     # 3. Read configuration file
