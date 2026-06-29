@@ -102,10 +102,14 @@ class StreamManager:
                 except Exception:
                     pass
 
-    async def add_stream(self, session: AsyncSession, stream: CameraStream, force_probe: bool = False) -> None:
+    async def add_stream(self, session: AsyncSession, stream: CameraStream, force_probe: bool = False, startup_mode: bool = False) -> None:
         """
         Registers a camera stream path dynamically in MediaMTX.
         Transitions the stream state to CONNECTING.
+        
+        When startup_mode=True, all streams are registered with sourceOnDemand=True
+        to prevent a socket storm from trying to connect to hundreds of cameras
+        simultaneously. The camera watchdog will activate them in batches.
         """
         path_name = stream.stream_id
         lock_name = f"stream:{path_name}"
@@ -255,7 +259,11 @@ class StreamManager:
 
             # 2. Register path in MediaMTX
             source_on_demand = True
-            if stream.always_on:
+            if startup_mode:
+                # During startup, register ALL streams as on-demand to prevent socket storms.
+                # The camera watchdog will activate them in staggered batches.
+                source_on_demand = True
+            elif stream.always_on:
                 source_on_demand = False
             elif stream.last_viewed:
                 diff = datetime.utcnow() - stream.last_viewed
@@ -263,7 +271,8 @@ class StreamManager:
                     source_on_demand = False
 
             # Determine recording policy: only MAIN/HD streams are recorded
-            record_flag = should_record(stream)
+            # During startup, disable recording to avoid triggering immediate pulls
+            record_flag = False if startup_mode else should_record(stream)
 
             payload = {
                 "source": "publisher" if is_push_source else stream.stream_url,

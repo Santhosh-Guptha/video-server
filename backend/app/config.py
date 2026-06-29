@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     upstream_camera_api_url: str = ""
     upstream_timeout_seconds: float = 10.0
     upstream_sync_interval_minutes: int = 5
+    filter_private_ips: bool = False
     ffmpeg_path: str = "ffmpeg"
     recording_dir: str = "./data/recordings"
     hls_dir: str = "./data/hls"
@@ -88,6 +89,8 @@ class Settings(BaseSettings):
     camera_ping_timeout_seconds: int = 5
     camera_ping_max_concurrent: int = 10
     enable_rtsp_health_check: bool = True
+    offline_cooldown_seconds: int = 120          # 2 min cooldown before retrying offline cameras
+    startup_stagger_batch_size: int = 10         # activate streams in batches of N during startup
 
     # ── Edge push policy ───────────────────────────────────────────────────────
     edge_push_heartbeat_timeout_seconds: int = 120

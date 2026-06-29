@@ -350,7 +350,10 @@ async def startup():
     Path(settings.hls_dir).mkdir(parents=True, exist_ok=True)
 
     # Sync registered camera streams with Upstream API and MediaMTX on boot
+    _startup_sync_complete = False  # Flag to track if initial staggered sync is done
+    
     async def initial_sync():
+        nonlocal _startup_sync_complete
         await asyncio.sleep(2.0) # Wait for MediaMTX to boot up fully in Compose
         use_upstream = await RedisManager.get_setting_use_upstream()
         if not use_upstream:
@@ -362,24 +365,79 @@ async def startup():
                         select(CameraStream).options(selectinload(CameraStream.camera))
                     )
                     streams = res.scalars().all()
+                    batch_size = settings.startup_stagger_batch_size
+                    registered = 0
                     for stream in streams:
                         camera = stream.camera
                         if camera and camera.active:
-                            await stream_manager.add_stream(session, stream)
+                            await stream_manager.add_stream(session, stream, startup_mode=True)
+                            registered += 1
+                            # Yield between batches to avoid blocking event loop
+                            if registered % batch_size == 0:
+                                print(f"[startup] Registered {registered}/{len(streams)} streams (staggered)...")
+                                await asyncio.sleep(0.5)
                         else:
                             await stream_manager.remove_stream(session, stream)
-                    print("[startup] Local streams registered successfully.")
+                    print(f"[startup] Local streams registered successfully ({registered} total, on-demand mode).")
                 except Exception as e:
                     print(f"[startup] Error registering local streams: {e}")
+            _startup_sync_complete = True
+            # Launch staggered activation
+            asyncio.create_task(staggered_stream_activation())
             return
 
         print("[startup] Syncing camera streams with upstream API dynamically...")
         async for session in get_session():
             try:
-                await sync_cameras(session)
-                print("[startup] Dynamic camera synchronization complete.")
+                await sync_cameras(session, startup_mode=True)
+                print("[startup] Dynamic camera synchronization complete (on-demand mode).")
             except Exception as e:
                 print(f"[startup] Error performing dynamic camera sync: {e}")
+        _startup_sync_complete = True
+        # Launch staggered activation
+        asyncio.create_task(staggered_stream_activation())
+
+    async def staggered_stream_activation():
+        """
+        After startup registers all streams as on-demand, this task gradually
+        activates them in batches. Streams that are offline get a cooldown
+        before being retried.
+        """
+        await asyncio.sleep(5.0)  # Let startup finish
+        batch_size = settings.startup_stagger_batch_size
+        cooldown = settings.offline_cooldown_seconds
+        
+        print(f"[startup] Starting staggered stream activation (batch={batch_size}, cooldown={cooldown}s)...")
+        
+        async for session in get_session():
+            try:
+                res = await session.execute(
+                    select(CameraStream)
+                    .options(selectinload(CameraStream.camera))
+                    .join(Camera)
+                    .where(Camera.active == True)
+                )
+                all_streams = list(res.scalars().all())
+            except Exception as e:
+                print(f"[startup] Error fetching streams for activation: {e}")
+                return
+        
+        # Process in batches
+        activated = 0
+        for i in range(0, len(all_streams), batch_size):
+            batch = all_streams[i:i+batch_size]
+            async for session in get_session():
+                for stream in batch:
+                    try:
+                        # Re-register with proper on-demand and recording settings
+                        await stream_manager.add_stream(session, stream, startup_mode=False)
+                        activated += 1
+                    except Exception as e:
+                        print(f"[startup] Error activating stream {stream.stream_id}: {e}")
+            
+            print(f"[startup] Activated batch {i//batch_size + 1}: {activated}/{len(all_streams)} streams")
+            # Small delay between batches to avoid overwhelming the network
+            await asyncio.sleep(2.0)
 
     asyncio.create_task(initial_sync())
 
@@ -1262,7 +1320,7 @@ def is_private_rtsp_url(url: str) -> bool:
 _sync_lock = asyncio.Lock()
 
 @app.post("/api/cameras/sync", response_model=SyncResponse)
-async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
+async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], startup_mode: bool = False):
     async with _sync_lock:
         raw_cameras = await fetch_upstream_cameras()
         updated_count = 0
@@ -1289,10 +1347,10 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
                 except Exception:
                     pass
 
-            # Detect private IP
+            # Detect private IP — only filter when FILTER_PRIVATE_IPS=true in .env
             active = bool(raw.get("active", True))
-            if active and is_private_rtsp_url(stream_url):
-                print(f"[sync] Camera {source_id} ({name}) has private/unreachable IP: {stream_url}. Forcing active=False to prevent socket congestion.")
+            if active and settings.filter_private_ips and is_private_rtsp_url(stream_url):
+                print(f"[sync] Camera {source_id} ({name}) has private/unreachable IP: {stream_url}. Forcing active=False (FILTER_PRIVATE_IPS=true).")
                 active = False
 
             # 1. Sync Camera Parent Row
@@ -1367,7 +1425,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
 
             # Register in MediaMTX config
             if camera.active:
-                await stream_manager.add_stream(session, stream)
+                await stream_manager.add_stream(session, stream, startup_mode=startup_mode)
             else:
                 await stream_manager.remove_stream(session, stream)
 

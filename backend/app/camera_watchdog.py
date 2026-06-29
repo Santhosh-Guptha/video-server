@@ -134,6 +134,12 @@ async def camera_health_watchdog_loop():
     await asyncio.sleep(15.0)
 
     semaphore = asyncio.Semaphore(CAMERA_PING_MAX_CONCURRENT)
+    
+    # ── Offline cooldown tracker ──────────────────────────────────────────────
+    # Maps stream_id → timestamp when it was last found offline.
+    # Streams in cooldown are skipped until OFFLINE_COOLDOWN_SECONDS expires.
+    _offline_cooldown: dict[str, float] = {}
+    OFFLINE_COOLDOWN_SECONDS = settings.offline_cooldown_seconds  # default 120s (2 min)
 
     while True:
         try:
@@ -152,7 +158,12 @@ async def camera_health_watchdog_loop():
                     await asyncio.sleep(CAMERA_PING_INTERVAL_SECONDS)
                     continue
 
-                print(f"[watchdog] Health check cycle: {len(active_streams)} active streams")
+                # Count how many are in cooldown
+                now = time.time()
+                in_cooldown = sum(1 for s in active_streams 
+                                  if s.stream_id in _offline_cooldown 
+                                  and (now - _offline_cooldown[s.stream_id]) < OFFLINE_COOLDOWN_SECONDS)
+                print(f"[watchdog] Health check cycle: {len(active_streams)} active streams ({in_cooldown} in cooldown)")
 
                 # ── 2. Fetch MediaMTX runtime path status ────────────────────
                 mediamtx_ready: dict[str, bool] = {}
@@ -178,6 +189,17 @@ async def camera_health_watchdog_loop():
                     rtsp_url = stream.stream_url.strip() if stream.stream_url else ""
 
                     async with semaphore:
+                        # ── Cooldown check: skip streams that were recently found offline ──
+                        cooldown_ts = _offline_cooldown.get(stream_id)
+                        if cooldown_ts and (time.time() - cooldown_ts) < OFFLINE_COOLDOWN_SECONDS:
+                            # Still in cooldown — but if MediaMTX now shows it as ready,
+                            # the camera came online! Clear cooldown and process it.
+                            if not mediamtx_ready.get(stream_id, False):
+                                return  # Skip — still in cooldown
+                            else:
+                                # Camera came online during cooldown — clear and continue
+                                _offline_cooldown.pop(stream_id, None)
+                        
                         # ── P1: Check for active Edge Push ──────────────────
                         last_push_ts = await RedisManager.get_last_push_seen(stream_id)
                         if last_push_ts is None and stream.last_push_seen:
@@ -186,6 +208,7 @@ async def camera_health_watchdog_loop():
                         if _has_recent_push(last_push_ts):
                             # Camera is actively being pushed from an edge device
                             # Ensure MediaMTX path is set to publisher (idempotent PATCH)
+                            _offline_cooldown.pop(stream_id, None)  # Clear any cooldown
                             if stream.stream_source != "EDGE_PUSH":
                                 print(f"[watchdog] {stream_id}: Active edge push detected → switching to EDGE_PUSH")
                                 ok = await _patch_mediamtx(client, stream_id, {
@@ -206,6 +229,7 @@ async def camera_health_watchdog_loop():
                         # ── P2: MediaMTX reports stream as ready ─────────────
                         if mediamtx_ready.get(stream_id, False):
                             # Stream is actively delivering packets — all good
+                            _offline_cooldown.pop(stream_id, None)  # Clear any cooldown
                             if stream.status != StreamState.ONLINE:
                                 async for session in get_session():
                                     stream_db = await session.get(CameraStream, stream.id)
@@ -230,6 +254,7 @@ async def camera_health_watchdog_loop():
                                             session, stream_db, StreamState.OFFLINE,
                                             "No valid RTSP source and not active"
                                         )
+                            _offline_cooldown[stream_id] = time.time()
                             return
 
                         print(f"[watchdog] {stream_id}: not ready in MediaMTX — running ffprobe...")
@@ -237,6 +262,7 @@ async def camera_health_watchdog_loop():
 
                         if reachable:
                             print(f"[watchdog] {stream_id}: RTSP reachable → CONNECTING")
+                            _offline_cooldown.pop(stream_id, None)  # Clear cooldown
                             async for session in get_session():
                                 stream_db = await session.get(CameraStream, stream.id)
                                 if stream_db:
@@ -247,7 +273,8 @@ async def camera_health_watchdog_loop():
                                             session, stream_db, StreamState.CONNECTING
                                         )
                         else:
-                            print(f"[watchdog] {stream_id}: RTSP unreachable → OFFLINE")
+                            print(f"[watchdog] {stream_id}: RTSP unreachable → OFFLINE (cooldown {OFFLINE_COOLDOWN_SECONDS}s)")
+                            _offline_cooldown[stream_id] = time.time()  # Set cooldown
                             async for session in get_session():
                                 stream_db = await session.get(CameraStream, stream.id)
                                 if stream_db and stream_db.status != StreamState.OFFLINE:
