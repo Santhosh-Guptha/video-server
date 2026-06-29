@@ -266,7 +266,9 @@ async def get_stream_stats(
     # 2. Pull stats from Redis cache
     from .redis_client import redis_client
     for sid in active_session_ids:
-        redis_key = f"vms:stats:realtime:{stream_id}:{sid}"
+        # Extract location_id from composite session_id if present
+        loc_id = sid.split(':')[0] if ':' in sid else sid
+        redis_key = f"vms:stats:realtime:{stream_id}:{loc_id}"
         data = None
         if redis_client:
             try:
@@ -450,10 +452,12 @@ async def proxy_signaling_session(
         location = mtx_resp.headers.get("Location")
         if location:
             session_id = location.rstrip("/").split("/")[-1]
+            internal_id = mtx_resp.headers.get("Id") or mtx_resp.headers.get("id")
+            db_session_id = f"{session_id}:{internal_id}" if internal_id else session_id
             client_ip = request.client.host if request.client else "unknown"
             
             # Create DB session and register in viewer tracker under the RESOLVED stream_id
-            await create_db_session(session_id, resolved_stream_id, protocol.upper(), client_ip, db_session, user_id)
+            await create_db_session(db_session_id, resolved_stream_id, protocol.upper(), client_ip, db_session, user_id)
             await RedisViewerTracker.add_viewer_session(resolved_stream_id, session_id, {
                 "user_id": str(user_id) if user_id else None,
                 "client_ip": client_ip,

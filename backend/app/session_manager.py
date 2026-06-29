@@ -38,7 +38,7 @@ async def close_db_session(session_id: str, db_session: AsyncSession):
     """Closes an active WebRTC session in the database."""
     res = await db_session.execute(
         select(WebRTCSession).where(
-            WebRTCSession.session_id == session_id,
+            (WebRTCSession.session_id == session_id) | (WebRTCSession.session_id.like(f"{session_id}:%")),
             WebRTCSession.status == "ACTIVE"
         )
     )
@@ -87,17 +87,20 @@ async def webrtc_session_watchdog_cleanup(db_session: AsyncSession):
                 h265_disconnect_streams = set()
                 
                 for db_s in db_sessions:
-                    if db_s.session_id not in active_mediamtx_ids:
-                        print(f"[session_manager] Watchdog found dead session {db_s.session_id} in DB. Pruning.")
+                    db_session_id = db_s.session_id
+                    internal_id = db_session_id.split(':')[-1] if ':' in db_session_id else db_session_id
+                    if internal_id not in active_mediamtx_ids:
+                        print(f"[session_manager] Watchdog found dead session {db_session_id} in DB. Pruning.")
                         db_s.status = "CLOSED"
                         db_s.ended_at = datetime.utcnow()
                         
                         # Clean up Redis viewer tracking
                         try:
+                            loc_id = db_session_id.split(':')[0] if ':' in db_session_id else db_session_id
                             from .redis_viewer_tracker import RedisViewerTracker
-                            await RedisViewerTracker.remove_viewer_session(db_s.stream_id, db_s.session_id)
+                            await RedisViewerTracker.remove_viewer_session(db_s.stream_id, loc_id)
                         except Exception as e:
-                            print(f"[session_manager] Error cleaning viewer tracking for {db_s.session_id}: {e}")
+                            print(f"[session_manager] Error cleaning viewer tracking for {db_session_id}: {e}")
                         
                         # Check if this stream is H.265 for transcoder disconnect
                         try:
