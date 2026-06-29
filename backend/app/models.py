@@ -96,6 +96,7 @@ class CameraStream(Base):
     status: Mapped[StreamState] = mapped_column(Enum(StreamState, name="stream_state_enum"), default=StreamState.REGISTERED, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     always_on: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    transcode: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
     camera_priority: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     last_viewed: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), default=datetime.utcnow)

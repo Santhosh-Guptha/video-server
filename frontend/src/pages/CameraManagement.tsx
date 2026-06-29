@@ -16,6 +16,8 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   const [success, setSuccess] = useState<string | null>(null)
 
   const [useUpstreamCameras, setUseUpstreamCameras] = useState(true)
+  const [enableDeviceConfig, setEnableDeviceConfig] = useState(false)
+  const [enableLocalTranscode, setEnableLocalTranscode] = useState(false)
   const [settingLoading, setSettingLoading] = useState(false)
 
   useEffect(() => {
@@ -23,6 +25,8 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       try {
         const data = await getSystemSettings()
         setUseUpstreamCameras(data.use_upstream_cameras)
+        setEnableDeviceConfig(!!data.enable_device_config)
+        setEnableLocalTranscode(!!data.enable_local_transcode)
       } catch (err) {
         console.error('Failed to load system settings:', err)
       }
@@ -58,6 +62,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   const [bitrate, setBitrate] = useState<string>('')
   const [streamUrl, setStreamUrl] = useState('')
   const [alwaysOn, setAlwaysOn] = useState(false)
+  const [transcode, setTranscode] = useState(false)
   const [active, setActive] = useState(true)
 
   // Hardware configuration states
@@ -122,6 +127,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     setBitrate('')
     setStreamUrl('')
     setAlwaysOn(false)
+    setTranscode(false)
     setActive(true)
     setCameraIp('')
     setCameraUser('admin')
@@ -161,6 +167,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       setBitrate(stream.bitrate ? stream.bitrate.toString() : '')
       setStreamUrl(stream.stream_url)
       setAlwaysOn(!!stream.always_on)
+      setTranscode(!!stream.transcode)
 
       // Prefill hardware configuration fields using database values & parsed RTSP creds
       setHwResolution(stream.resolution)
@@ -182,6 +189,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       setHwResolution('')
       setHwFps('')
       setHwBitrate('')
+      setTranscode(false)
     }
   }
 
@@ -267,7 +275,8 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       codec,
       bitrate: bitrate ? Number(bitrate) : null,
       stream_url: streamUrl,
-      always_on: alwaysOn
+      always_on: alwaysOn,
+      transcode: transcode
     }
 
     try {
@@ -431,9 +440,15 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                 <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />
                 Camera Enabled (Active Ingress)
               </label>
+              {enableLocalTranscode && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.82rem', color: '#cbd5e1' }}>
+                  <input type="checkbox" checked={transcode} onChange={e => setTranscode(e.target.checked)} />
+                  Enable Local Transcoding (Server-Side Enforcement)
+                </label>
+              )}
             </div>
 
-            {editingCamera && (
+            {editingCamera && enableDeviceConfig && (
               <div style={{ padding: '20px', background: 'rgba(59, 130, 246, 0.04)', border: '1px solid rgba(59, 130, 246, 0.16)', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <h4 style={{ margin: 0, color: '#60a5fa', fontSize: '0.88rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Sliders size={16} /> Remote Device ONVIF Configuration

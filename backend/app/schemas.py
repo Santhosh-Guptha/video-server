@@ -14,6 +14,7 @@ class CameraStreamOut(BaseModel):
     bitrate: Optional[int] = None
     stream_url: str
     status: str
+    transcode: bool
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -78,7 +79,7 @@ class CameraOut(BaseModel):
     @computed_field
     @property
     def transcode(self) -> bool:
-        return False
+        return self.streams[0].transcode if self.streams else False
 
     @computed_field
     @property
@@ -137,6 +138,7 @@ class CameraCreate(BaseModel):
     stream_url: str
     stream_mode: str = "AUTO"
     always_on: bool = False
+    transcode: bool = False
 
 class CameraUpdate(BaseModel):
     name: str
@@ -148,6 +150,7 @@ class CameraUpdate(BaseModel):
     bitrate: Optional[int] = None
     stream_url: str
     always_on: bool
+    transcode: bool
 
 class SettingsUpdate(BaseModel):
     use_upstream_cameras: bool

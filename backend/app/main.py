@@ -881,6 +881,12 @@ async def configure_camera(
     payload: CameraConfigureRequest,
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
+    if not settings.enable_device_config:
+        raise HTTPException(
+            status_code=400,
+            detail="Physical device configuration is disabled on this server."
+        )
+
     # 1. Look up stream details in DB
     res = await session.execute(
         select(CameraStream).options(selectinload(CameraStream.camera)).where(CameraStream.stream_id == payload.stream_id)
@@ -2063,7 +2069,11 @@ async def root():
 @app.get("/api/settings")
 async def get_settings():
     use_upstream = await RedisManager.get_setting_use_upstream()
-    return {"use_upstream_cameras": use_upstream}
+    return {
+        "use_upstream_cameras": use_upstream,
+        "enable_device_config": settings.enable_device_config,
+        "enable_local_transcode": settings.enable_local_transcode
+    }
 
 @app.post("/api/settings")
 async def update_settings(
@@ -2148,6 +2158,7 @@ async def create_camera(
         stream_url=payload.stream_url,
         stream_mode=payload.stream_mode,
         always_on=payload.always_on,
+        transcode=payload.transcode,
         status=StreamState.REGISTERED
     )
     session.add(stream)
@@ -2198,6 +2209,7 @@ async def update_camera(
     stream.bitrate = payload.bitrate
     stream.stream_url = payload.stream_url
     stream.always_on = payload.always_on
+    stream.transcode = payload.transcode
 
     await session.commit()
 
