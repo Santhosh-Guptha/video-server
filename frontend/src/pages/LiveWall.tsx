@@ -23,6 +23,8 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   const [wsConnected, setWsConnected] = useState(false)
   const [isFullView, setIsFullView] = useState(false)
   const [selectedCameraForModal, setSelectedCameraForModal] = useState<Camera | null>(null)
+  const [gridSize, setGridSize] = useState<number>(12) // default 12 (4x3 layout)
+  const [currentPage, setCurrentPage] = useState<number>(1)
 
   // Policy-driven stream resolution for live wall
   const { policy } = usePolicy()
@@ -146,6 +148,20 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
     })
   }, [activeCameras, onlineStreamIds, streamStatuses, policy])
 
+  const totalPages = Math.ceil(liveCameras.length / gridSize)
+
+  // Clamp current page to maximum page count
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages)
+    }
+  }, [totalPages, currentPage])
+
+  const paginatedCameras = useMemo(() => {
+    const start = (currentPage - 1) * gridSize
+    return liveCameras.slice(start, start + gridSize)
+  }, [liveCameras, currentPage, gridSize])
+
   // Start all cameras using policy-resolved stream
   const handleStartAll = async () => {
     statusTextSetter('Warming up all online cameras...')
@@ -184,71 +200,90 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
     statusTextSetter(`Stopped ${success}/${activeCameras.length} online cameras`)
   }
 
-  const renderGrid = () => (
-    <div className="liveWallGrid">
-      {liveCameras.map((cam) => {
-        const streamId = resolveLiveStreamId(cam, policy, 4) // wall always uses grid profile
-        const anyStream = cam.streams.find(s => s.stream_id === streamId) || cam.streams[0]
-        if (!anyStream) return null
-        const viewers = streamViewers[anyStream.stream_id] || 0
+  const renderGrid = () => {
+    let cols = 4;
+    if (gridSize === 4) cols = 2;
+    else if (gridSize === 9) cols = 3;
+    else if (gridSize === 12) cols = 4;
+    else if (gridSize === 16) cols = 4;
+    else if (gridSize === 24) cols = 6;
+    else if (gridSize === 36) cols = 6;
 
-        return (
-          <div 
-            key={cam.id} 
-            className="liveWallCell"
-            onDoubleClick={() => setSelectedCameraForModal(cam)}
-            style={{ cursor: 'pointer' }}
-            title="Double-click to view details"
-          >
-            <Player
-              src={`/api/streams/${encodeURIComponent(streamId)}/live/index.m3u8`}
-              posterLabel=""
-              minimal={true}
-            />
-            <div className="liveWallCellOverlay">
-              <span className="liveWallCellName" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span className="recordingDot" style={{ width: '6px', height: '6px' }} />
-                {cam.name}
-              </span>
-              <div className="liveWallCellStats">
-                <span className="liveWallCellViewer" title="Active viewers" style={{ display: 'flex', alignItems: 'center' }}>
-                  <Users size={12} style={{ marginRight: '2px' }} />
-                  {viewers}
+    return (
+      <div 
+        className="liveWallGrid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${cols}, 1fr)`,
+          gap: '12px',
+          width: '100%',
+          flex: 1
+        }}
+      >
+        {paginatedCameras.map((cam) => {
+          const streamId = resolveLiveStreamId(cam, policy, 4) // wall always uses grid profile
+          const anyStream = cam.streams.find(s => s.stream_id === streamId) || cam.streams[0]
+          if (!anyStream) return null
+          const viewers = streamViewers[anyStream.stream_id] || 0
+
+          return (
+            <div 
+              key={cam.id} 
+              className="liveWallCell"
+              onDoubleClick={() => setSelectedCameraForModal(cam)}
+              style={{ cursor: 'pointer', position: 'relative', width: '100%', aspectRatio: '16/9' }}
+              title="Double-click to view details"
+            >
+              <Player
+                src={`/api/streams/${encodeURIComponent(streamId)}/live/index.m3u8`}
+                posterLabel=""
+                minimal={true}
+              />
+              <div className="liveWallCellOverlay">
+                <span className="liveWallCellName" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                  <span className="recordingDot" style={{ width: '6px', height: '6px' }} />
+                  {cam.name}
                 </span>
-                <button
-                  type="button"
-                  className="liveWallFullscreenBtn"
-                  title="Fullscreen"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const cellEl = e.currentTarget.closest('.liveWallCell');
-                    const videoEl = cellEl?.querySelector('video');
-                    if (videoEl) {
-                      videoEl.requestFullscreen?.();
-                    }
-                  }}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#94a3b8',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    padding: '2px',
-                    pointerEvents: 'auto',
-                    marginLeft: '4px'
-                  }}
-                >
-                  <Maximize2 size={12} />
-                </button>
-                <span className="livePulseDot" style={{ width: '6px', height: '6px' }} />
+                <div className="liveWallCellStats">
+                  <span className="liveWallCellViewer" title="Active viewers" style={{ display: 'flex', alignItems: 'center', fontSize: '10px' }}>
+                    <Users size={10} style={{ marginRight: '2px' }} />
+                    {viewers}
+                  </span>
+                  <button
+                    type="button"
+                    className="liveWallFullscreenBtn"
+                    title="Fullscreen"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const cellEl = e.currentTarget.closest('.liveWallCell');
+                      const videoEl = cellEl?.querySelector('video');
+                      if (videoEl) {
+                        videoEl.requestFullscreen?.();
+                      }
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#94a3b8',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '2px',
+                      pointerEvents: 'auto',
+                      marginLeft: '4px'
+                    }}
+                  >
+                    <Maximize2 size={10} />
+                  </button>
+                  <span className="livePulseDot" style={{ width: '6px', height: '6px' }} />
+                </div>
               </div>
             </div>
-          </div>
-        )
-      })}
-    </div>
-  )
+          )
+        })}
+      </div>
+    )
+  }
 
   // Resolve modal parameters
   const modalStreamId = selectedCameraForModal ? resolveLiveStreamId(selectedCameraForModal, policy, 4) : '';
@@ -265,14 +300,68 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
             Live Wall — {liveCameras.length} active camera{liveCameras.length !== 1 ? 's' : ''} online
           </span>
         </div>
-        <div className="liveWallActions">
+        <div className="liveWallActions" style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+          {/* Grid Layout Selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>Grid size:</span>
+            <select
+              value={gridSize}
+              onChange={(e) => {
+                setGridSize(Number(e.target.value))
+                setCurrentPage(1)
+              }}
+              style={{
+                background: '#0b0f19',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: '#f8fafc',
+                borderRadius: '6px',
+                padding: '4px 24px 4px 8px',
+                fontSize: '11px',
+                cursor: 'pointer',
+                outline: 'none'
+              }}
+            >
+              <option value={4}>4 (2x2)</option>
+              <option value={9}>9 (3x3)</option>
+              <option value={12}>12 (4x3)</option>
+              <option value={16}>16 (4x4)</option>
+              <option value={24}>24 (6x4)</option>
+              <option value={36}>36 (6x6)</option>
+            </select>
+          </div>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                className="batchBtn"
+                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                style={{ padding: '4px 8px', fontSize: '11px', opacity: currentPage === 1 ? 0.4 : 1, cursor: currentPage === 1 ? 'default' : 'pointer' }}
+              >
+                Prev
+              </button>
+              <span style={{ fontSize: '11px', color: '#cbd5e1', minWidth: '70px', textAlign: 'center' }}>
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                className="batchBtn"
+                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                style={{ padding: '4px 8px', fontSize: '11px', opacity: currentPage === totalPages ? 0.4 : 1, cursor: currentPage === totalPages ? 'default' : 'pointer' }}
+              >
+                Next
+              </button>
+            </div>
+          )}
+
           {activeCameras.length > 0 && (
             <>
-              <button className="batchBtn start" onClick={handleStartAll}>
-                <Play size={14} /> Start All Live
+              <button className="batchBtn start" onClick={handleStartAll} style={{ padding: '4px 10px', fontSize: '11px' }}>
+                <Play size={12} /> Start All
               </button>
-              <button className="batchBtn stop" onClick={handleStopAll}>
-                <Square size={14} /> Stop All Live
+              <button className="batchBtn stop" onClick={handleStopAll} style={{ padding: '4px 10px', fontSize: '11px' }}>
+                <Square size={12} /> Stop All
               </button>
               <button 
                 className="batchBtn" 
@@ -280,10 +369,12 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
                 style={{
                   background: 'rgba(59, 130, 246, 0.15)',
                   color: '#60a5fa',
-                  borderColor: 'rgba(59, 130, 246, 0.3)'
+                  borderColor: 'rgba(59, 130, 246, 0.3)',
+                  padding: '4px 10px',
+                  fontSize: '11px'
                 }}
               >
-                <Maximize2 size={14} /> Full Wall
+                <Maximize2 size={12} /> Full Wall
               </button>
             </>
           )}
@@ -297,7 +388,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           <ServerCrash className="liveWallEmptyIcon" />
           <div className="liveWallEmptyTitle">No live recording cameras found</div>
           <div className="liveWallEmptySub">
-            All cameras are currently offline. Use "Start All Live" or start individual cameras from the Live View tab.
+            All cameras are currently offline. Use "Start All" or start individual cameras from the Live View tab.
           </div>
         </div>
       )}

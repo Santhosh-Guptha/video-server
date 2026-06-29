@@ -325,7 +325,7 @@ export default function App() {
                     <div className="controlGroup">
                       <span className="controlLabel">Layout Grid</span>
                       <div className="btnToggleGroup">
-                        {[1, 2, 4, 9].map((size) => (
+                        {[1, 2, 4, 9, 16, 25].map((size) => (
                           <button
                             key={size}
                             className={`toggleBtn ${layout === size ? 'active' : ''}`}
@@ -340,7 +340,7 @@ export default function App() {
                               }
                             }}
                           >
-                            {size === 1 ? '1x1' : size === 2 ? '1x2' : size === 4 ? '2x2' : '3x3'}
+                            {size === 1 ? '1x1' : size === 2 ? '1x2' : size === 4 ? '2x2' : size === 9 ? '3x3' : size === 16 ? '4x4' : '5x5'}
                           </button>
                         ))}
                       </div>
