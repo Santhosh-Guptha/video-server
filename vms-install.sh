@@ -81,6 +81,10 @@ apt-get install -y git curl wget jq build-essential net-tools unzip bc
 # VMS CORE DEPLOYMENT
 # ────────────────────────────────────────────────────────
 setup_core() {
+    log_info "Stopping existing VMS Core services to release database locks..."
+    systemctl stop video-backend.service || true
+    systemctl stop video-frontend.service || true
+
     log_info "Cloning VMS Core codebase ($CORE_BRANCH)..."
     if [ -d "$CORE_DIR" ]; then
         log_warn "Target Core directory $CORE_DIR already exists. Pulling updates..."
