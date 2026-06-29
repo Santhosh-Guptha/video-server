@@ -149,7 +149,7 @@ setup_core() {
     fi
 
     cp "$CORE_DIR/backend/app/mediamtx.yml" "$MEDIAMTX_DIR/mediamtx.yml"
-    sed -i "s|^apiAddress:.*|apiAddress: ${CORE_IP}:9997|g" "$MEDIAMTX_DIR/mediamtx.yml" || true
+    sed -i "s|^apiAddress:.*|apiAddress: 127.0.0.1:9997|g" "$MEDIAMTX_DIR/mediamtx.yml" || true
 
     cat <<EOF > /etc/systemd/system/mediamtx.service
 [Unit]
@@ -195,7 +195,7 @@ EOF
     cat <<EOF > "$CORE_DIR/backend/.env"
 DATABASE_URL=postgresql+asyncpg://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME
 REDIS_URL=redis://localhost:6379/0
-MEDIAMTX_API_URL=http://${CORE_IP}:9997
+MEDIAMTX_API_URL=http://127.0.0.1:9997
 MEDIAMTX_WEBRTC_URL=http://${CORE_IP}:8889
 UPSTREAM_CAMERA_API_URL=https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver
 TURN_SERVER_URL=turn:${CORE_IP}:3478
