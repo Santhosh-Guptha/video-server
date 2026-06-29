@@ -1,9 +1,10 @@
 import json
 import time
 import http.client
+import logging
 http.client._MAXHEADERS = 100000
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -19,6 +20,8 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from urllib.parse import quote
 
+logger = logging.getLogger("camera_video_platform")
+
 from .indexer import index_recordings
 from .config import settings
 from .db import engine, Base, get_session
@@ -29,6 +32,7 @@ from .redis_client import RedisManager
 from .stream_manager import stream_manager
 from .webrtc import router as webrtc_router, streams_router as webrtc_streams_router
 from .timeline_service import PlaybackTimelineService
+from .onvif_client import CameraConfigClient, parse_rtsp_url
 
 app = FastAPI(title=settings.app_name)
 
@@ -860,6 +864,101 @@ async def download_recording(
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+class CameraConfigureRequest(BaseModel):
+    stream_id: str
+    fps: Optional[int] = None
+    bitrate: Optional[int] = None  # in kbps
+    width: Optional[int] = None
+    height: Optional[int] = None
+    ip: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+@app.post("/api/cameras/configure")
+async def configure_camera(
+    payload: CameraConfigureRequest,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    # 1. Look up stream details in DB
+    res = await session.execute(
+        select(CameraStream).options(selectinload(CameraStream.camera)).where(CameraStream.stream_id == payload.stream_id)
+    )
+    stream = res.scalar_one_or_none()
+    if not stream:
+        raise HTTPException(404, f"Stream ID {payload.stream_id} not found in database")
+
+    # 2. Extract connection credentials
+    ip = payload.ip
+    username = payload.username
+    password = payload.password
+
+    # Fallback to parsing from stream_url if credentials are not explicitly supplied
+    if not (ip and username and password):
+        parsed = parse_rtsp_url(stream.stream_url)
+        if parsed:
+            parsed_ip, parsed_username, parsed_password = parsed
+            if not ip:
+                ip = parsed_ip
+            if not username:
+                username = parsed_username
+            if not password:
+                password = parsed_password
+
+    if not ip:
+        raise HTTPException(400, "Could not resolve camera IP address from payload or database RTSP URL")
+
+    # If port/scheme is not supplied, default to HTTPS with Sparsh-compatible SSL bypass
+    base_url = None
+    if ip.startswith("http://") or ip.startswith("https://"):
+        base_url = ip
+        # Strip scheme to get clean IP/host for raw sockets
+        ip_clean = ip.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    else:
+        ip_clean = ip
+        base_url = f"https://{ip_clean}"
+
+    # 3. Trigger remote configuration via client helper
+    client = CameraConfigClient(
+        ip=ip_clean,
+        username=username or "admin",
+        password=password or "",
+        base_url=base_url
+    )
+
+    success = await client.configure(
+        width=payload.width,
+        height=payload.height,
+        fps=payload.fps,
+        bitrate=payload.bitrate,
+        make=stream.camera.make
+    )
+
+    if not success:
+        raise HTTPException(502, f"Failed to apply configuration changes on the physical camera at {ip_clean}")
+
+    # 4. Update local database record upon success
+    if payload.fps is not None:
+        stream.fps = payload.fps
+    if payload.bitrate is not None:
+        stream.bitrate = payload.bitrate
+    if payload.width is not None and payload.height is not None:
+        stream.resolution = f"{payload.width}x{payload.height}"
+
+    await session.commit()
+    
+    # 5. Restart MediaMTX stream path if it is currently running to force it to pick up new properties immediately
+    try:
+        # Stop and let the watchdog restart/pull it with the new configuration
+        await stream_manager.stop_stream(stream.stream_id)
+    except Exception as e:
+        logger.warning(f"Failed to trigger MediaMTX stream path restart for {stream.stream_id}: {e}")
+
+    return {
+        "status": "success",
+        "message": f"Successfully configured camera at {ip_clean} and updated VMS database records"
+    }
 
 @app.post("/api/cameras/sync", response_model=SyncResponse)
 async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], skip_mediamtx_api: bool = False):
