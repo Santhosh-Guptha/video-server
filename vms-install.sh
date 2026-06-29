@@ -117,7 +117,7 @@ setup_core() {
     chmod -R 777 "$CORE_DIR/backend/data"
 
     log_info "Installing VMS Core system requirements (Redis, PostgreSQL, Coturn)..."
-    apt-get install -y ffmpeg python3-pip python3-venv redis-server postgresql postgresql-contrib coturn
+    apt-get install -y ffmpeg python3-pip python3-venv python3-dev build-essential libpq-dev redis-server postgresql postgresql-contrib coturn
 
     log_info "Configuring PostgreSQL database..."
     systemctl start postgresql
