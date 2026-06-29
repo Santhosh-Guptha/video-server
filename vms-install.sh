@@ -72,6 +72,13 @@ fi
 log_info "Detected Host IP: $CORE_IP"
 
 # 2. System updates and initial packages
+log_info "Checking for background update locks (e.g. unattended-upgrades)..."
+systemctl stop unattended-upgrades || true
+while pgrep -f "unattended-upgr" >/dev/null || pgrep -f "apt-get" >/dev/null || pgrep -f "dpkg" >/dev/null; do
+    log_warn "Apt/Dpkg lock is active. Waiting 5 seconds for other package tasks to complete..."
+    sleep 5
+done
+
 log_info "1. Installing base packages (Git, Curl, Jq)..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
