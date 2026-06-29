@@ -8,6 +8,7 @@ import { LiveWall } from './pages/LiveWall'
 import { CameraManagement } from './pages/CameraManagement'
 import { WebcamStream } from './pages/WebcamStream'
 import { GapRecovery } from './pages/GapRecovery'
+import TranscoderMonitor from './pages/TranscoderMonitor'
 import { fetchCameras, fetchRecordings, syncCameras } from './lib/api'
 import { usePolicy, resolvePlaybackStreamId } from './lib/usePolicy'
 import { Activity, RefreshCcw } from 'lucide-react'
@@ -29,9 +30,9 @@ export default function App() {
     return cameras.filter(cam => isEdgeCamera(cam))
   }, [cameras])
 
-  const [activeTab, setActiveTabState] = useState<'dashboard' | 'live' | 'live_wall' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream' | 'gap_recovery'>(() => {
+  const [activeTab, setActiveTabState] = useState<'dashboard' | 'live' | 'live_wall' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream' | 'gap_recovery' | 'transcoder_monitor'>(() => {
     const path = window.location.pathname.replace(/^\//, '')
-    const validTabs = ['dashboard', 'live', 'live_wall', 'playback', 'edgepush', 'camera_config', 'webcam_stream', 'gap_recovery']
+    const validTabs = ['dashboard', 'live', 'live_wall', 'playback', 'edgepush', 'camera_config', 'webcam_stream', 'gap_recovery', 'transcoder_monitor']
     return validTabs.includes(path) ? (path as any) : 'dashboard'
   })
 
@@ -50,14 +51,14 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname.replace(/^\//, '')
-      const validTabs = ['dashboard', 'live', 'live_wall', 'playback', 'edgepush', 'camera_config', 'webcam_stream', 'gap_recovery']
+      const validTabs = ['dashboard', 'live', 'live_wall', 'playback', 'edgepush', 'camera_config', 'webcam_stream', 'gap_recovery', 'transcoder_monitor']
       setActiveTabState(validTabs.includes(path) ? (path as any) : 'dashboard')
     }
     window.addEventListener('popstate', handlePopState)
     
     // Normalize path to /dashboard if empty or invalid
     const path = window.location.pathname.replace(/^\//, '')
-    const validTabs = ['dashboard', 'live', 'live_wall', 'playback', 'edgepush', 'camera_config', 'webcam_stream', 'gap_recovery']
+    const validTabs = ['dashboard', 'live', 'live_wall', 'playback', 'edgepush', 'camera_config', 'webcam_stream', 'gap_recovery', 'transcoder_monitor']
     if (!validTabs.includes(path)) {
       window.history.replaceState(null, '', '/dashboard')
     }
@@ -216,6 +217,12 @@ export default function App() {
           {activeTab === 'gap_recovery' && (
             <div className="streamArea">
               <GapRecovery cameras={cameras} />
+            </div>
+          )}
+
+          {activeTab === 'transcoder_monitor' && (
+            <div className="streamArea">
+              <TranscoderMonitor />
             </div>
           )}
         </div>

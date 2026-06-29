@@ -1,4 +1,4 @@
-import { Camera, RefreshCw, Radar, Clock3, Wifi, Sliders, Video, LayoutGrid, Tv, Database } from 'lucide-react'
+import { Camera, RefreshCw, Radar, Clock3, Wifi, Sliders, Video, LayoutGrid, Tv, Database, Activity } from 'lucide-react'
 
 type SidebarProps = {
   onRefresh: () => void
@@ -106,6 +106,14 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, ac
           style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
         >
           <Video size={14} /> Webcam Stream
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'transcoder_monitor' ? 'active' : ''}`}
+          onClick={() => setActiveTab('transcoder_monitor')}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Activity size={14} /> Transcoder Status
         </button>
       </nav>
 

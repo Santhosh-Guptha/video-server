@@ -121,3 +121,10 @@ export async function applyUpstreamConfig(streamId: string): Promise<any> {
   return res.json()
 }
 
+export async function fetchTranscodingStatus(): Promise<any> {
+  const res = await fetch('/api/transcoding/status')
+  if (!res.ok) throw new Error(`Failed to fetch transcoding status: ${res.status}`)
+  return res.json()
+}
+
+

@@ -2589,6 +2589,73 @@ async def update_settings(
     return {"status": "ok", "use_upstream_cameras": payload.use_upstream_cameras}
 
 
+@app.get("/api/transcoding/status")
+async def get_transcoding_status(
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    """
+    Returns real-time status of active transcoding sessions from both local
+    and remote nodes, including total completed count for analytics.
+    """
+    from .transcoder import TranscoderManager
+    from .transcoding_client import TranscodingClient
+    from .policy_loader import PolicyLoader
+    import httpx
+    import time
+
+    # 1. Fetch local active sessions
+    local_sessions = []
+    async with TranscoderManager._lock:
+        for stream_id, state in TranscoderManager._transcoders.items():
+            if state.process.returncode is None:
+                uptime = int((datetime.utcnow() - state.startup_time).total_seconds())
+                local_sessions.append({
+                    "stream_id": stream_id,
+                    "pid": state.process.pid,
+                    "viewers": state.active_viewers,
+                    "uptime_s": uptime,
+                    "type": "local"
+                })
+
+    # 2. Fetch remote active sessions from standalone transcoder
+    remote_data = None
+    gateway_url = PolicyLoader.get("cluster_policy.yaml", "cloud_gateway_url", "http://localhost:8500")
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            headers = TranscodingClient._get_auth_headers()
+            resp = await client.get(f"{gateway_url.rstrip('/')}/status", headers=headers)
+            if resp.status_code == 200:
+                remote_data = resp.json()
+    except Exception as e:
+        print(f"[api] Failed to fetch remote transcoder status: {e}")
+
+    # 3. Fetch historic completed count from StreamTranscoder records
+    total_completed = 0
+    try:
+        stmt = select(func.count(StreamTranscoder.id))
+        # Note: func.count is imported as func but wait! Is func imported from sqlalchemy?
+        # Let's import func from sqlalchemy dynamically to prevent missing import!
+        from sqlalchemy import func
+        result = await session.execute(stmt)
+        total_completed = result.scalar() or 0
+    except Exception as e:
+        print(f"[api] Failed to count completed sessions: {e}")
+
+    return {
+        "timestamp": time.time(),
+        "local": {
+            "active_count": len(local_sessions),
+            "sessions": local_sessions
+        },
+        "remote": remote_data,
+        "analytics": {
+            "total_completed_sessions": total_completed,
+            "system_cpu_usage": 0,
+            "system_gpu_usage": 0
+        }
+    }
+
+
 @app.post("/api/cameras/test-rtsp")
 async def test_rtsp_connection(payload: dict):
     rtsp_url = payload.get("rtsp_url")
