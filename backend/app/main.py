@@ -70,6 +70,89 @@ async def upstream_sync_loop():
         except Exception as e:
             print("[upstream_sync] Periodic camera sync error:", e)
 
+async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
+    import yaml
+    import subprocess
+    import os
+    from pathlib import Path
+    from .stream_manager import should_record
+    
+    # 1. Fetch all active streams
+    res = await session.execute(
+        select(CameraStream)
+        .join(Camera)
+        .where(Camera.active == True)
+    )
+    active_streams = list(res.scalars().all())
+    
+    # 2. Build paths dictionary
+    paths_dict = {
+        "all_others": {
+            "source": "publisher",
+            "record": True
+        }
+    }
+    for stream in active_streams:
+        source_url = stream.stream_url.strip() if stream.stream_url else ""
+        if stream.stream_source == "EDGE_PUSH":
+            source_url = "publisher"
+            
+        paths_dict[stream.stream_id] = {
+            "source": source_url,
+            "sourceProtocol": "tcp",
+            "sourceOnDemand": not stream.always_on,
+            "record": should_record(stream),
+        }
+        
+    # 3. Find mediamtx.yml path
+    candidate_paths = [
+        "/opt/mediamtx/mediamtx.yml",
+        "./backend/app/mediamtx.yml",
+        "./app/mediamtx.yml",
+        "./mediamtx.yml",
+        "../mediamtx_linux.yml"
+    ]
+    config_path = None
+    for cp in candidate_paths:
+        p = Path(cp)
+        if p.exists():
+            config_path = p
+            break
+            
+    if not config_path:
+        print("[startup] No MediaMTX configuration file found to write camera paths.")
+        return
+        
+    # 4. Read config, keep base, append paths
+    try:
+        content = config_path.read_text()
+    except Exception as e:
+        print(f"[startup] Failed to read MediaMTX config file: {e}")
+        return
+        
+    idx = content.find("paths:")
+    if idx != -1:
+        base_content = content[:idx + 6]
+        paths_yaml = yaml.safe_dump(paths_dict, default_flow_style=False)
+        indented_paths = "\n" + "\n".join("  " + line for line in paths_yaml.splitlines())
+        
+        try:
+            config_path.write_text(base_content + indented_paths)
+            print(f"[startup] Successfully wrote {len(active_streams)} camera paths to {config_path}")
+            
+            # Restart MediaMTX to apply changes in one go
+            if os.path.exists("/etc/systemd/system/mediamtx.service") or os.path.exists("/lib/systemd/system/mediamtx.service"):
+                print("[startup] Restarting mediamtx service to apply changes...")
+                res = subprocess.run(["systemctl", "restart", "mediamtx"], capture_output=True, text=True)
+                if res.returncode == 0:
+                    print("[startup] mediamtx service restarted successfully.")
+                else:
+                    print(f"[startup] Failed to restart mediamtx service: {res.stderr}")
+            else:
+                print("[startup] mediamtx service restart bypassed (not systemd).")
+        except Exception as e:
+            print(f"[startup] Failed to write MediaMTX config or restart service: {e}")
+
 def configure_mediamtx_paths_dynamically():
     import subprocess
     import os
@@ -218,20 +301,10 @@ async def startup():
         use_upstream = await RedisManager.get_setting_use_upstream()
         if not use_upstream:
             print("[startup] Upstream sync disabled. Skipping startup sync.")
-            # Still need to load and register existing local streams into stream_manager on boot!
             async for session in get_session():
                 try:
-                    res = await session.execute(
-                        select(CameraStream).options(selectinload(CameraStream.camera))
-                    )
-                    streams = res.scalars().all()
-                    for stream in streams:
-                        camera = stream.camera
-                        if camera and camera.active:
-                            await stream_manager.add_stream(session, stream)
-                        else:
-                            await stream_manager.remove_stream(session, stream)
-                    print("[startup] Local streams registered successfully.")
+                    await configure_mediamtx_cameras_in_yaml(session)
+                    print("[startup] Local streams registered successfully via YAML.")
                 except Exception as e:
                     print(f"[startup] Error registering local streams: {e}")
             return
@@ -239,7 +312,8 @@ async def startup():
         print("[startup] Syncing camera streams with upstream API dynamically...")
         async for session in get_session():
             try:
-                await sync_cameras(session)
+                await sync_cameras(session, skip_mediamtx_api=True)
+                await configure_mediamtx_cameras_in_yaml(session)
                 print("[startup] Dynamic camera synchronization complete.")
             except Exception as e:
                 print(f"[startup] Error performing dynamic camera sync: {e}")
@@ -788,7 +862,7 @@ async def health():
     return {"status": "ok"}
 
 @app.post("/api/cameras/sync", response_model=SyncResponse)
-async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
+async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], skip_mediamtx_api: bool = False):
     raw_cameras = await fetch_upstream_cameras()
     updated_count = 0
     
@@ -871,7 +945,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
                 stream_url=stream_url,
                 stream_mode="AUTO",
                 always_on=always_on_val,
-                status=StreamState.REGISTERED
+                status=StreamState.CONNECTING
             )
             session.add(stream)
             await session.flush()
@@ -883,17 +957,26 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
                 stream.codec = codec_val
             stream.bitrate = bitrate_val
             stream.always_on = always_on_val
+            stream.status = StreamState.CONNECTING
             await session.flush()
 
-        # Register in MediaMTX config
-        if camera.active:
-            await stream_manager.add_stream(session, stream)
-        else:
-            await stream_manager.remove_stream(session, stream)
+        # Register in MediaMTX config dynamically only if syncing a small batch
+        if not skip_mediamtx_api and len(raw_cameras) <= 5:
+            if camera.active:
+                await stream_manager.add_stream(session, stream)
+            else:
+                await stream_manager.remove_stream(session, stream)
 
         updated_count += 1
 
     await session.commit()
+
+    if skip_mediamtx_api or len(raw_cameras) > 5:
+        try:
+            await configure_mediamtx_cameras_in_yaml(session)
+        except Exception as e:
+            print(f"[sync_cameras] Failed to write cameras to mediamtx.yml: {e}")
+
     return SyncResponse(total=len(raw_cameras), created_or_updated=updated_count, source=settings.upstream_camera_api_url)
 
 @app.get("/api/cameras/sync", response_model=SyncResponse)
