@@ -203,7 +203,7 @@ EOF
 DATABASE_URL=postgresql+asyncpg://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME
 REDIS_URL=redis://localhost:6379/0
 MEDIAMTX_API_URL=http://127.0.0.1:9997
-MEDIAMTX_WEBRTC_URL=http://${CORE_IP}:8889
+MEDIAMTX_WEBRTC_URL=http://127.0.0.1:8889
 UPSTREAM_CAMERA_API_URL=https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver
 TURN_SERVER_URL=turn:${CORE_IP}:3478
 TURN_SERVER_USERNAME=admin
