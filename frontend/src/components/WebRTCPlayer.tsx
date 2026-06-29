@@ -182,10 +182,12 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       // Handle Trickle ICE Candidates
       pc.onicecandidate = (event) => {
         if (event.candidate && pcRef.current === pc) {
+          const candidateStr = event.candidate.candidate;
+          const bodyContent = candidateStr.startsWith('a=') ? candidateStr : `a=${candidateStr}\r\n`;
           fetch(sessionUrl, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/trickle-ice-sdpfrag' },
-            body: event.candidate.candidate,
+            body: bodyContent,
           }).catch((err) => console.error('Trickle candidate error:', err));
         }
       };

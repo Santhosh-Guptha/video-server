@@ -341,10 +341,12 @@ export function WebcamStream({ edgeCameras, onRefresh }: WebcamStreamProps) {
         // Trickle ICE support (Optional for WHIP but good to have)
         pc.onicecandidate = (event) => {
           if (event.candidate && pcRef.current === pc) {
+            const candidateStr = event.candidate.candidate;
+            const bodyContent = candidateStr.startsWith('a=') ? candidateStr : `a=${candidateStr}\r\n`;
             fetch(locationHeader, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/trickle-ice-sdpfrag' },
-              body: event.candidate.candidate
+              body: bodyContent
             }).catch(e => console.error('[WHIP] Trickle candidate send failed:', e))
           }
         }
