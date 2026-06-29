@@ -21,7 +21,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 1. Root check
 if [[ "$EUID" -ne 0 ]]; then
-    log_error "This installation script must be executed as root (sudo)."
+    log_error "This installation script must be executed as root (using sudo)."
     exit 1
 fi
 
@@ -30,11 +30,13 @@ touch "$INSTALL_LOG"
 exec > >(tee -ia "$INSTALL_LOG") 2>&1
 
 ROLE="all"
+TRANSCODER_IP="127.0.0.1"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "Options:"
     echo "  --role <core|transcoder|all>   Deploy VMS Core, Standalone Transcoder, or both (all). Default: all"
+    echo "  --transcoder-ip <IP>           IP address of Transcoder VM (required for 'core' role if remote). Default: 127.0.0.1"
     echo "  --help                         Show this help message"
     exit 1
 }
@@ -42,6 +44,7 @@ usage() {
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --role) ROLE="$2"; shift ;;
+        --transcoder-ip) TRANSCODER_IP="$2"; shift ;;
         --help) usage ;;
         *) log_error "Unknown parameter passed: $1"; usage ;;
     esac
@@ -50,6 +53,7 @@ done
 
 echo "=========================================================="
 echo "      VMS AUTOMATED INSTALLATION - ROLE: ${ROLE^^}"
+echo "      Configured Transcoder Target IP: $TRANSCODER_IP"
 echo "      Log file: $INSTALL_LOG"
 echo "=========================================================="
 
@@ -189,10 +193,9 @@ TURN_SERVER_CREDENTIAL=admin123
 NODE_ID=${NODE_ID}
 EOF
 
-    # If role is 'all', link Core to local transcoder service on 8500, otherwise keep default fallback
-    if [ "$ROLE" == "all" ]; then
-        sed -i "s|cloud_gateway_url:.*|cloud_gateway_url: http://127.0.0.1:8500|g" "$CORE_DIR/backend/app/configs/cluster_policy.yaml"
-    fi
+    # Link Core to the target transcoder service IP
+    log_info "Configuring cluster policy mapping for transcoder: http://${TRANSCODER_IP}:8500"
+    sed -i "s|cloud_gateway_url:.*|cloud_gateway_url: http://${TRANSCODER_IP}:8500|g" "$CORE_DIR/backend/app/configs/cluster_policy.yaml"
 
     cd "$CORE_DIR/backend"
     "$VENV_PATH/bin/alembic" upgrade head
