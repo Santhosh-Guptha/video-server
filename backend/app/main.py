@@ -98,15 +98,72 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
     }
     for stream in active_streams:
         source_url = stream.stream_url.strip() if stream.stream_url else ""
+        
+        # Skip invalid or empty URLs
+        if stream.stream_source != "EDGE_PUSH":
+            if not source_url or source_url.lower() in ("rtsp://", "rtsps://", "rtmp://") or source_url.endswith("@"):
+                print(f"[yaml_config] Skipping stream {stream.stream_id} due to invalid/empty stream_url: {source_url}")
+                continue
+
+        use_local_transcode = False
+        if hasattr(stream, 'transcode') and stream.transcode and settings.enable_local_transcode:
+            use_local_transcode = True
+
         if stream.stream_source == "EDGE_PUSH":
-            source_url = "publisher"
+            paths_dict[stream.stream_id] = {
+                "source": "publisher",
+                "sourceProtocol": "tcp",
+                "sourceOnDemand": False,
+                "record": should_record(stream),
+            }
+        elif use_local_transcode:
+            # Build FFmpeg command to scale and limit frame rate/bitrate
+            vf_filters = []
+            if stream.resolution and "x" in stream.resolution:
+                parts = stream.resolution.split("x")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    vf_filters.append(f"scale={parts[0]}:{parts[1]}")
+            if stream.fps:
+                vf_filters.append(f"fps=fps={stream.fps}")
             
-        paths_dict[stream.stream_id] = {
-            "source": source_url,
-            "sourceProtocol": "tcp",
-            "sourceOnDemand": not stream.always_on,
-            "record": should_record(stream),
-        }
+            vf_arg = f"-vf \"{','.join(vf_filters)}\"" if vf_filters else ""
+            
+            bitrate_arg = ""
+            if stream.bitrate:
+                bitrate_arg = f"-b:v {stream.bitrate}k -maxrate {stream.bitrate}k -bufsize {stream.bitrate * 2}k"
+            
+            from .stream_manager import double_escape_rtsp_url
+            input_url = double_escape_rtsp_url(stream.stream_url)
+            ffmpeg_cmd = (
+                f"ffmpeg -rtsp_transport tcp -i {input_url} -an "
+                f"-c:v libx264 -preset ultrafast -tune zerolatency {bitrate_arg} {vf_arg} "
+                f"-f rtsp -rtsp_transport tcp rtsp://localhost:8554/{stream.stream_id}"
+            )
+
+            if stream.always_on:
+                paths_dict[stream.stream_id] = {
+                    "source": "publisher",
+                    "sourceProtocol": "tcp",
+                    "sourceOnDemand": False,
+                    "record": should_record(stream),
+                    "runOnInit": ffmpeg_cmd,
+                    "runOnInitRestart": True,
+                }
+            else:
+                paths_dict[stream.stream_id] = {
+                    "source": "publisher",
+                    "sourceProtocol": "tcp",
+                    "sourceOnDemand": False,
+                    "record": should_record(stream),
+                    "runOnDemand": ffmpeg_cmd,
+                }
+        else:
+            paths_dict[stream.stream_id] = {
+                "source": source_url,
+                "sourceProtocol": "tcp",
+                "sourceOnDemand": not stream.always_on,
+                "record": should_record(stream),
+            }
         
     # 3. Find mediamtx.yml path
     candidate_paths = [
@@ -1012,9 +1069,10 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
         if username and password:
             try:
                 protocol, rest = stream_url.split("://", 1)
-                encoded_username = quote(str(username), safe="")
-                encoded_password = quote(str(password), safe="")
-                stream_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+                if rest.strip():
+                    encoded_username = quote(str(username), safe="")
+                    encoded_password = quote(str(password), safe="")
+                    stream_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
             except Exception:
                 pass
 
