@@ -222,8 +222,21 @@ EOF
     systemctl restart video-backend
 
     log_info "Installing Node.js and building VMS Frontend..."
-    if ! command -v node &>/dev/null; then
-        curl -fsSL https://deb.nodesource.com/setup_18.x | bash - || true
+    NODE_OK=0
+    if command -v node &>/dev/null; then
+        NODE_VER=$(node -v | cut -d'v' -f2 | cut -d'.' -f1 || echo "0")
+        if [ "$NODE_VER" -ge 18 ]; then
+            NODE_OK=1
+            log_info "Node.js version verified: v$NODE_VER"
+        fi
+    fi
+
+    if [ "$NODE_OK" -eq 0 ]; then
+        log_info "Node.js is missing or version is older than v18. Enforcing Node.js 18 installation..."
+        apt-get purge -y nodejs npm nodejs-doc || true
+        apt-get autoremove -y || true
+        
+        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
         apt-get install -y nodejs
     fi
 
