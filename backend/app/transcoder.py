@@ -22,6 +22,12 @@ from .config import settings
 from .models import StreamTranscoder
 
 
+def _get_mtx_request():
+    """Lazy import to avoid circular dependency with stream_manager."""
+    from .stream_manager import _mtx_request
+    return _mtx_request
+
+
 class _TranscoderState:
     """In-memory state for a single running transcoder."""
     __slots__ = ("process", "stream_id", "startup_time", "active_viewers", "shutdown_task")
@@ -107,10 +113,10 @@ class TranscoderManager:
             # Wait up to 5 seconds for the transcoded stream to become ready in MediaMTX
             # This prevents race conditions where the browser requests the stream before FFmpeg starts publishing
             ready = False
-            from .stream_manager import _mtx_request
+            _mtx_req = _get_mtx_request()
             for _ in range(25): # 25 * 0.2s = 5s
                 try:
-                    resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=1.0)
+                    resp = await _mtx_req("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=1.0)
                     if resp.status_code == 200:
                         items = resp.json().get("items", {})
                         path_info = None
@@ -178,7 +184,7 @@ class TranscoderManager:
             h264_path = f"{stream_id}_h264"
             has_readers = False
             try:
-                resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
+                resp = await _get_mtx_request()("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
                 if resp.status_code == 200:
                     paths_data = resp.json().get("items", {})
                     path_info = None
@@ -225,7 +231,7 @@ class TranscoderManager:
         # Fetch active MediaMTX paths to check readers
         mediamtx_paths = {}
         try:
-            resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
+            resp = await _get_mtx_request()("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
             if resp.status_code == 200:
                 items = resp.json().get("items", {})
                 if isinstance(items, dict):
@@ -392,9 +398,10 @@ class TranscoderManager:
             "record": False,  # Do NOT record the transcoded stream
         }
         try:
-            resp = await _mtx_request("POST", f"{settings.mediamtx_api_url}/v3/config/paths/add/{h264_path}", json=payload, timeout=5.0)
+            _mtx_req = _get_mtx_request()
+            resp = await _mtx_req("POST", f"{settings.mediamtx_api_url}/v3/config/paths/add/{h264_path}", json=payload, timeout=5.0)
             if resp.status_code == 400 or "already exists" in resp.text:
-                await _mtx_request("PATCH", f"{settings.mediamtx_api_url}/v3/config/paths/patch/{h264_path}", json=payload, timeout=5.0)
+                await _mtx_req("PATCH", f"{settings.mediamtx_api_url}/v3/config/paths/patch/{h264_path}", json=payload, timeout=5.0)
         except Exception as e:
             print(f"[transcoder] Error registering MediaMTX path {h264_path}: {e}")
 
@@ -403,7 +410,7 @@ class TranscoderManager:
         """Removes the temporary h264 publisher path from MediaMTX."""
         h264_path = f"{stream_id}_h264"
         try:
-            await _mtx_request("DELETE", f"{settings.mediamtx_api_url}/v3/config/paths/delete/{h264_path}", timeout=5.0)
+            await _get_mtx_request()("DELETE", f"{settings.mediamtx_api_url}/v3/config/paths/delete/{h264_path}", timeout=5.0)
         except Exception as e:
             print(f"[transcoder] Error deleting MediaMTX path {h264_path}: {e}")
 
