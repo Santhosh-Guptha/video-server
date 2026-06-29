@@ -84,7 +84,7 @@ class CameraConfigClient:
       <Username>{self.username}</Username>
       <Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">{digest_b64}</Password>
       <Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">{nonce_b64}</Nonce>
-      <Created>{created}</Created>
+      <wsu:Created>{created}</wsu:Created>
     </UsernameToken>
   </Security>
 </soap:Header>"""
