@@ -43,37 +43,65 @@ from .stream_manager import stream_manager
 
 async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool:
     """
-    Runs ffprobe against the given RTSP URL with a hard timeout.
-    Returns True if the stream is reachable, False otherwise.
-    Designed to be minimal: exits as soon as the stream metadata is read.
+    Checks if the RTSP port is open on the host.
+    Replaces heavy ffprobe process with a lightweight TCP socket probe
+    to avoid overloading physical cameras and exhausting RTSP connection limits.
     """
-    cmd = [
-        settings.ffmpeg_path.replace("ffmpeg", "ffprobe") if "ffmpeg" in settings.ffmpeg_path else "ffprobe",
-        "-v", "quiet",
-        "-rtsp_transport", "tcp",
-        "-i", rtsp_url,
-        "-show_entries", "stream=codec_type",
-        "-of", "default=noprint_wrappers=1",
-        "-timeout", str(timeout_seconds * 1_000_000),  # microseconds
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+    import urllib.parse
+    import socket
+    
+    host = ""
+    port = 554
+    
+    # Parse RTSP URL
+    if "://" in rtsp_url:
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds + 2)
-            return proc.returncode == 0
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            # Handle user:pass@host:port/path
+            parsed = urllib.parse.urlparse(rtsp_url)
+            host = parsed.hostname or ""
+            if parsed.port:
+                port = parsed.port
+        except Exception:
+            pass
+            
+    if not host:
+        # Fallback manual parse
+        try:
+            clean = rtsp_url.split("://", 1)[-1]
+            clean = clean.split("@")[-1]  # remove credentials
+            clean = clean.split("/")[0]   # remove path
+            if ":" in clean:
+                parts = clean.split(":", 1)
+                host = parts[0]
+                port = int(parts[1])
+            else:
+                host = clean
+        except Exception:
             return False
-    except Exception as e:
-        print(f"[watchdog] ffprobe error for {rtsp_url}: {e}")
+            
+    if not host:
         return False
+
+    # Perform lightweight TCP socket check
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=float(timeout_seconds)
+        )
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except Exception:
+        # Retry with a quick socket ping as a fallback
+        try:
+            loop = asyncio.get_event_loop()
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(float(timeout_seconds))
+            await loop.run_in_executor(None, s.connect, (host, port))
+            s.close()
+            return True
+        except Exception:
+            return False
 
 
 async def _patch_mediamtx(path_name: str, payload: dict) -> bool:
