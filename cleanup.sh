@@ -1,78 +1,110 @@
 #!/usr/bin/env bash
-# ── VMS SYSTEM CLEANUP AND DATABASE RESET SCRIPT ───────────────────────────
-# Stops services, wipes recordings/HLS, resets PostgreSQL & Redis, and rebuilds schema.
+# ==============================================================================
+# VMS STACK - COMPLETE UNINSTALL / WIPE CLEANUP SCRIPT
+# Design: Stops, disables, and deletes all VMS systemd services, drops PostgreSQL
+#         databases/roles, flushes Redis, and completely deletes all installation directories.
+# ==============================================================================
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[0;33m'
 NC='\033[0m'
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Root check
-if [ "$EUID" -ne 0 ]; then
-  log_error "Please run this script as root (using sudo)."
-  exit 1
+if [[ "$EUID" -ne 0 ]]; then
+    log_error "This cleanup script must be executed as root (using sudo)."
+    exit 1
 fi
 
-PROJECT_DIR="/opt/video-server"
-BACKEND_DIR="$PROJECT_DIR/backend"
-DATA_DIR="$BACKEND_DIR/data"
-VENV_PATH="/opt/video-backend-venv"
-
-log_info "Stopping VMS services..."
-systemctl stop video-backend.service || true
-systemctl stop video-frontend.service || true
-systemctl stop mediamtx.service || true
-
-# 1. Wiping physical media and cache
-log_info "Wiping recordings and HLS cache..."
-if [ -d "$DATA_DIR/recordings" ]; then
-    rm -rf "$DATA_DIR/recordings"/*
-    log_info "Recordings directory wiped."
+echo "=========================================================="
+echo "      WARNING: THIS WILL COMPLETELY UNINSTALL VMS"
+echo "      AND WIPE ALL SYSTEM DATABASES, LOGS, AND MEDIA!"
+echo "=========================================================="
+read -p "Are you sure you want to proceed? (y/N) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    log_info "Wipe cancelled by user."
+    exit 0
 fi
-if [ -d "$DATA_DIR/hls" ]; then
-    rm -rf "$DATA_DIR/hls"/*
-    log_info "HLS cache wiped."
-fi
-rm -f "$DATA_DIR"/record_complete.log || true
 
-# 2. Resetting PostgreSQL Database
-log_info "Resetting PostgreSQL database 'vms_db'..."
-systemctl start postgresql
-# Terminate any active connections to the database to prevent locking
-sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'vms_db' AND pid <> pg_backend_pid();" || true
-sudo -u postgres psql -c "DROP DATABASE IF EXISTS vms_db;"
-sudo -u postgres psql -c "CREATE DATABASE vms_db OWNER vms_admin;"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE vms_db TO vms_admin;"
-log_success "PostgreSQL database recreated."
+# 1. Stop and Disable all VMS systemd services
+log_info "1. Stopping and disabling VMS systemd services..."
+VMS_SERVICES=("video-backend" "video-frontend" "mediamtx" "vms-transcoder")
 
-# 3. Flashing Redis
-log_info "Flushing Redis cache..."
-systemctl start redis-server
-redis-cli flushall || true
-log_success "Redis cache flushed."
+for service in "${VMS_SERVICES[@]}"; do
+    if systemctl is-active --quiet "${service}.service"; then
+        log_info "Stopping active service: ${service}..."
+        systemctl stop "${service}.service" || true
+    fi
+    if systemctl is-enabled --quiet "${service}.service" &>/dev/null; then
+        log_info "Disabling service: ${service}..."
+        systemctl disable "${service}.service" || true
+    fi
+    # Remove systemd service files
+    if [ -f "/etc/systemd/system/${service}.service" ]; then
+        log_info "Removing systemd file: /etc/systemd/system/${service}.service"
+        rm -f "/etc/systemd/system/${service}.service"
+    fi
+done
 
-# 4. Running Alembic migrations to build fresh schema
-log_info "Running Alembic migrations to recreate database schema..."
-cd "$BACKEND_DIR"
-if [ -f "$VENV_PATH/bin/alembic" ]; then
-    "$VENV_PATH/bin/alembic" upgrade head
-    log_success "Database schema rebuilt successfully."
+# Reload systemd configuration to apply changes
+log_info "Reloading systemd daemon..."
+systemctl daemon-reload
+systemctl reset-failed
+
+# 2. Reset/Wipe PostgreSQL Databases and Roles
+log_info "2. Resetting PostgreSQL database configurations..."
+if systemctl is-active --quiet postgresql; then
+    DB_NAME="vms_db"
+    DB_USER="vms_admin"
+    
+    log_info "Terminating active connections and dropping database '$DB_NAME'..."
+    sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" || true
+    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;" || true
+    sudo -u postgres psql -c "DROP USER IF EXISTS $DB_USER;" || true
+    log_success "PostgreSQL database and role removed."
 else
-    log_error "Alembic not found in virtual environment. Cannot rebuild schema."
+    log_warn "PostgreSQL is not running. Skipping database reset."
 fi
-cd "$PROJECT_DIR"
 
-# 5. Starting VMS Core services
-log_info "Restarting VMS Core services..."
-systemctl start mediamtx.service || true
-systemctl start video-backend.service || true
-systemctl start video-frontend.service || true
+# 3. Flush Redis Cache
+log_info "3. Flushing Redis cache..."
+if systemctl is-active --quiet redis-server; then
+    redis-cli flushall || true
+    log_success "Redis cache flushed."
+else
+    log_warn "Redis server is not running. Skipping cache flush."
+fi
 
-log_success "VMS Cleanup and Database Reset completed successfully!"
+# 4. Remove all VMS installation directories
+log_info "4. Deleting VMS codebases, virtual environments, and media files..."
+DIRECTORIES=(
+    "/opt/video-server"
+    "/opt/vms-transcoder"
+    "/opt/mediamtx"
+    "/opt/video-backend-venv"
+)
+
+for dir in "${DIRECTORIES[@]}"; do
+    if [ -d "$dir" ]; then
+        log_info "Deleting directory: $dir..."
+        rm -rf "$dir"
+    fi
+done
+
+# 5. Clean up log files
+log_info "5. Cleaning up installation log files..."
+rm -f /var/log/vms-install.log || true
+
+log_success "=========================================================="
+log_success "      VMS WIPE AND UNINSTALL COMPLETED SUCCESSFULLY!"
+log_success "=========================================================="
