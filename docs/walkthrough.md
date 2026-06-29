@@ -120,7 +120,11 @@ graph TD
 As part of production hardening, we:
 1. **Removed Dummy Files**: Deleted `sample_cameras.json` to prevent mock data polluting the production camera registry.
 2. **Added Config Options**: Added `upstream_sync_interval_minutes` to `config.py` (default: 5 minutes) and registered it as `UPSTREAM_SYNC_INTERVAL_MINUTES` in the central policy system (`vms_policy.py`).
-3. **Synchronized Main Loop**: Modified `upstream_sync_loop` in `main.py` to sleep based on `UPSTREAM_SYNC_INTERVAL_MINUTES * 60` to run automatic camera synchronization periodically.
+3. **On-Demand Upstream Sync:** Commented out the periodic background sync watchdog task (`upstream_sync_loop`) so that synchronization runs once on boot and then only on-demand when the API `/api/cameras/sync` is explicitly invoked.
+4. **Command Center UI Layout & Pagination:**
+   * **Live Wall Pagination:** Implemented grid size selector (4, 9, 12, 16, 24, 36) and pagination logic in `LiveWall.tsx` to handle large camera counts (800+) cleanly and prevent browser performance degradation.
+   * **manual grid expansion:** Added 16 (4x4) and 25 (5x5) layout sizes to the manual grid view in `App.tsx` and `.videoGrid` CSS.
+   * **Collapsing Bug Fix:** Fixed the aspect-ratio height collapse and overlay squishing/overlapping by styling `.liveWallCell` as a block element with full dimensions and setting explicit `width: 100%` on `.playerShell.minimalMode`.
 
 ### Caching Fallback Strategy
 In `upstream.py`, we redesigned the sync registry:
