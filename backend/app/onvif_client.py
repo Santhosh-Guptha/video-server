@@ -117,7 +117,7 @@ class CameraConfigClient:
             response.raise_for_status()
             return response.text
 
-    async def run_onvif_setup(self, width: Optional[int], height: Optional[int], fps: Optional[int], bitrate: Optional[int]) -> bool:
+    async def run_onvif_setup(self, stream_id: str, width: Optional[int], height: Optional[int], fps: Optional[int], bitrate: Optional[int]) -> bool:
         """
         Locates the ONVIF Media service endpoint and updates the Video Encoder Configuration.
         """
@@ -187,8 +187,23 @@ class CameraConfigClient:
                 logger.error("[ONVIFClient] No VideoEncoderConfigurations returned by camera.")
                 return False
                 
-            # Select target config (typically the first one is the Main profile)
+            # Determine if we are configuring the sub-stream
+            is_sub = stream_id and ("normal" in stream_id.lower() or "sub" in stream_id.lower())
+            
+            # Select target config (typically the first is Main, second is Sub)
             config_el = configs[0]
+            if is_sub and len(configs) > 1:
+                # Look for configuration with "sub" or "second" in its name or token
+                for cfg in configs:
+                    cfg_name = cfg.find('.//tt:Name', media_ns) or cfg.find('.//{http://www.onvif.org/ver10/schema}Name')
+                    cfg_name_str = cfg_name.text.lower() if cfg_name is not None else ""
+                    cfg_token = cfg.get('token', '').lower()
+                    if "sub" in cfg_name_str or "sub" in cfg_token or "second" in cfg_name_str:
+                        config_el = cfg
+                        break
+                else:
+                    config_el = configs[1]
+
             token = config_el.get('token')
             name_el = config_el.find('.//tt:Name', media_ns) or config_el.find('.//{http://www.onvif.org/ver10/schema}Name')
             name = name_el.text if name_el is not None else "VideoEncoder"
@@ -235,11 +250,13 @@ class CameraConfigClient:
             logger.error(f"[ONVIFClient] Failed to execute ONVIF operation: {e}")
             return False
 
-    async def run_hikvision_fallback(self, fps: Optional[int], bitrate: Optional[int], width: Optional[int], height: Optional[int]) -> bool:
+    async def run_hikvision_fallback(self, stream_id: str, fps: Optional[int], bitrate: Optional[int], width: Optional[int], height: Optional[int]) -> bool:
         """
         Configures Hikvision cameras using native ISAPI XML interface.
         """
-        url = f"{self.base_url}/ISAPI/Streaming/channels/101"
+        is_sub = stream_id and ("normal" in stream_id.lower() or "sub" in stream_id.lower())
+        channel = "102" if is_sub else "101"
+        url = f"{self.base_url}/ISAPI/Streaming/channels/{channel}"
         try:
             auth = httpx.DigestAuth(self.username, self.password)
             async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
@@ -270,29 +287,31 @@ class CameraConfigClient:
                 headers = {"Content-Type": "application/xml"}
                 put_response = await client.put(url, content=xml_clean, headers=headers, auth=auth)
                 put_response.raise_for_status()
-                logger.info(f"[HikvisionFallback] Configured parameters successfully on ISAPI channel 101.")
+                logger.info(f"[HikvisionFallback] Configured parameters successfully on ISAPI channel {channel}.")
                 return True
         except Exception as e:
             logger.error(f"[HikvisionFallback] Failed to configure Hikvision camera: {e}")
             return False
 
-    async def run_dahua_fallback(self, fps: Optional[int], bitrate: Optional[int], width: Optional[int], height: Optional[int]) -> bool:
+    async def run_dahua_fallback(self, stream_id: str, fps: Optional[int], bitrate: Optional[int], width: Optional[int], height: Optional[int]) -> bool:
         """
         Configures Dahua cameras using Dahua configManager CGI endpoints.
         """
+        is_sub = stream_id and ("normal" in stream_id.lower() or "sub" in stream_id.lower())
+        format_prefix = "ExtraFormat[0]" if is_sub else "MainFormat[0]"
         try:
             auth = httpx.DigestAuth(self.username, self.password)
             async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
                 # 1. Build CGI URL params
                 params = {}
                 if fps is not None:
-                    params["Encode[0].MainFormat[0].Video.FPS"] = fps
+                    params[f"Encode[0].{format_prefix}.Video.FPS"] = fps
                 if bitrate is not None:
-                    params["Encode[0].MainFormat[0].Video.BitRate"] = bitrate
+                    params[f"Encode[0].{format_prefix}.Video.BitRate"] = bitrate
                 if width is not None:
-                    params["Encode[0].MainFormat[0].Video.Width"] = width
+                    params[f"Encode[0].{format_prefix}.Video.Width"] = width
                 if height is not None:
-                    params["Encode[0].MainFormat[0].Video.Height"] = height
+                    params[f"Encode[0].{format_prefix}.Video.Height"] = height
                     
                 query_str = "&".join([f"{k}={v}" for k, v in params.items()])
                 url = f"{self.base_url}/cgi-bin/configManager.cgi?action=setConfig&{query_str}"
@@ -313,7 +332,7 @@ class CameraConfigClient:
             logger.error(f"[DahuaFallback] Failed to configure Dahua camera: {e}")
             return False
 
-    async def configure(self, width: Optional[int] = None, height: Optional[int] = None, 
+    async def configure(self, stream_id: str, width: Optional[int] = None, height: Optional[int] = None, 
                         fps: Optional[int] = None, bitrate: Optional[int] = None, 
                         make: Optional[str] = None) -> bool:
         """
@@ -323,7 +342,7 @@ class CameraConfigClient:
         logger.info(f"[CameraConfigClient] Attempting configuration updates for {self.ip} (ONVIF -> Fallbacks)...")
         
         # 1. Try ONVIF
-        success = await self.run_onvif_setup(width, height, fps, bitrate)
+        success = await self.run_onvif_setup(stream_id, width, height, fps, bitrate)
         if success:
             return True
             
@@ -331,14 +350,14 @@ class CameraConfigClient:
         brand = (make or "").lower()
         if "hikvision" in brand:
             logger.info("[CameraConfigClient] ONVIF failed. Trying Hikvision ISAPI fallback...")
-            return await self.run_hikvision_fallback(fps, bitrate, width, height)
+            return await self.run_hikvision_fallback(stream_id, fps, bitrate, width, height)
         elif "dahua" in brand:
             logger.info("[CameraConfigClient] ONVIF failed. Trying Dahua CGI fallback...")
-            return await self.run_dahua_fallback(fps, bitrate, width, height)
+            return await self.run_dahua_fallback(stream_id, fps, bitrate, width, height)
         else:
             # Try both if brand is generic or Sparsh
             logger.info("[CameraConfigClient] ONVIF failed. Testing all vendor specific fallback interfaces...")
-            dahua_ok = await self.run_dahua_fallback(fps, bitrate, width, height)
+            dahua_ok = await self.run_dahua_fallback(stream_id, fps, bitrate, width, height)
             if dahua_ok:
                 return True
-            return await self.run_hikvision_fallback(fps, bitrate, width, height)
+            return await self.run_hikvision_fallback(stream_id, fps, bitrate, width, height)

@@ -928,6 +928,7 @@ async def configure_camera(
     )
 
     success = await client.configure(
+        stream_id=payload.stream_id,
         width=payload.width,
         height=payload.height,
         fps=payload.fps,
