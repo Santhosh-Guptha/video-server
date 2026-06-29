@@ -75,6 +75,19 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       connectionTimeoutRef.current = null;
     }
 
+    const video = videoRef.current;
+    if (video) {
+      if (video.srcObject) {
+        const stream = video.srcObject as MediaStream;
+        if (stream && typeof stream.getTracks === 'function') {
+          stream.getTracks().forEach(track => track.stop());
+        }
+        video.srcObject = null;
+      }
+      video.removeAttribute('src');
+      video.load();
+    }
+
     if (pcRef.current) {
       // Send WHEP session termination delete request
       const sessionUrl = stats.protocol === 'WHEP' ? (pcRef.current as any).sessionUrl : null;

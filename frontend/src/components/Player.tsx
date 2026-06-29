@@ -117,6 +117,11 @@ function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: H
         hlsRef.current.destroy()
         hlsRef.current = null
       }
+      video.src = ""
+      video.removeAttribute('src')
+      try {
+        video.load()
+      } catch (e) {}
     }
   }, [src])
 
