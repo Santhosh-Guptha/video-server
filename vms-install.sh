@@ -31,12 +31,14 @@ exec > >(tee -ia "$INSTALL_LOG") 2>&1
 
 ROLE="all"
 TRANSCODER_IP="127.0.0.1"
+SELF_TRANSCODING="false"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "Options:"
     echo "  --role <core|transcoder|all>   Deploy VMS Core, Standalone Transcoder, or both (all). Default: all"
     echo "  --transcoder-ip <IP>           IP address of Transcoder VM (required for 'core' role if remote). Default: 127.0.0.1"
+    echo "  --self-transcoding             Enforce local self-transcoding (sets cloud_enabled=false, skips remote transcoder)"
     echo "  --help                         Show this help message"
     exit 1
 }
@@ -45,6 +47,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --role) ROLE="$2"; shift ;;
         --transcoder-ip) TRANSCODER_IP="$2"; shift ;;
+        --self-transcoding) SELF_TRANSCODING="true" ;;
         --help) usage ;;
         *) log_error "Unknown parameter passed: $1"; usage ;;
     esac
@@ -53,7 +56,11 @@ done
 
 echo "=========================================================="
 echo "      VMS AUTOMATED INSTALLATION - ROLE: ${ROLE^^}"
-echo "      Configured Transcoder Target IP: $TRANSCODER_IP"
+if [ "$SELF_TRANSCODING" == "true" ]; then
+echo "      Transcoding Mode: LOCAL SELF-TRANSCODING (One Service)"
+else
+echo "      Transcoding Mode: GATEWAY DELEGATION -> http://$TRANSCODER_IP:8500"
+fi
 echo "      Log file: $INSTALL_LOG"
 echo "=========================================================="
 
@@ -205,8 +212,14 @@ NODE_ID=${NODE_ID}
 EOF
 
     # Link Core to the target transcoder service IP
-    log_info "Configuring cluster policy mapping for transcoder: http://${TRANSCODER_IP}:8500"
-    sed -i "s|cloud_gateway_url:.*|cloud_gateway_url: http://${TRANSCODER_IP}:8500|g" "$CORE_DIR/backend/app/configs/cluster_policy.yaml"
+    if [ "$SELF_TRANSCODING" == "true" ]; then
+        log_info "Configuring cluster policy for self-transcoding (cloud_enabled: false)"
+        sed -i "s|cloud_enabled:.*|cloud_enabled: false|g" "$CORE_DIR/backend/app/configs/cluster_policy.yaml"
+    else
+        log_info "Configuring cluster policy mapping for transcoder: http://${TRANSCODER_IP}:8500"
+        sed -i "s|cloud_enabled:.*|cloud_enabled: true|g" "$CORE_DIR/backend/app/configs/cluster_policy.yaml"
+        sed -i "s|cloud_gateway_url:.*|cloud_gateway_url: http://${TRANSCODER_IP}:8500|g" "$CORE_DIR/backend/app/configs/cluster_policy.yaml"
+    fi
 
     cd "$CORE_DIR/backend"
     "$VENV_PATH/bin/alembic" upgrade head
