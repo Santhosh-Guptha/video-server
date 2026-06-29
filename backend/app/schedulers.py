@@ -26,166 +26,166 @@ async def camera_scheduler_loop():
     and monitors their status, caching updates in Redis.
     """
     print("[scheduler] Starting camera status watchdog loop...")
+    from .stream_manager import _mtx_request
     
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                # 1. Sync camera stream paths from Database to MediaMTX configuration
-                async for session in get_session():
-                    # Fetch all active camera streams
-                    res = await session.execute(
-                        select(CameraStream)
-                        .join(Camera)
-                        .where(Camera.active == True)
-                    )
-                    active_streams = list(res.scalars().all())
-                    active_stream_ids = {stream.stream_id for stream in active_streams}
+    while True:
+        try:
+            # 1. Sync camera stream paths from Database to MediaMTX configuration
+            async for session in get_session():
+                # Fetch all active camera streams
+                res = await session.execute(
+                    select(CameraStream)
+                    .join(Camera)
+                    .where(Camera.active == True)
+                )
+                active_streams = list(res.scalars().all())
+                active_stream_ids = {stream.stream_id for stream in active_streams}
 
-                    # Fetch existing configuration paths in MediaMTX
-                    try:
-                        paths_resp = await client.get(f"{settings.mediamtx_api_url}/v3/config/paths/list?page=0&itemsPerPage=10000")
-                        if paths_resp.status_code == 200:
-                            mediamtx_paths_data = paths_resp.json().get("items", {})
-                            mediamtx_paths = set()
-                            if isinstance(mediamtx_paths_data, dict):
-                                mediamtx_paths = set(mediamtx_paths_data.keys())
-                            elif isinstance(mediamtx_paths_data, list):
-                                mediamtx_paths = {item.get("name") for item in mediamtx_paths_data if isinstance(item, dict) and "name" in item}
-                        else:
-                            mediamtx_paths = set()
-                            print(f"[scheduler] Failed to query MediaMTX paths list: {paths_resp.text}")
-                    except Exception as e:
+                # Fetch existing configuration paths in MediaMTX
+                try:
+                    paths_resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/config/paths/list?page=0&itemsPerPage=10000")
+                    if paths_resp.status_code == 200:
+                        mediamtx_paths_data = paths_resp.json().get("items", {})
                         mediamtx_paths = set()
-                        print(f"[scheduler] Connection error querying MediaMTX paths: {e}")
+                        if isinstance(mediamtx_paths_data, dict):
+                            mediamtx_paths = set(mediamtx_paths_data.keys())
+                        elif isinstance(mediamtx_paths_data, list):
+                            mediamtx_paths = {item.get("name") for item in mediamtx_paths_data if isinstance(item, dict) and "name" in item}
+                    else:
+                        mediamtx_paths = set()
+                        print(f"[scheduler] Failed to query MediaMTX paths list: {paths_resp.text}")
+                except Exception as e:
+                    mediamtx_paths = set()
+                    print(f"[scheduler] Connection error querying MediaMTX paths: {e}")
 
-                    # Sync paths: Add missing ones
-                    for stream in active_streams:
-                        if stream.stream_id not in mediamtx_paths:
-                            print(f"[scheduler] Registering missing stream path: {stream.stream_id}")
-                            await stream_manager.add_stream(session, stream)
+                # Sync paths: Add missing ones
+                for stream in active_streams:
+                    if stream.stream_id not in mediamtx_paths:
+                        print(f"[scheduler] Registering missing stream path: {stream.stream_id}")
+                        await stream_manager.add_stream(session, stream)
 
-                    # 2. Query active streams status to update state machine
-                    try:
-                        paths_status_resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000")
-                        if paths_status_resp.status_code == 200:
-                            active_mediamtx_paths_data = paths_status_resp.json().get("items", {})
-                            active_mediamtx_paths = {}
-                            if isinstance(active_mediamtx_paths_data, dict):
-                                active_mediamtx_paths = active_mediamtx_paths_data
-                            elif isinstance(active_mediamtx_paths_data, list):
-                                for item in active_mediamtx_paths_data:
-                                    if isinstance(item, dict) and "name" in item:
-                                        active_mediamtx_paths[item["name"]] = item
-                        else:
-                            active_mediamtx_paths = {}
-                            print(f"[scheduler] Failed to query active MediaMTX paths: {paths_status_resp.text}")
-                    except Exception as e:
+                # 2. Query active streams status to update state machine
+                try:
+                    paths_status_resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000")
+                    if paths_status_resp.status_code == 200:
+                        active_mediamtx_paths_data = paths_status_resp.json().get("items", {})
                         active_mediamtx_paths = {}
-                        print(f"[scheduler] Connection error querying active paths: {e}")
+                        if isinstance(active_mediamtx_paths_data, dict):
+                            active_mediamtx_paths = active_mediamtx_paths_data
+                        elif isinstance(active_mediamtx_paths_data, list):
+                            for item in active_mediamtx_paths_data:
+                                if isinstance(item, dict) and "name" in item:
+                                    active_mediamtx_paths[item["name"]] = item
+                    else:
+                        active_mediamtx_paths = {}
+                        print(f"[scheduler] Failed to query active MediaMTX paths: {paths_status_resp.text}")
+                except Exception as e:
+                    active_mediamtx_paths = {}
+                    print(f"[scheduler] Connection error querying active paths: {e}")
 
-                    # Transition states based on MediaMTX stream activity
-                    for stream in active_streams:
-                        stream_info = active_mediamtx_paths.get(stream.stream_id)
+                # Transition states based on MediaMTX stream activity
+                for stream in active_streams:
+                    stream_info = active_mediamtx_paths.get(stream.stream_id)
+                    
+                    ready_status = stream_info and stream_info.get("ready") is True
+                    # A stream is considered ONLINE if its path is active and ready (publisher is streaming)
+                    if ready_status:
+                        # Stream is actively pulling/pushing packets
+                        # Check number of clients (readers)
+                        readers = stream_info.get("readers", [])
+                        # Filter out internal HLS muxer from viewer counts
+                        active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
+                        clients_count = len(active_readers)
+                        await RedisManager.set_viewer_count(stream.stream_id, clients_count)
                         
-                        ready_status = stream_info and stream_info.get("ready") is True
-                        # A stream is considered ONLINE if its path is active and ready (publisher is streaming)
-                        if ready_status:
-                            # Stream is actively pulling/pushing packets
-                            # Check number of clients (readers)
-                            readers = stream_info.get("readers", [])
-                            # Filter out internal HLS muxer from viewer counts
-                            active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
-                            clients_count = len(active_readers)
-                            await RedisManager.set_viewer_count(stream.stream_id, clients_count)
+                        # Dynamic codec detection based on active MediaMTX tracks
+                        tracks = stream_info.get("tracks") or []
+                        if isinstance(tracks, list):
+                            has_h265 = any(isinstance(t, str) and t.upper().startswith("H265") for t in tracks)
+                            has_h264 = any(isinstance(t, str) and t.upper().startswith("H264") for t in tracks)
                             
-                            # Dynamic codec detection based on active MediaMTX tracks
-                            tracks = stream_info.get("tracks") or []
-                            if isinstance(tracks, list):
-                                has_h265 = any(isinstance(t, str) and t.upper().startswith("H265") for t in tracks)
-                                has_h264 = any(isinstance(t, str) and t.upper().startswith("H264") for t in tracks)
+                            detected_codec = None
+                            if has_h265:
+                                detected_codec = "H265"
+                            elif has_h264:
+                                detected_codec = "H264"
                                 
-                                detected_codec = None
-                                if has_h265:
-                                    detected_codec = "H265"
-                                elif has_h264:
-                                    detected_codec = "H264"
-                                    
-                                if detected_codec and stream.codec != detected_codec:
-                                    print(f"[scheduler] Dynamically detected {detected_codec} codec for stream {stream.stream_id} (tracks: {tracks}, was: {stream.codec})")
-                                    stream.codec = detected_codec
-                                    await session.commit()
-                            
-                            # Transition to ONLINE
-                            if stream.status != StreamState.ONLINE:
-                                await stream_manager.set_stream_state(session, stream, StreamState.ONLINE)
-                            
-                            # Reset pull failure tracking
-                            if stream.pull_failed_since is not None:
-                                stream.pull_failed_since = None
+                            if detected_codec and stream.codec != detected_codec:
+                                print(f"[scheduler] Dynamically detected {detected_codec} codec for stream {stream.stream_id} (tracks: {tracks}, was: {stream.codec})")
+                                stream.codec = detected_codec
                                 await session.commit()
-                        else:
-                            # Stream is configured but not active/streaming
-                            
-                            # Run watchdog recovery loops for AUTO mode
-                            if stream.stream_mode == "AUTO":
-                                # Push heartbeat watchdog moved to camera_watchdog.edge_push_watchdog_loop()
-                                # which handles EDGE_PUSH → RTSP_PULL reversion with proper PATCH-only
-                                # MediaMTX updates and the new centralized EDGE_PUSH_HEARTBEAT_TIMEOUT.
-                                pass
+                        
+                        # Transition to ONLINE
+                        if stream.status != StreamState.ONLINE:
+                            await stream_manager.set_stream_state(session, stream, StreamState.ONLINE)
+                        
+                        # Reset pull failure tracking
+                        if stream.pull_failed_since is not None:
+                            stream.pull_failed_since = None
+                            await session.commit()
+                    else:
+                        # Stream is configured but not active/streaming
+                        
+                        # Run watchdog recovery loops for AUTO mode
+                        if stream.stream_mode == "AUTO":
+                            # Push heartbeat watchdog moved to camera_watchdog.edge_push_watchdog_loop()
+                            # which handles EDGE_PUSH → RTSP_PULL reversion with proper PATCH-only
+                            # MediaMTX updates and the new centralized EDGE_PUSH_HEARTBEAT_TIMEOUT.
+                            pass
 
-                            # If they are in CONNECTING or ONLINE but show inactive, they might be offline or connecting
-                            if stream.status == StreamState.ONLINE:
-                                # For active EDGE_PUSH streams, keep ONLINE if the TCP socket is still connected
-                                from .edge_receiver import active_connections
-                                if stream.stream_id in active_connections:
-                                    continue
-                                await stream_manager.set_stream_state(session, stream, StreamState.CONNECTING, "Source disconnected")
-                            elif stream.status == StreamState.CONNECTING:
-                                # Only restart if it has been stuck in CONNECTING for a while (e.g. 60 seconds)
-                                # AND (it is always-on OR it has active readers).
-                                now = datetime.utcnow()
-                                updated_at_naive = stream.updated_at.replace(tzinfo=None) if stream.updated_at else now
-                                elapsed = (now - updated_at_naive).total_seconds()
-                                
-                                if elapsed >= 60:
-                                    # Determine if it's on-demand
-                                    is_on_demand = True
-                                    if stream.always_on:
-                                        is_on_demand = False
-                                    elif stream.last_viewed:
-                                        last_viewed_naive = stream.last_viewed.replace(tzinfo=None)
-                                        if (now - last_viewed_naive).total_seconds() < 900:
-                                            is_on_demand = False
-                                    
-                                    # Get readers count if stream_info exists
-                                    readers_count = 0
-                                    if stream_info:
-                                        readers = stream_info.get("readers", [])
-                                        # Filter out internal HLS muxer
-                                        active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
-                                        readers_count = len(active_readers)
-                                    
-                                    # We only restart if someone is actively trying to watch it and it is stuck
-                                    if readers_count > 0:
-                                        print(f"[scheduler] Stream {stream.stream_id} is stuck connecting (elapsed: {elapsed:.1f}s, readers: {readers_count}). Triggering path restart.")
-                                        await stream_manager.restart_stream(session, stream)
-
-                    # Remove decommissioned paths from MediaMTX config
-                    for path_name in mediamtx_paths:
-                        if path_name != "all_others" and path_name not in active_stream_ids:
-                            # Skip transcoder helper paths
-                            if path_name.endswith("_h264"):
+                        # If they are in CONNECTING or ONLINE but show inactive, they might be offline or connecting
+                        if stream.status == StreamState.ONLINE:
+                            # For active EDGE_PUSH streams, keep ONLINE if the TCP socket is still connected
+                            from .edge_receiver import active_connections
+                            if stream.stream_id in active_connections:
                                 continue
-                            print(f"[scheduler] Decommissioning inactive path: {path_name}")
-                            try:
-                                await client.delete(f"{settings.mediamtx_api_url}/v3/config/paths/delete/{path_name}")
-                            except Exception as ex:
-                                print(f"[scheduler] Failed to delete path config {path_name}: {ex}")
+                            await stream_manager.set_stream_state(session, stream, StreamState.CONNECTING, "Source disconnected")
+                        elif stream.status == StreamState.CONNECTING:
+                            # Only restart if it has been stuck in CONNECTING for a while (e.g. 60 seconds)
+                            # AND (it is always-on OR it has active readers).
+                            now = datetime.utcnow()
+                            updated_at_naive = stream.updated_at.replace(tzinfo=None) if stream.updated_at else now
+                            elapsed = (now - updated_at_naive).total_seconds()
+                            
+                            if elapsed >= 60:
+                                # Determine if it's on-demand
+                                is_on_demand = True
+                                if stream.always_on:
+                                    is_on_demand = False
+                                elif stream.last_viewed:
+                                    last_viewed_naive = stream.last_viewed.replace(tzinfo=None)
+                                    if (now - last_viewed_naive).total_seconds() < 900:
+                                        is_on_demand = False
+                                
+                                # Get readers count if stream_info exists
+                                readers_count = 0
+                                if stream_info:
+                                    readers = stream_info.get("readers", [])
+                                    # Filter out internal HLS muxer
+                                    active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
+                                    readers_count = len(active_readers)
+                                
+                                # We only restart if someone is actively trying to watch it and it is stuck
+                                if readers_count > 0:
+                                    print(f"[scheduler] Stream {stream.stream_id} is stuck connecting (elapsed: {elapsed:.1f}s, readers: {readers_count}). Triggering path restart.")
+                                    await stream_manager.restart_stream(session, stream)
 
-            except Exception as e:
-                print(f"[scheduler] Error in camera watchdog loop: {e}")
+                # Remove decommissioned paths from MediaMTX config
+                for path_name in mediamtx_paths:
+                    if path_name != "all_others" and path_name not in active_stream_ids:
+                        # Skip transcoder helper paths
+                        if path_name.endswith("_h264"):
+                            continue
+                        print(f"[scheduler] Decommissioning inactive path: {path_name}")
+                        try:
+                            await _mtx_request("DELETE", f"{settings.mediamtx_api_url}/v3/config/paths/delete/{path_name}")
+                        except Exception as ex:
+                            print(f"[scheduler] Failed to delete path config {path_name}: {ex}")
 
-            await asyncio.sleep(settings.scheduler_interval_seconds)
+        except Exception as e:
+            print(f"[scheduler] Error in camera watchdog loop: {e}")
+
+        await asyncio.sleep(settings.scheduler_interval_seconds)
 
 
 async def camera_gap_recovery_loop():

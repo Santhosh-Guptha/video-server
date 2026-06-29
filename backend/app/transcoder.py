@@ -107,26 +107,26 @@ class TranscoderManager:
             # Wait up to 5 seconds for the transcoded stream to become ready in MediaMTX
             # This prevents race conditions where the browser requests the stream before FFmpeg starts publishing
             ready = False
-            async with httpx.AsyncClient() as client:
-                for _ in range(25): # 25 * 0.2s = 5s
-                    try:
-                        resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=1.0)
-                        if resp.status_code == 200:
-                            items = resp.json().get("items", {})
-                            path_info = None
-                            if isinstance(items, dict):
-                                path_info = items.get(h264_path)
-                            elif isinstance(items, list):
-                                for item in items:
-                                    if isinstance(item, dict) and item.get("name") == h264_path:
-                                        path_info = item
-                                        break
-                            if path_info and path_info.get("ready") is True:
-                                ready = True
-                                break
-                    except Exception as e:
-                        print(f"[transcoder] Error checking readiness for {h264_path}: {e}")
-                    await asyncio.sleep(0.2)
+            from .stream_manager import _mtx_request
+            for _ in range(25): # 25 * 0.2s = 5s
+                try:
+                    resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=1.0)
+                    if resp.status_code == 200:
+                        items = resp.json().get("items", {})
+                        path_info = None
+                        if isinstance(items, dict):
+                            path_info = items.get(h264_path)
+                        elif isinstance(items, list):
+                            for item in items:
+                                if isinstance(item, dict) and item.get("name") == h264_path:
+                                    path_info = item
+                                    break
+                        if path_info and path_info.get("ready") is True:
+                            ready = True
+                            break
+                except Exception as e:
+                    print(f"[transcoder] Error checking readiness for {h264_path}: {e}")
+                await asyncio.sleep(0.2)
             
             if ready:
                 print(f"[transcoder] Transcoded stream {h264_path} is ready and publishing.")
@@ -178,24 +178,23 @@ class TranscoderManager:
             h264_path = f"{stream_id}_h264"
             has_readers = False
             try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
-                    if resp.status_code == 200:
-                        paths_data = resp.json().get("items", {})
-                        path_info = None
-                        if isinstance(paths_data, dict):
-                            path_info = paths_data.get(h264_path)
-                        elif isinstance(paths_data, list):
-                            for item in paths_data:
-                                if isinstance(item, dict) and item.get("name") == h264_path:
-                                    path_info = item
-                                    break
-                        if path_info:
-                            readers = path_info.get("readers") or []
-                            # Filter out internal HLS muxer which is always present
-                            active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"]
-                            if len(active_readers) > 0:
-                                has_readers = True
+                resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
+                if resp.status_code == 200:
+                    paths_data = resp.json().get("items", {})
+                    path_info = None
+                    if isinstance(paths_data, dict):
+                        path_info = paths_data.get(h264_path)
+                    elif isinstance(paths_data, list):
+                        for item in paths_data:
+                            if isinstance(item, dict) and item.get("name") == h264_path:
+                                path_info = item
+                                break
+                    if path_info:
+                        readers = path_info.get("readers") or []
+                        # Filter out internal HLS muxer which is always present
+                        active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"]
+                        if len(active_readers) > 0:
+                            has_readers = True
             except Exception as e:
                 print(f"[transcoder] Error checking readers for {h264_path} during shutdown: {e}")
 
@@ -226,16 +225,15 @@ class TranscoderManager:
         # Fetch active MediaMTX paths to check readers
         mediamtx_paths = {}
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
-                if resp.status_code == 200:
-                    items = resp.json().get("items", {})
-                    if isinstance(items, dict):
-                        mediamtx_paths = items
-                    elif isinstance(items, list):
-                        for item in items:
-                            if isinstance(item, dict) and "name" in item:
-                                mediamtx_paths[item["name"]] = item
+            resp = await _mtx_request("GET", f"{settings.mediamtx_api_url}/v3/paths/list?page=0&itemsPerPage=10000", timeout=5.0)
+            if resp.status_code == 200:
+                items = resp.json().get("items", {})
+                if isinstance(items, dict):
+                    mediamtx_paths = items
+                elif isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict) and "name" in item:
+                            mediamtx_paths[item["name"]] = item
         except Exception as e:
             print(f"[transcoder] Watchdog error fetching MediaMTX paths: {e}")
 
@@ -393,26 +391,21 @@ class TranscoderManager:
             "sourceOnDemand": False,
             "record": False,  # Do NOT record the transcoded stream
         }
-        async with httpx.AsyncClient() as client:
-            try:
-                url = f"{settings.mediamtx_api_url}/v3/config/paths/add/{h264_path}"
-                resp = await client.post(url, json=payload, timeout=5.0)
-                if resp.status_code == 400 or "already exists" in resp.text:
-                    patch_url = f"{settings.mediamtx_api_url}/v3/config/paths/patch/{h264_path}"
-                    await client.patch(patch_url, json=payload, timeout=5.0)
-            except Exception as e:
-                print(f"[transcoder] Error registering MediaMTX path {h264_path}: {e}")
+        try:
+            resp = await _mtx_request("POST", f"{settings.mediamtx_api_url}/v3/config/paths/add/{h264_path}", json=payload, timeout=5.0)
+            if resp.status_code == 400 or "already exists" in resp.text:
+                await _mtx_request("PATCH", f"{settings.mediamtx_api_url}/v3/config/paths/patch/{h264_path}", json=payload, timeout=5.0)
+        except Exception as e:
+            print(f"[transcoder] Error registering MediaMTX path {h264_path}: {e}")
 
     @classmethod
     async def _delete_h264_path(cls, stream_id: str) -> None:
         """Removes the temporary h264 publisher path from MediaMTX."""
         h264_path = f"{stream_id}_h264"
-        async with httpx.AsyncClient() as client:
-            try:
-                url = f"{settings.mediamtx_api_url}/v3/config/paths/delete/{h264_path}"
-                await client.delete(url, timeout=5.0)
-            except Exception as e:
-                print(f"[transcoder] Error deleting MediaMTX path {h264_path}: {e}")
+        try:
+            await _mtx_request("DELETE", f"{settings.mediamtx_api_url}/v3/config/paths/delete/{h264_path}", timeout=5.0)
+        except Exception as e:
+            print(f"[transcoder] Error deleting MediaMTX path {h264_path}: {e}")
 
     @classmethod
     async def _upsert_db_record(

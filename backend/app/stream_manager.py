@@ -9,6 +9,45 @@ from .config import settings
 from .models import CameraStream, ProfileType, StreamState, StreamRegistry
 from .redis_client import RedisManager
 
+# ---------- Shared MediaMTX HTTP client & throttle ----------
+_MTX_MAX_CONCURRENT = 10           # max simultaneous MediaMTX API requests
+_MTX_RETRY_ATTEMPTS = 3            # retry count for transient errors
+_MTX_RETRY_BACKOFF  = 0.5          # seconds between retries (doubles each attempt)
+_mtx_semaphore = asyncio.Semaphore(_MTX_MAX_CONCURRENT)
+_mtx_client: httpx.AsyncClient | None = None
+
+async def get_mtx_client() -> httpx.AsyncClient:
+    """Lazily create and return a shared httpx.AsyncClient with connection pooling."""
+    global _mtx_client
+    if _mtx_client is None or _mtx_client.is_closed:
+        _mtx_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
+    return _mtx_client
+
+async def _mtx_request(method: str, url: str, **kwargs):
+    """Throttled, retrying HTTP request to MediaMTX API."""
+    client = await get_mtx_client()
+    last_exc = None
+    for attempt in range(_MTX_RETRY_ATTEMPTS):
+        async with _mtx_semaphore:
+            try:
+                if method == "GET":
+                    return await client.get(url, **kwargs)
+                elif method == "POST":
+                    return await client.post(url, **kwargs)
+                elif method == "PATCH":
+                    return await client.patch(url, **kwargs)
+                elif method == "DELETE":
+                    return await client.delete(url, **kwargs)
+            except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.PoolTimeout) as e:
+                last_exc = e
+                await asyncio.sleep(_MTX_RETRY_BACKOFF * (2 ** attempt))
+            except Exception as e:
+                raise e
+    raise last_exc  # type: ignore[misc]
+
 def should_record(stream: CameraStream) -> bool:
     """
     Returns True if this stream should be recorded per the active vms_policy.
@@ -43,6 +82,19 @@ def double_escape_rtsp_url(url: str) -> str:
 class StreamManager:
     def __init__(self, api_url: str = settings.mediamtx_api_url):
         self.api_url = api_url
+
+    # ---- helpers using shared client ----
+    async def _get(self, path: str, **kw):
+        return await _mtx_request("GET", f"{self.api_url}{path}", **kw)
+
+    async def _post(self, path: str, **kw):
+        return await _mtx_request("POST", f"{self.api_url}{path}", **kw)
+
+    async def _patch(self, path: str, **kw):
+        return await _mtx_request("PATCH", f"{self.api_url}{path}", **kw)
+
+    async def _delete(self, path: str, **kw):
+        return await _mtx_request("DELETE", f"{self.api_url}{path}", **kw)
 
     async def add_stream(self, session: AsyncSession, stream: CameraStream) -> None:
         """
@@ -144,60 +196,55 @@ class StreamManager:
                 "runOnUnDemand": ""
             }
 
-            async with httpx.AsyncClient() as client:
-                url = f"{self.api_url}/v3/config/paths/add/{path_name}"
-                try:
-                    response = await client.post(url, json=payload)
-                    if response.status_code in (200, 201):
-                        print(f"[stream_manager] Registered path {path_name} in MediaMTX. On-demand: {source_on_demand}")
-                        await self.set_stream_state(session, stream, StreamState.CONNECTING)
-                    else:
-                        if "already exists" in response.text or response.status_code == 400:
-                            # GET existing config to compare
-                            get_url = f"{self.api_url}/v3/config/paths/get/{path_name}"
-                            get_resp = await client.get(get_url)
-                            if get_resp.status_code == 200:
-                                existing = get_resp.json()
-                                def normalize_url(u):
-                                    if not u: return ""
-                                    return u.replace("%25", "%").replace("&amp;", "&")
-                                
-                                existing_src = normalize_url(existing.get("source", ""))
-                                desired_src = normalize_url(payload.get("source", ""))
-                                
-                                # Compare existing config vs desired (record uses should_record policy)
-                                if (existing_src == desired_src and
-                                    existing.get("sourceProtocol") == payload.get("sourceProtocol") and
-                                    existing.get("sourceOnDemand") == payload.get("sourceOnDemand") and
-                                    existing.get("record") == record_flag and
-                                    existing.get("runOnDemand", "") == payload.get("runOnDemand", "") and
-                                    existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
-                                    
-                                    print(f"[stream_manager] Path {path_name} already exists with identical config. Skipping registration.")
-                                    await self.set_stream_state(session, stream, StreamState.CONNECTING)
-                                    return
-                                else:
-                                    print(f"[stream_manager] Path {path_name} exists but config differs. Patching...")
-                                    patch_url = f"{self.api_url}/v3/config/paths/patch/{path_name}"
-                                    patch_resp = await client.patch(patch_url, json=payload)
-                                    if patch_resp.status_code in (200, 201):
-                                        print(f"[stream_manager] Patched path {path_name} config successfully.")
-                                        await self.set_stream_state(session, stream, StreamState.CONNECTING)
-                                        return
+            try:
+                response = await self._post(f"/v3/config/paths/add/{path_name}", json=payload)
+                if response.status_code in (200, 201):
+                    print(f"[stream_manager] Registered path {path_name} in MediaMTX. On-demand: {source_on_demand}")
+                    await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                else:
+                    if "already exists" in response.text or response.status_code == 400:
+                        # GET existing config to compare
+                        get_resp = await self._get(f"/v3/config/paths/get/{path_name}")
+                        if get_resp.status_code == 200:
+                            existing = get_resp.json()
+                            def normalize_url(u):
+                                if not u: return ""
+                                return u.replace("%25", "%").replace("&amp;", "&")
                             
-                            # Fallback if GET or PATCH failed
-                            delete_url = f"{self.api_url}/v3/config/paths/delete/{path_name}"
-                            await client.delete(delete_url)
-                            response = await client.post(url, json=payload)
-                            if response.status_code in (200, 201):
-                                print(f"[stream_manager] Re-registered path {path_name} in MediaMTX after deletion fallback. On-demand: {source_on_demand}")
+                            existing_src = normalize_url(existing.get("source", ""))
+                            desired_src = normalize_url(payload.get("source", ""))
+                            
+                            # Compare existing config vs desired (record uses should_record policy)
+                            if (existing_src == desired_src and
+                                existing.get("sourceProtocol") == payload.get("sourceProtocol") and
+                                existing.get("sourceOnDemand") == payload.get("sourceOnDemand") and
+                                existing.get("record") == record_flag and
+                                existing.get("runOnDemand", "") == payload.get("runOnDemand", "") and
+                                existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
+                                
+                                print(f"[stream_manager] Path {path_name} already exists with identical config. Skipping registration.")
                                 await self.set_stream_state(session, stream, StreamState.CONNECTING)
                                 return
-                        print(f"[stream_manager] Failed to register path {path_name}: {response.text}")
-                        await self.set_stream_state(session, stream, StreamState.FAILED, response.text)
-                except Exception as e:
-                    print(f"[stream_manager] Connection error registering path {path_name}: {e}")
-                    await self.set_stream_state(session, stream, StreamState.FAILED, str(e))
+                            else:
+                                print(f"[stream_manager] Path {path_name} exists but config differs. Patching...")
+                                patch_resp = await self._patch(f"/v3/config/paths/patch/{path_name}", json=payload)
+                                if patch_resp.status_code in (200, 201):
+                                    print(f"[stream_manager] Patched path {path_name} config successfully.")
+                                    await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                                    return
+                        
+                        # Fallback if GET or PATCH failed
+                        await self._delete(f"/v3/config/paths/delete/{path_name}")
+                        response = await self._post(f"/v3/config/paths/add/{path_name}", json=payload)
+                        if response.status_code in (200, 201):
+                            print(f"[stream_manager] Re-registered path {path_name} in MediaMTX after deletion fallback. On-demand: {source_on_demand}")
+                            await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                            return
+                    print(f"[stream_manager] Failed to register path {path_name}: {response.text}")
+                    await self.set_stream_state(session, stream, StreamState.FAILED, response.text)
+            except Exception as e:
+                print(f"[stream_manager] Connection error registering path {path_name}: {e}")
+                await self.set_stream_state(session, stream, StreamState.FAILED, str(e))
         finally:
             await RedisManager.release_lock(lock_name)
 
@@ -237,16 +284,14 @@ class StreamManager:
             await session.commit()
 
             # 2. MediaMTX delete
-            async with httpx.AsyncClient() as client:
-                url = f"{self.api_url}/v3/config/paths/delete/{path_name}"
-                try:
-                    response = await client.delete(url)
-                    if response.status_code in (200, 204):
-                        print(f"[stream_manager] Deleted path {path_name} from MediaMTX.")
-                    else:
-                        print(f"[stream_manager] Failed to delete path {path_name}: {response.text}")
-                except Exception as e:
-                    print(f"[stream_manager] Error deleting path {path_name}: {e}")
+            try:
+                response = await self._delete(f"/v3/config/paths/delete/{path_name}")
+                if response.status_code in (200, 204):
+                    print(f"[stream_manager] Deleted path {path_name} from MediaMTX.")
+                else:
+                    print(f"[stream_manager] Failed to delete path {path_name}: {response.text}")
+            except Exception as e:
+                print(f"[stream_manager] Error deleting path {path_name}: {e}")
 
             # 3. Stop any running transcoder for H.265 streams
             if stream.codec and stream.codec.upper() == "H265":
