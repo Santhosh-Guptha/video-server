@@ -65,6 +65,50 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   const [cameraUser, setCameraUser] = useState('admin')
   const [cameraPassword, setCameraPassword] = useState('')
 
+  // Target Hardware configuration states
+  const [hwResolution, setHwResolution] = useState('')
+  const [hwFps, setHwFps] = useState('')
+  const [hwBitrate, setHwBitrate] = useState('')
+
+  // Extractor utility for RTSP credentials
+  const extractCredentialsFromRtsp = (rtspUrl: string) => {
+    if (!rtspUrl) return { ip: '', username: 'admin', password: '' }
+    try {
+      let cleanUrl = rtspUrl
+      if (cleanUrl.toLowerCase().startsWith('rtsp://')) {
+        cleanUrl = cleanUrl.substring(7)
+      }
+      let username = 'admin'
+      let password = ''
+      let ip = ''
+      
+      if (cleanUrl.includes('@')) {
+        const parts = cleanUrl.split('@')
+        const creds = parts[0]
+        const hostPart = parts[1]
+        
+        if (creds.includes(':')) {
+          const credParts = creds.split(':')
+          username = credParts[0]
+          password = decodeURIComponent(credParts[1])
+        } else {
+          username = creds
+        }
+        
+        const hostOnly = hostPart.split('/')[0]
+        ip = hostOnly.split(':')[0]
+      } else {
+        const hostOnly = cleanUrl.split('/')[0]
+        ip = hostOnly.split(':')[0]
+      }
+      
+      return { ip, username, password }
+    } catch (e) {
+      console.error('Failed to parse RTSP URL:', e)
+      return { ip: '', username: 'admin', password: '' }
+    }
+  }
+
   // Reset form helper
   const resetForm = () => {
     setName('')
@@ -82,6 +126,9 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     setCameraIp('')
     setCameraUser('admin')
     setCameraPassword('')
+    setHwResolution('')
+    setHwFps('')
+    setHwBitrate('')
   }
 
   const handleAddClick = () => {
@@ -97,9 +144,6 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     setSuccess(null)
     setEditingCamera(cam)
     setShowAddForm(false)
-    setCameraIp('')
-    setCameraUser('admin')
-    setCameraPassword('')
     
     // Fill form
     setName(cam.name)
@@ -117,6 +161,27 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       setBitrate(stream.bitrate ? stream.bitrate.toString() : '')
       setStreamUrl(stream.stream_url)
       setAlwaysOn(!!stream.always_on)
+
+      // Prefill hardware configuration fields using database values & parsed RTSP creds
+      setHwResolution(stream.resolution)
+      setHwFps(stream.fps ? stream.fps.toString() : '')
+      setHwBitrate(stream.bitrate ? stream.bitrate.toString() : '')
+
+      const extracted = extractCredentialsFromRtsp(stream.stream_url)
+      if (extracted.ip) {
+        setCameraIp(`https://${extracted.ip}`)
+      } else {
+        setCameraIp('')
+      }
+      setCameraUser(extracted.username || 'admin')
+      setCameraPassword(extracted.password || '')
+    } else {
+      setCameraIp('')
+      setCameraUser('admin')
+      setCameraPassword('')
+      setHwResolution('')
+      setHwFps('')
+      setHwBitrate('')
     }
   }
 
@@ -146,8 +211,8 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
 
     let width: number | null = null
     let height: number | null = null
-    if (resolution && resolution.includes('x')) {
-      const parts = resolution.split('x')
+    if (hwResolution && hwResolution.includes('x')) {
+      const parts = hwResolution.split('x')
       width = Number(parts[0])
       height = Number(parts[1])
     }
@@ -163,8 +228,8 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stream_id: streamToConfigure,
-          fps: Number(fps),
-          bitrate: bitrate ? Number(bitrate) : null,
+          fps: hwFps ? Number(hwFps) : null,
+          bitrate: hwBitrate ? Number(hwBitrate) : null,
           width: width,
           height: height,
           ip: cameraIp || null,
@@ -369,12 +434,12 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
             </div>
 
             {editingCamera && (
-              <div style={{ padding: '20px', background: 'rgba(59, 130, 246, 0.04)', border: '1px solid rgba(59, 130, 246, 0.16)', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ padding: '20px', background: 'rgba(59, 130, 246, 0.04)', border: '1px solid rgba(59, 130, 246, 0.16)', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <h4 style={{ margin: 0, color: '#60a5fa', fontSize: '0.88rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Sliders size={16} /> Remote Device ONVIF Configuration
                 </h4>
                 <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.76rem' }}>
-                  Apply changes (FPS, Bitrate, Resolution) directly to the physical camera hardware. Leaving fields blank uses database auto-parsed credentials.
+                  Apply parameter changes directly to the physical camera hardware. Leaving a field empty will keep its current value on the camera.
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
                   <div>
@@ -390,6 +455,22 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                     <input type="password" value={cameraPassword} onChange={e => setCameraPassword(e.target.value)} placeholder="password" style={formInputStyle} />
                   </div>
                 </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '14px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Hardware Resolution (Optional)</label>
+                    <input value={hwResolution} onChange={e => setHwResolution(e.target.value)} placeholder="e.g. 1920x1080 (leave blank to skip)" style={formInputStyle} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Hardware FPS (Optional)</label>
+                    <input type="number" value={hwFps} onChange={e => setHwFps(e.target.value)} placeholder="e.g. 25 (leave blank to skip)" style={formInputStyle} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Hardware Bitrate kbps (Optional)</label>
+                    <input type="number" value={hwBitrate} onChange={e => setHwBitrate(e.target.value)} placeholder="e.g. 2048 (leave blank to skip)" style={formInputStyle} />
+                  </div>
+                </div>
+
                 <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                   <button 
                     type="button" 
