@@ -60,6 +60,11 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   const [alwaysOn, setAlwaysOn] = useState(false)
   const [active, setActive] = useState(true)
 
+  // Hardware configuration states
+  const [cameraIp, setCameraIp] = useState('')
+  const [cameraUser, setCameraUser] = useState('admin')
+  const [cameraPassword, setCameraPassword] = useState('')
+
   // Reset form helper
   const resetForm = () => {
     setName('')
@@ -74,6 +79,9 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     setStreamUrl('')
     setAlwaysOn(false)
     setActive(true)
+    setCameraIp('')
+    setCameraUser('admin')
+    setCameraPassword('')
   }
 
   const handleAddClick = () => {
@@ -89,6 +97,9 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     setSuccess(null)
     setEditingCamera(cam)
     setShowAddForm(false)
+    setCameraIp('')
+    setCameraUser('admin')
+    setCameraPassword('')
     
     // Fill form
     setName(cam.name)
@@ -123,6 +134,54 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       onRefresh()
     } catch (err: any) {
       setError(err.message || 'Failed to delete camera')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleApplyHardwareConfig = async () => {
+    setLoading(true)
+    setError(null)
+    setSuccess(null)
+
+    let width: number | null = null
+    let height: number | null = null
+    if (resolution && resolution.includes('x')) {
+      const parts = resolution.split('x')
+      width = Number(parts[0])
+      height = Number(parts[1])
+    }
+
+    try {
+      const streamToConfigure = editingCamera?.streams[0]?.stream_id || streamId
+      if (!streamToConfigure) {
+        throw new Error('No stream selected to configure')
+      }
+
+      const res = await fetch('/api/cameras/configure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stream_id: streamToConfigure,
+          fps: Number(fps),
+          bitrate: bitrate ? Number(bitrate) : null,
+          width: width,
+          height: height,
+          ip: cameraIp || null,
+          username: cameraUser || null,
+          password: cameraPassword || null
+        })
+      })
+
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.detail || 'Failed to apply configuration to camera hardware')
+      }
+
+      setSuccess('Successfully applied parameters to the physical camera and updated VMS database!')
+      onRefresh()
+    } catch (err: any) {
+      setError(err.message || 'Error applying hardware configuration')
     } finally {
       setLoading(false)
     }
@@ -308,6 +367,48 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                 Camera Enabled (Active Ingress)
               </label>
             </div>
+
+            {editingCamera && (
+              <div style={{ padding: '20px', background: 'rgba(59, 130, 246, 0.04)', border: '1px solid rgba(59, 130, 246, 0.16)', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <h4 style={{ margin: 0, color: '#60a5fa', fontSize: '0.88rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Sliders size={16} /> Remote Device ONVIF Configuration
+                </h4>
+                <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.76rem' }}>
+                  Apply changes (FPS, Bitrate, Resolution) directly to the physical camera hardware. Leaving fields blank uses database auto-parsed credentials.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Camera IP / HTTPS Base URL</label>
+                    <input value={cameraIp} onChange={e => setCameraIp(e.target.value)} placeholder="e.g. https://172.20.100.245" style={formInputStyle} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>ONVIF Username</label>
+                    <input value={cameraUser} onChange={e => setCameraUser(e.target.value)} placeholder="admin" style={formInputStyle} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>ONVIF Password</label>
+                    <input type="password" value={cameraPassword} onChange={e => setCameraPassword(e.target.value)} placeholder="password" style={formInputStyle} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                  <button 
+                    type="button" 
+                    onClick={handleApplyHardwareConfig}
+                    disabled={loading}
+                    className="batchBtn"
+                    style={{
+                      background: 'rgba(59, 130, 246, 0.12)',
+                      color: '#60a5fa',
+                      borderColor: 'rgba(59, 130, 246, 0.25)',
+                      fontSize: '0.78rem',
+                      padding: '8px 14px'
+                    }}
+                  >
+                    {loading ? 'Applying to Camera...' : 'Apply & Save Config to Physical Camera'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '10px' }}>
               <button 
