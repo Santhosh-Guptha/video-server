@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import type { Camera } from '../types'
 import { Player } from '../components/Player'
-import { ServerCrash, Users, Play, Square, Maximize2, Minimize2, X } from 'lucide-react'
+import { ServerCrash, Users, Play, Square, Maximize2, Minimize2, X, RotateCw } from 'lucide-react'
 import { startLive, stopLive } from '../lib/api'
 import { usePolicy, resolveLiveStreamId } from '../lib/usePolicy'
 
@@ -35,7 +35,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   // Fetch all active cameras configured in the platform
   const fetchActiveList = async () => {
     try {
-      const res = await fetch('/api/cameras')
+      const res = await fetch('/api/cameras/active')
       if (res.ok) {
         const allCams = await res.json() as Camera[]
         // Filter standard cameras that are active
@@ -294,6 +294,24 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           </span>
         </div>
         <div className="liveWallActions" style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+          {/* Refresh Button */}
+          <button 
+            type="button"
+            className="batchBtn" 
+            onClick={fetchActiveList}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              cursor: 'pointer'
+            }}
+            title="Refresh active camera list"
+          >
+            <RotateCw size={11} /> Refresh
+          </button>
+
           {/* Grid Layout Selector */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>Grid size:</span>

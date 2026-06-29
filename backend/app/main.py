@@ -1183,15 +1183,6 @@ async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_sessi
     except Exception as e:
         print(f"[main] Failed to fetch active paths from MediaMTX: {e}")
 
-    # 2. Scan recordings directory for existing active directories
-    try:
-        rec_dir = Path(settings.recording_dir)
-        if rec_dir.exists():
-            for subdir in rec_dir.iterdir():
-                if subdir.is_dir():
-                    active_stream_ids.add(subdir.name)
-    except Exception as e:
-        print(f"[main] Failed to scan recordings directory: {e}")
 
     # 3. Query matching Cameras from the DB
     conditions = [CameraStream.status == StreamState.ONLINE]
