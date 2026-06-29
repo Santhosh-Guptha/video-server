@@ -1231,6 +1231,34 @@ async def download_recording(
 async def health():
     return {"status": "ok"}
 
+import ipaddress
+from urllib.parse import urlparse
+
+def is_private_rtsp_url(url: str) -> bool:
+    """Returns True if the RTSP URL hostname is a private IP (RFC 1918) or local address."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            rest = url.split("://", 1)[-1]
+            hostname = rest.split("@", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+        
+        if not hostname:
+            return False
+            
+        try:
+            ip = ipaddress.ip_address(hostname)
+            return ip.is_private
+        except ValueError:
+            h_lower = hostname.lower()
+            if h_lower in ("localhost", "127.0.0.1", "::1"):
+                return True
+            if "." not in hostname:
+                return True
+            return False
+    except Exception:
+        return False
+
 _sync_lock = asyncio.Lock()
 
 @app.post("/api/cameras/sync", response_model=SyncResponse)
@@ -1242,7 +1270,30 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
         for raw in raw_cameras:
             source_id = int(raw.get("cameraId") or raw.get("id"))
             name = str(raw.get("name") or f"Camera {source_id}")
+
+            # 2. Pre-construct CameraStream info to detect private/unreachable IP
+            stream_id = str(raw.get("streamId") or f"{raw.get('serverCameraId','camera')}_{raw.get('streamType','NORMAL')}")
+            stream_url = str(raw.get("rtspUrl") or "").strip()
+            if not stream_url.startswith(("rtsp://", "rtsps://", "rtmp://")):
+                stream_url = f"rtsp://{stream_url}"
+
+            # Inject username/password if present
+            username = raw.get("username")
+            password = raw.get("password")
+            if username and password:
+                try:
+                    protocol, rest = stream_url.split("://", 1)
+                    encoded_username = quote(str(username), safe="")
+                    encoded_password = quote(str(password), safe="")
+                    stream_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
+                except Exception:
+                    pass
+
+            # Detect private IP
             active = bool(raw.get("active", True))
+            if active and is_private_rtsp_url(stream_url):
+                print(f"[sync] Camera {source_id} ({name}) has private/unreachable IP: {stream_url}. Forcing active=False to prevent socket congestion.")
+                active = False
 
             # 1. Sync Camera Parent Row
             make = raw.get("make")
@@ -1266,24 +1317,6 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
                 camera.make = make
                 camera.synced_from_api = True
                 await session.flush()
-
-            # 2. Sync CameraStream Child Row
-            stream_id = str(raw.get("streamId") or f"{raw.get('serverCameraId','camera')}_{raw.get('streamType','NORMAL')}")
-            stream_url = str(raw.get("rtspUrl") or "").strip()
-            if not stream_url.startswith(("rtsp://", "rtsps://", "rtmp://")):
-                stream_url = f"rtsp://{stream_url}"
-
-            # Inject username/password if present
-            username = raw.get("username")
-            password = raw.get("password")
-            if username and password:
-                try:
-                    protocol, rest = stream_url.split("://", 1)
-                    encoded_username = quote(str(username), safe="")
-                    encoded_password = quote(str(password), safe="")
-                    stream_url = f"{protocol}://{encoded_username}:{encoded_password}@{rest}"
-                except Exception:
-                    pass
 
             stream_res = await session.execute(
                 select(CameraStream).where(CameraStream.stream_id == stream_id)
