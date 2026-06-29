@@ -184,6 +184,32 @@ To simplify setting management, we consolidated the three configuration/policy f
      - `"retention_days": 30`
 
 3. **Periodic Indexer Pruning Verification**:
-   - Added a new configuration `INDEXER_INTERVAL_SECONDS` to control the frequency of the safety net indexer loop.
-   - Decreased the default loop interval from 12 hours (`43200` seconds) to 10 minutes (`600` seconds) to ensure deleted video files are quickly pruned from the database.
-   - Verified that when a segment is deleted on disk (or simulated with a non-existent file), the indexer correctly identifies it as an orphaned record and deletes it from the SQLite database.
+    - Added a new configuration `INDEXER_INTERVAL_SECONDS` to control the frequency of the safety net indexer loop.
+    - Decreased the default loop interval from 12 hours (`43200` seconds) to 10 minutes (`600` seconds) to ensure deleted video files are quickly pruned from the database.
+    - Verified that when a segment is deleted on disk (or simulated with a non-existent file), the indexer correctly identifies it as an orphaned record and deletes it from the SQLite database.
+
+---
+
+## 9. Remote Camera Configuration via ONVIF & Fallbacks
+
+### Objective
+Provide a unified configuration endpoint for upstream control portals (`iviscloud.net`) to remotely set IP camera parameters (FPS, Bitrate, Resolution) and automatically update internal VMS database settings.
+
+### Implementation
+1. **CameraConfigClient (`backend/app/onvif_client.py`)**:
+   - Implemented manual SOAP XML envelopes with WS-Security digest generation (handling Nonce and Created SHA-1 digests) to query capabilities and set configurations on ONVIF Profile S/T compliant cameras (e.g., Sparsh, TVT).
+   - Configured `httpx` async calls to bypass SSL certification validation (`verify=False`) to natively support cameras serving their management web interfaces over HTTPS with self-signed certificates.
+   - Built native authenticated HTTP Digest/Basic fallbacks for Hikvision ISAPI (`/ISAPI/Streaming/channels/101`) and Dahua configManager CGI (`/cgi-bin/configManager.cgi`) interfaces in case ONVIF is unavailable.
+2. **FastAPI Endpoint (`POST /api/cameras/configure`)**:
+   - Exposed a configuration endpoint. If connection credentials (IP, username, password) are omitted, the API automatically parses the host IP, username, and password from the camera's RTSP connection string using an rsplit-by-last-@ parser.
+   - Updates `resolution`, `fps`, and `bitrate` columns in the local SQL database upon successful camera configuration.
+   - Stops the running stream inside `stream_manager` so that MediaMTX auto-reconnects and ingests the updated properties immediately.
+
+### Verification
+1. **Automated Unit Tests (`backend/app/test_onvif.py`)**:
+   - Tested RTSP credential parsing (simple, missing port, and password with special characters like `@` or `:`).
+   - Tested WSSE digest header xml generation.
+   - Tested SOAP capabilities response parsing.
+   - **Result**: All tests passed successfully.
+2. **VMS Server Deployment**:
+   - Checked out the new development branch `feature/vms-next-features`, pulled the latest commits, and successfully restarted the `video-backend` service. Uvicorn is active and listening on port 8005.
