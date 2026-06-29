@@ -333,7 +333,7 @@ async def startup():
     from .health_monitor import health_monitor_loop
     from .camera_watchdog import camera_health_watchdog_loop, edge_push_watchdog_loop
 
-    asyncio.create_task(upstream_sync_loop())
+    # asyncio.create_task(upstream_sync_loop())
     asyncio.create_task(camera_scheduler_loop())
     asyncio.create_task(camera_gap_recovery_loop())
     asyncio.create_task(camera_archive_cleanup_loop())
