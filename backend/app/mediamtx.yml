@@ -1,23 +1,23 @@
 # MediaMTX configuration
 
 # Enable API for dynamic path management
-api: yes
+api: true
 apiAddress: :9997
 
 # Log level
 logLevel: warn
 
 # RTSP server settings (Ingress and Egress)
-rtsp: yes
+rtsp: true
 rtspAddress: :8554
 protocols: [udp, multicast, tcp]
 
 # RTMP server settings (Edge push ingress)
-rtmp: yes
+rtmp: true
 rtmpAddress: :1935
 
 # HLS server settings (Browser compatibility fallback)
-hls: yes
+hls: true
 hlsAddress: :8080
 hlsVariant: lowLatency
 hlsSegmentCount: 8
@@ -25,7 +25,7 @@ hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
 
 # WebRTC server settings (WHEP / WHIP live viewing)
-webrtc: yes
+webrtc: true
 webrtcAddress: :8889
 webrtcAdditionalHosts: [localhost]
 webrtcICEServers: [stun:stun.l.google.com:19302]
@@ -33,12 +33,13 @@ webrtcICEServers: [stun:stun.l.google.com:19302]
 # Recording settings
 # We enable recording on paths. Each dynamic stream will configure its record option.
 # By default, we write fragmented MP4 files matching the indexer folder structure.
-record: yes
-recordPath: /app/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live
-recordFormat: fmp4
-recordPartDuration: 1s
-recordSegmentDuration: 60s
-runOnRecordSegmentComplete: python -m app.record_complete "${MTX_PATH:-$RTSP_PATH}" "${MTX_SEGMENT_PATH:-$RECORD_PATH}"
+pathDefaults:
+  record: true
+  recordPath: /app/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordSegmentDuration: 60s
+  runOnRecordSegmentComplete: python -m app.record_complete "${MTX_PATH:-$RTSP_PATH}" "${MTX_SEGMENT_PATH:-$RECORD_PATH}"
 
 # Configuration for paths
 paths:
@@ -46,4 +47,4 @@ paths:
   # This allows edge clients to push streams dynamically without prior path registration if needed.
   all_others:
     source: publisher
-    record: yes
+    record: true
