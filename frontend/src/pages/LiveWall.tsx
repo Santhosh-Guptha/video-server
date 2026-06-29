@@ -136,17 +136,10 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
     }
   }, [])
 
-  // Filter to show ONLY live recording cameras (check sub-stream status via policy)
+  // Keep liveCameras static with all active cameras to prevent grid layout shifting and player remount loops
   const liveCameras = useMemo(() => {
-    return activeCameras.filter(cam => {
-      // Use policy to resolve which stream to check for status
-      const streamId = resolveLiveStreamId(cam, policy, 4) // wall = grid profile
-      const anyStream = cam.streams.find(s => s.stream_id === streamId) || cam.streams[0]
-      if (!anyStream) return false
-      const status = streamStatuses[anyStream.stream_id] || anyStream.status || 'OFFLINE'
-      return onlineStreamIds.has(anyStream.stream_id) || status === 'ONLINE'
-    })
-  }, [activeCameras, onlineStreamIds, streamStatuses, policy])
+    return activeCameras
+  }, [activeCameras])
 
   const totalPages = Math.ceil(liveCameras.length / gridSize)
 
