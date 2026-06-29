@@ -32,6 +32,7 @@ exec > >(tee -ia "$INSTALL_LOG") 2>&1
 ROLE="all"
 TRANSCODER_IP="127.0.0.1"
 SELF_TRANSCODING="false"
+UPSTREAM_URL="https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -39,6 +40,7 @@ usage() {
     echo "  --role <core|transcoder|all>   Deploy VMS Core, Standalone Transcoder, or both (all). Default: all"
     echo "  --transcoder-ip <IP>           IP address of Transcoder VM (required for 'core' role if remote). Default: 127.0.0.1"
     echo "  --self-transcoding             Enforce local self-transcoding (sets cloud_enabled=false, skips remote transcoder)"
+    echo "  --upstream-url <URL>           URL to fetch upstream camera list from. Default: https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver"
     echo "  --help                         Show this help message"
     exit 1
 }
@@ -48,6 +50,7 @@ while [[ "$#" -gt 0 ]]; do
         --role) ROLE="$2"; shift ;;
         --transcoder-ip) TRANSCODER_IP="$2"; shift ;;
         --self-transcoding) SELF_TRANSCODING="true" ;;
+        --upstream-url) UPSTREAM_URL="$2"; shift ;;
         --help) usage ;;
         *) log_error "Unknown parameter passed: $1"; usage ;;
     esac
@@ -204,7 +207,7 @@ DATABASE_URL=postgresql+asyncpg://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME
 REDIS_URL=redis://localhost:6379/0
 MEDIAMTX_API_URL=http://127.0.0.1:9997
 MEDIAMTX_WEBRTC_URL=http://127.0.0.1:8889
-UPSTREAM_CAMERA_API_URL=https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver
+UPSTREAM_CAMERA_API_URL=${UPSTREAM_URL}
 TURN_SERVER_URL=turn:${CORE_IP}:3478
 TURN_SERVER_USERNAME=admin
 TURN_SERVER_CREDENTIAL=admin123
