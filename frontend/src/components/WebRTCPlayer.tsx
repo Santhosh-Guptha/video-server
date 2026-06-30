@@ -169,8 +169,18 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       pc.oniceconnectionstatechange = () => {
         if (!isMountedRef.current) return;
         console.log(`[WebRTCPlayer:${streamId}] ICE state: ${pc.iceConnectionState}`);
-        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-          handleDisconnection('ICE Connection Disconnected');
+        if (pc.iceConnectionState === 'failed') {
+          handleDisconnection('ICE Connection Failed');
+        } else if (pc.iceConnectionState === 'disconnected') {
+          // Grace period for transient disconnects (browser will attempt auto-recovery)
+          const currentPc = pc;
+          setTimeout(() => {
+            if (!isMountedRef.current) return;
+            if (pcRef.current === currentPc && currentPc.iceConnectionState === 'disconnected') {
+              console.warn(`[WebRTCPlayer:${streamId}] ICE connection stayed disconnected for 5s. Forcing reconnect.`);
+              handleDisconnection('ICE Connection Disconnected');
+            }
+          }, 5000);
         }
       };
 
