@@ -457,27 +457,52 @@ async def camera_gap_recovery_loop():
                         await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
                         if proc.returncode == 0:
                             print(f"[recovery] [{stream_id}] Successfully recovered gap segment: {filename}")
-                            # Index the recovered segment immediately
                             try:
                                 async for insert_session in get_session():
-                                     parts = Path(output_path).parts
-                                     relative_path = "/".join(parts[-3:])
-                                     stmt_check = select(RecordingSegment).where(
-                                         RecordingSegment.stream_id == stream_id,
-                                         RecordingSegment.file_path == relative_path
-                                     )
-                                     res_check = await insert_session.execute(stmt_check)
-                                     existing_seg = res_check.scalar_one_or_none()
-                                     if not existing_seg:
-                                         new_seg = RecordingSegment(
-                                             stream_id=stream_id,
-                                             file_path=relative_path,
-                                             start_ts=temp_start,
-                                             end_ts=temp_end
-                                         )
-                                         insert_session.add(new_seg)
-                                         await insert_session.commit()
-                                         print(f"[recovery] [{stream_id}] Indexed recovered segment immediately: {filename}")
+                                    parts = Path(output_path).parts
+                                    relative_path = "/".join(parts[-3:])
+                                    stmt_check = select(RecordingSegment).where(
+                                        RecordingSegment.stream_id == stream_id,
+                                        RecordingSegment.file_path == relative_path
+                                    )
+                                    res_check = await insert_session.execute(stmt_check)
+                                    existing_seg = res_check.scalar_one_or_none()
+                                    if not existing_seg:
+                                        new_seg = RecordingSegment(
+                                            stream_id=stream_id,
+                                            file_path=relative_path,
+                                            start_ts=temp_start,
+                                            end_ts=temp_end
+                                        )
+                                        insert_session.add(new_seg)
+                                        await insert_session.commit()
+                                        print(f"[recovery] [{stream_id}] Indexed recovered segment immediately: {filename}")
+                                    
+                                    # Consolidate timeline: delete overlapping short segments in this minute block
+                                    stmt_overlap = select(RecordingSegment).where(
+                                        RecordingSegment.stream_id == stream_id,
+                                        RecordingSegment.start_ts >= temp_start,
+                                        RecordingSegment.start_ts < temp_end,
+                                        RecordingSegment.file_path != relative_path
+                                    )
+                                    res_overlap = await insert_session.execute(stmt_overlap)
+                                    overlapping_segs = list(res_overlap.scalars().all())
+                                    
+                                    for ov_seg in overlapping_segs:
+                                        ov_path = Path(settings.recording_dir) / ov_seg.file_path
+                                        try:
+                                            if ov_path.exists():
+                                                ov_size = ov_path.stat().st_size
+                                                if ov_size < 2 * 1024 * 1024:
+                                                    print(f"[recovery] [{stream_id}] Consolidating timeline: deleting overlapping short segment file {ov_seg.file_path}")
+                                                    ov_path.unlink()
+                                        except Exception as delete_err:
+                                            print(f"[recovery] [{stream_id}] Failed to delete consolidated file: {delete_err}")
+                                        await insert_session.delete(ov_seg)
+                                    
+                                    if overlapping_segs:
+                                        await insert_session.commit()
+                                        print(f"[recovery] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
                             except Exception as index_err:
                                 print(f"[recovery] [{stream_id}] Failed to index recovered segment: {index_err}")
                         else:
