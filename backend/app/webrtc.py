@@ -534,19 +534,22 @@ async def proxy_signaling_action(
         if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection"):
             response.headers[k] = v
             
+    if request.method == "DELETE":
+        # DELETE is idempotent. If the session is already gone (404), we treat it as a success.
+        if mtx_resp.status_code in (200, 204, 404):
+            await close_db_session(session_id, db_session)
+            await RedisViewerTracker.remove_viewer_session(resolved_stream_id, session_id)
+            
+            # Notify TranscoderManager of viewer disconnect for H.265 streams
+            if is_h265:
+                try:
+                    await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
+                except Exception as e:
+                    print(f"[webrtc] Error notifying transcoder disconnect for {resolved_stream_id}: {e}")
+            
+            return Response(status_code=204)
+
     response.status_code = mtx_resp.status_code
-    
-    if request.method == "DELETE" and mtx_resp.status_code in (200, 204):
-        await close_db_session(session_id, db_session)
-        await RedisViewerTracker.remove_viewer_session(resolved_stream_id, session_id)
-        
-        # Notify TranscoderManager of viewer disconnect for H.265 streams
-        if is_h265:
-            try:
-                await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
-            except Exception as e:
-                print(f"[webrtc] Error notifying transcoder disconnect for {resolved_stream_id}: {e}")
-        
     return Response(
         content=mtx_resp.content,
         status_code=mtx_resp.status_code,
