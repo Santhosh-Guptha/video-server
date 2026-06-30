@@ -1708,6 +1708,28 @@ async def get_recording_gaps(
             except Exception:
                 continue
 
+            # Try dual-timestamp format first: YYYYMMDD_HHMMSS_HHMMSS_recovered.mp4
+            match_dual = re.search(r"(\d{8})_(\d{6})_(\d{6})_recovered", name)
+            if match_dual:
+                try:
+                    date_str, start_time_str, end_time_str = match_dual.groups()
+                    dt_start = datetime.strptime(f"{date_str}_{start_time_str}", "%Y%m%d_%H%M%S")
+                    dt_end = datetime.strptime(f"{date_str}_{end_time_str}", "%Y%m%d_%H%M%S")
+                    f_start = dt_start.timestamp()
+                    f_end = dt_end.timestamp()
+                    if f_end > f_start and f_end >= start_ts and f_start <= end_ts:
+                        segments_to_check.append({
+                            "start_ts": f_start,
+                            "end_ts": f_end,
+                            "path": str(mp4),
+                            "size": file_size,
+                            "has_end": True
+                        })
+                except Exception:
+                    pass
+                continue
+
+            # Single-timestamp format: YYYYMMDD_HHMMSS_live.mp4
             match = re.search(r"(\d{8})_(\d{6})", name)
             if match:
                 try:
@@ -1718,11 +1740,13 @@ async def get_recording_gaps(
                         segments_to_check.append({
                             "start_ts": f_start,
                             "path": str(mp4),
-                            "size": file_size
+                            "size": file_size,
+                            "has_end": False
                         })
                 except Exception:
                     pass
             else:
+                # Legacy minute-only format: YYYYMMDD_HHMM_recovered.mp4
                 match_min = re.search(r"(\d{8})_(\d{4})", name)
                 if match_min:
                     try:
@@ -1733,7 +1757,8 @@ async def get_recording_gaps(
                             segments_to_check.append({
                                 "start_ts": f_start,
                                 "path": str(mp4),
-                                "size": file_size
+                                "size": file_size,
+                                "has_end": False
                             })
                     except Exception:
                         pass
@@ -1742,6 +1767,9 @@ async def get_recording_gaps(
     semaphore = asyncio.Semaphore(15)
     
     async def get_segment_duration(seg):
+        # If the filename already encodes both start and end, use that directly
+        if seg.get("has_end") and "end_ts" in seg:
+            return seg["start_ts"], seg["end_ts"] - seg["start_ts"]
         if seg["size"] >= 2 * 1024 * 1024:
             return seg["start_ts"], float(settings.segment_time_seconds)
         dur = await get_file_duration_async(seg["path"], semaphore)
@@ -1837,7 +1865,7 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
             day_str = dt_start.strftime("%Y-%m-%d")
             stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
             stream_record_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
+            filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{datetime.fromtimestamp(temp_end).strftime('%H%M%S')}_recovered.mp4"
             output_path = stream_record_dir / filename
 
             is_hevc = stream.codec and stream.codec.lower() in ("hevc", "h265")
