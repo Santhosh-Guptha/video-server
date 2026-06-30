@@ -1,4 +1,4 @@
-import { Camera, RefreshCw, Radar, Clock3, Wifi, Sliders, Video } from 'lucide-react'
+import { Camera, RefreshCw, Radar, Clock3, Wifi, Sliders, Video, Database } from 'lucide-react'
 
 type SidebarProps = {
   onRefresh: () => void
@@ -90,6 +90,14 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, ac
           style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
         >
           <Video size={14} /> Webcam Stream
+        </button>
+        <button
+          type="button"
+          className={`navItem ${activeTab === 'gap_recovery' ? 'active' : ''}`}
+          onClick={() => setActiveTab('gap_recovery')}
+          style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Database size={14} /> Gap Recovery
         </button>
       </nav>
 
