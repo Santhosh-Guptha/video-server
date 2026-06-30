@@ -75,7 +75,7 @@ export async function deleteCamera(streamId: string): Promise<any> {
   return res.json()
 }
 
-export async function getSystemSettings(): Promise<{ use_upstream_cameras: boolean }> {
+export async function getSystemSettings(): Promise<{ use_upstream_cameras: boolean; enable_device_config?: boolean; enable_local_transcode?: boolean }> {
   const res = await fetch('/api/settings')
   if (!res.ok) {
     throw new Error('Failed to fetch settings')
