@@ -305,6 +305,28 @@ class StreamManager:
         finally:
             await RedisManager.release_lock(lock_name)
 
+    async def _has_active_readers_or_publishers(self, path_name: str) -> bool:
+        """
+        Queries MediaMTX runtime API to see if a path or its transcoded H.264 twin
+        has any active readers (viewers) or is currently ready/active.
+        """
+        for name in (path_name, f"{path_name}_h264"):
+            try:
+                response = await self._get(f"/v3/paths/get/{name}")
+                if response.status_code == 200:
+                    data = response.json()
+                    # Check readers
+                    readers = data.get("readers") or []
+                    active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"]
+                    if len(active_readers) > 0:
+                        return True
+                    # Check ready status
+                    if data.get("ready") is True:
+                        return True
+            except Exception:
+                pass
+        return False
+
     async def remove_stream(self, session: AsyncSession, stream: CameraStream) -> None:
         """
         Deletes a path configuration from MediaMTX and updates status to OFFLINE.
@@ -316,6 +338,11 @@ class StreamManager:
         viewer_count = await RedisViewerTracker.get_viewer_count(path_name)
         if stream.always_on or viewer_count > 0:
             print(f"[stream_manager] Keep stream active: path_name={path_name}, always_on={stream.always_on}, active_viewers={viewer_count}")
+            return
+
+        # Double-check live MediaMTX API status to protect stateless readers (HLS/RTSP) and active writers
+        if await self._has_active_readers_or_publishers(path_name):
+            print(f"[stream_manager] Keep stream active: path_name={path_name} has active readers/publishers in MediaMTX")
             return
 
         lock_name = f"stream:{path_name}"
