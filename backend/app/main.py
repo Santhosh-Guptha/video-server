@@ -1670,12 +1670,21 @@ async def get_recording_gaps(
                 continue
             seen_starts.add(m_start)
             m_end = m_start + seg_time
+            
+            # Calculate exact missing seconds within this minute [m_start, m_end)
+            missing_sec = 0.0
+            for gap_s, gap_e in gaps:
+                overlap_s = max(gap_s, m_start)
+                overlap_e = min(gap_e, m_end)
+                if overlap_s < overlap_e:
+                    missing_sec += (overlap_e - overlap_s)
+                    
             dt_start = datetime.fromtimestamp(m_start)
             dt_end = datetime.fromtimestamp(m_end)
             aligned_gaps.append({
                 "start_ts": m_start,
                 "end_ts": m_end,
-                "duration": seg_time,
+                "duration": int(missing_sec),
                 "formatted_start": dt_start.strftime("%Y-%m-%d %H:%M:%S"),
                 "formatted_end": dt_end.strftime("%Y-%m-%d %H:%M:%S")
             })
