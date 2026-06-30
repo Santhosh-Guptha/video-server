@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import type { Camera } from '../types'
-import { Database, Search, RefreshCw, Clock, CheckCircle } from 'lucide-react'
+import { Database, Search, RefreshCw, Clock, CheckCircle, ChevronDown, Calendar } from 'lucide-react'
 
 type GapChunk = {
   start_ts: number
@@ -44,12 +44,21 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
   const [stats, setStats] = useState<RecoveredStats | null>(null)
   const [isStatsLoading, setIsStatsLoading] = useState(false)
 
+  // Searchable dropdown states
+  const [searchQuery, setSearchQuery] = useState('')
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
   // Initialize time fields to last 24 hours
   useEffect(() => {
+    resetTimeRange()
+    fetchStats()
+  }, [])
+
+  const resetTimeRange = () => {
     const end = new Date()
     const start = new Date(end.getTime() - 24 * 3600 * 1000)
     
-    // Format to YYYY-MM-DDTHH:MM
     const formatDateTime = (d: Date) => {
       const pad = (n: number) => String(n).padStart(2, '0')
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
@@ -57,7 +66,19 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
     
     setStartTime(formatDateTime(start))
     setEndTime(formatDateTime(end))
-    fetchStats()
+  }
+
+  // Close searchable dropdown on click outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
   }, [])
 
   // Auto select first camera
@@ -66,6 +87,16 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
       setSelectedCamera(cameras[0])
     }
   }, [cameras, selectedCamera])
+
+  // Filtered cameras based on search query
+  const filteredCameras = useMemo(() => {
+    if (!searchQuery.trim()) return cameras
+    const q = searchQuery.toLowerCase()
+    return cameras.filter(c => 
+      c.name.toLowerCase().includes(q) || 
+      c.stream_id.toLowerCase().includes(q)
+    )
+  }, [cameras, searchQuery])
 
   const fetchStats = async () => {
     setIsStatsLoading(true)
@@ -147,7 +178,6 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
       
       if (res.ok) {
         setRecoveryStatus(`Successfully queued ${targets.length} segments. Check terminal/stats for download progress.`)
-        // Clear list after successful recovery call
         setGaps([])
         setSelectedGaps(new Set())
         setTimeout(() => {
@@ -196,44 +226,183 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
           
           {/* Scan Filters Card */}
           <div style={{ background: 'rgba(30, 41, 59, 0.2)', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: '16px', padding: '20px' }}>
-            <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#f8fafc', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '6px', marginTop: 0 }}>
-              <Search size={14} /> Scan Configuration
-            </h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+                <Search size={14} /> Scan Configuration
+              </h3>
+              <button 
+                onClick={resetTimeRange}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#60a5fa',
+                  fontSize: '0.72rem',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <Calendar size={12} /> Reset to Last 24h
+              </button>
+            </div>
             
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
-              <div>
-                <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Select Camera</label>
-                <select 
-                  className="vms-select"
-                  value={selectedCamera?.id || ''}
-                  onChange={(e) => {
-                    const id = e.target.value
-                    setSelectedCamera(cameras.find(c => c.id === id) || null)
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '16px' }}>
+              {/* Searchable Dropdown Selector */}
+              <div ref={dropdownRef} style={{ position: 'relative' }}>
+                <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: '8px' }}>Select Camera</label>
+                <div 
+                  onClick={() => setDropdownOpen(!dropdownOpen)}
+                  style={{
+                    cursor: 'pointer',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    color: '#f8fafc',
+                    fontSize: '0.85rem',
+                    minHeight: '38px',
+                    boxSizing: 'border-box'
                   }}
                 >
-                  {cameras.map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.stream_id})</option>
-                  ))}
-                </select>
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '85%' }}>
+                    {selectedCamera ? `${selectedCamera.name} (${selectedCamera.stream_id})` : 'Select a camera...'}
+                  </span>
+                  <ChevronDown size={16} style={{ color: '#64748b', transform: dropdownOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', marginLeft: '6px', flexShrink: 0 }} />
+                </div>
+                
+                {dropdownOpen && (
+                  <div 
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      marginTop: '4px',
+                      background: '#1e293b',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      borderRadius: '8px',
+                      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.7), 0 8px 10px -6px rgba(0, 0, 0, 0.7)',
+                      zIndex: 1000,
+                      padding: '8px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '6px', padding: '4px 8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <Search size={14} style={{ color: '#94a3b8', marginRight: '6px', flexShrink: 0 }} />
+                      <input
+                        type="text"
+                        placeholder="Search by name or stream ID..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onClick={(e) => e.stopPropagation()} 
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#f8fafc',
+                          fontSize: '0.8rem',
+                          outline: 'none',
+                          width: '100%',
+                          padding: '4px 0'
+                        }}
+                      />
+                    </div>
+                    <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      {filteredCameras.map(c => (
+                        <div
+                          key={c.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedCamera(c);
+                            setDropdownOpen(false);
+                            setSearchQuery('');
+                          }}
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: '6px',
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                            background: selectedCamera?.id === c.id ? 'rgba(59, 130, 246, 0.25)' : 'transparent',
+                            color: selectedCamera?.id === c.id ? '#60a5fa' : '#cbd5e1',
+                            transition: 'all 0.15s',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (selectedCamera?.id !== c.id) {
+                              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (selectedCamera?.id !== c.id) {
+                              e.currentTarget.style.background = 'transparent'
+                            }
+                          }}
+                        >
+                          <span style={{ fontWeight: selectedCamera?.id === c.id ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                            {c.name}
+                          </span>
+                          <span style={{ fontSize: '0.7rem', color: '#64748b', fontFamily: 'monospace' }}>{c.stream_id}</span>
+                        </div>
+                      ))}
+                      {filteredCameras.length === 0 && (
+                        <div style={{ padding: '12px', fontSize: '0.75rem', color: '#64748b', textAlign: 'center' }}>
+                          No cameras found
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
-                <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Start Time</label>
+                <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: '8px' }}>Start Time</label>
                 <input 
                   type="datetime-local" 
                   className="vms-input"
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    color: '#f8fafc',
+                    padding: '8px 12px',
+                    fontSize: '0.85rem',
+                    minHeight: '38px',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
                 />
               </div>
 
               <div>
-                <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>End Time</label>
+                <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: '8px' }}>End Time</label>
                 <input 
                   type="datetime-local" 
                   className="vms-input"
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    color: '#f8fafc',
+                    padding: '8px 12px',
+                    fontSize: '0.85rem',
+                    minHeight: '38px',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
                 />
               </div>
             </div>
@@ -251,7 +420,9 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
                 padding: '10px',
                 fontWeight: 600,
                 borderRadius: '8px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                transition: 'opacity 0.2s',
+                opacity: isScanning || !selectedCamera ? 0.6 : 1
               }}
             >
               {isScanning ? 'Scanning...' : 'Scan Gaps'}
