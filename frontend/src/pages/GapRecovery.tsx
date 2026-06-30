@@ -55,9 +55,9 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
     fetchStats()
   }, [])
 
-  const resetTimeRange = () => {
+  const setPresetHours = (hours: number) => {
     const end = new Date()
-    const start = new Date(end.getTime() - 24 * 3600 * 1000)
+    const start = new Date(end.getTime() - hours * 3600 * 1000)
     
     const formatDateTime = (d: Date) => {
       const pad = (n: number) => String(n).padStart(2, '0')
@@ -66,6 +66,10 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
     
     setStartTime(formatDateTime(start))
     setEndTime(formatDateTime(end))
+  }
+
+  const resetTimeRange = () => {
+    setPresetHours(24)
   }
 
   // Close searchable dropdown on click outside
@@ -230,22 +234,53 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
               <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
                 <Search size={14} /> Scan Configuration
               </h3>
-              <button 
-                onClick={resetTimeRange}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#60a5fa',
-                  fontSize: '0.72rem',
-                  cursor: 'pointer',
-                  padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px'
-                }}
-              >
-                <Calendar size={12} /> Reset to Last 24h
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>Presets:</span>
+                <button 
+                  onClick={() => setPresetHours(1)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#60a5fa',
+                    fontSize: '0.72rem',
+                    cursor: 'pointer',
+                    padding: 0
+                  }}
+                >
+                  Last 1h
+                </button>
+                <span style={{ fontSize: '0.72rem', color: '#334155' }}>|</span>
+                <button 
+                  onClick={() => setPresetHours(2)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#60a5fa',
+                    fontSize: '0.72rem',
+                    cursor: 'pointer',
+                    padding: 0
+                  }}
+                >
+                  Last 2h
+                </button>
+                <span style={{ fontSize: '0.72rem', color: '#334155' }}>|</span>
+                <button 
+                  onClick={() => setPresetHours(24)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#60a5fa',
+                    fontSize: '0.72rem',
+                    cursor: 'pointer',
+                    padding: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <Calendar size={12} /> Last 24h
+                </button>
+              </div>
             </div>
             
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '16px' }}>
