@@ -393,25 +393,39 @@ async def proxy_signaling_session(
     print(f"[webrtc] WHEP POST offer SDP:\n{body_bytes.decode('utf-8', errors='replace')}")
     
     mtx_resp = None
-    try:
-        headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
-        mtx_resp = await asyncio.to_thread(
-            _sync_http_request,
-            url,
-            "POST",
-            body_bytes,
-            headers_dict
-        )
-    except Exception as e:
-        import traceback
-        print(f"[webrtc] Connection to MediaMTX failed: {e}")
-        traceback.print_exc()
-        if is_h265:
-            try:
-                await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
-            except Exception as ex:
-                print(f"[webrtc] Error rolling back transcoder viewer count on connection failure: {ex}")
-        raise HTTPException(status_code=502, detail=f"Failed to connect to media server signaling endpoint: {e}")
+    for attempt in range(4):
+        try:
+            headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
+            mtx_resp = await asyncio.to_thread(
+                _sync_http_request,
+                url,
+                "POST",
+                body_bytes,
+                headers_dict
+            )
+            
+            # If MediaMTX returns 404, the path might be in the middle of dynamic registration/startup.
+            # Retry after a short delay.
+            if mtx_resp.status_code == 404 and attempt < 3:
+                print(f"[webrtc] MediaMTX returned 404 for {mediamtx_stream_id}. Retrying WHEP request (attempt {attempt + 1}/4) in 0.4s...")
+                await asyncio.sleep(0.4)
+                continue
+                
+            break
+        except Exception as e:
+            if attempt < 3:
+                print(f"[webrtc] MediaMTX connection attempt {attempt + 1} failed: {e}. Retrying in 0.4s...")
+                await asyncio.sleep(0.4)
+                continue
+            import traceback
+            print(f"[webrtc] Connection to MediaMTX failed: {e}")
+            traceback.print_exc()
+            if is_h265:
+                try:
+                    await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
+                except Exception as ex:
+                    print(f"[webrtc] Error rolling back transcoder viewer count on connection failure: {ex}")
+            raise HTTPException(status_code=502, detail=f"Failed to connect to media server signaling endpoint: {e}")
             
     print(f"[webrtc] WHEP POST response status: {mtx_resp.status_code}")
     print(f"[webrtc] WHEP POST response headers: {mtx_resp.headers}")
