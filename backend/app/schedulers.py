@@ -188,9 +188,135 @@ async def camera_scheduler_loop():
         await asyncio.sleep(settings.scheduler_interval_seconds)
 
 
+async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) -> float:
+    """Uses ffprobe asynchronously to extract the duration of a video file."""
+    import os
+    import json
+    ffprobe_path = "ffprobe"
+    ffmpeg_path = settings.ffmpeg_path
+    if "/" in ffmpeg_path or "\\" in ffmpeg_path:
+        dirname = os.path.dirname(ffmpeg_path)
+        basename = os.path.basename(ffmpeg_path)
+        ext = os.path.splitext(basename)[1]
+        ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
+
+    cmd = [
+        ffprobe_path,
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        file_path
+    ]
+    async with semaphore:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
+            if proc.returncode == 0:
+                data = json.loads(stdout.decode())
+                duration_str = data.get("format", {}).get("duration")
+                if duration_str:
+                    return float(duration_str)
+        except Exception:
+            pass
+    return float(settings.segment_time_seconds)
+
+async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -> list[tuple[float, float]]:
+    import re
+    from pathlib import Path
+    
+    stream_dir = Path(settings.recording_dir) / stream_id
+    segments_to_check = []
+    
+    if stream_dir.exists():
+        for mp4 in stream_dir.rglob("*.mp4"):
+            name = mp4.name
+            try:
+                file_size = mp4.stat().st_size
+                if file_size == 0:
+                    continue
+            except Exception:
+                continue
+
+            match = re.search(r"(\d{8})_(\d{6})", name)
+            if match:
+                try:
+                    date_str, time_str = match.groups()
+                    dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                    f_start = dt.timestamp()
+                    if f_start + settings.segment_time_seconds >= start_ts and f_start <= end_ts:
+                        segments_to_check.append({
+                            "start_ts": f_start,
+                            "path": str(mp4),
+                            "size": file_size
+                        })
+                except Exception:
+                    pass
+            else:
+                match_min = re.search(r"(\d{8})_(\d{4})", name)
+                if match_min:
+                    try:
+                        date_str, time_str = match_min.groups()
+                        dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+                        f_start = dt.timestamp()
+                        if f_start + settings.segment_time_seconds >= start_ts and f_start <= end_ts:
+                            segments_to_check.append({
+                                "start_ts": f_start,
+                                "path": str(mp4),
+                                "size": file_size
+                            })
+                    except Exception:
+                        pass
+
+    if not segments_to_check:
+        return []
+
+    # Query file durations. For files >= 2MB, assume full segment duration to optimize speed.
+    semaphore = asyncio.Semaphore(15)
+    
+    async def get_segment_duration(seg):
+        if seg["size"] >= 2 * 1024 * 1024:
+            return seg["start_ts"], float(settings.segment_time_seconds)
+        dur = await get_file_duration_async(seg["path"], semaphore)
+        return seg["start_ts"], dur
+
+    tasks = [get_segment_duration(seg) for seg in segments_to_check]
+    results = await asyncio.gather(*tasks)
+    
+    # Map to segment boundaries
+    segments = [(f_start, f_start + dur) for f_start, dur in results]
+    segments.sort(key=lambda x: x[0])
+
+    # Filter segments to the requested time window and clip them
+    active_segs = []
+    for s_start, s_end in segments:
+        if s_end > start_ts and s_start < end_ts:
+            active_segs.append((max(s_start, start_ts), min(s_end, end_ts)))
+
+    # Detect gaps between files (threshold set to 1.0s to capture all short segments)
+    gaps = []
+    current_time = start_ts
+    
+    for s_start, s_end in active_segs:
+        if s_start > current_time:
+            gap_duration = s_start - current_time
+            if gap_duration >= 1.0:
+                gaps.append((current_time, s_start))
+        current_time = max(current_time, s_end)
+        
+    if current_time < end_ts:
+        gap_duration = end_ts - current_time
+        if gap_duration >= 1.0:
+            gaps.append((current_time, end_ts))
+
+    return gaps
+
 async def camera_gap_recovery_loop():
     """
-    Scans the database for recording gaps in the last 24 hours.
+    Scans the filesystem for recording gaps in the last 24 hours.
     Downloads the missing chunks from the camera's playback RTSP URL concurrently.
     """
     print("[recovery] Starting recording gap recovery loop...")
@@ -220,52 +346,36 @@ async def camera_gap_recovery_loop():
                     if not rtsp_url.startswith(("rtsp://", "rtsps://")):
                         continue
 
-                    # Query segments in the last 24 hours
+                    # Query gaps in the last 24 hours directly from the filesystem
                     now = time.time()
                     twenty_four_hours_ago = now - (24 * 3600)
-                    seg_res = await session.execute(
-                        select(RecordingSegment)
-                        .where(RecordingSegment.stream_id == stream_id)
-                        .where(RecordingSegment.start_ts >= twenty_four_hours_ago)
-                        .order_by(RecordingSegment.start_ts.asc())
-                    )
-                    segments = list(seg_res.scalars().all())
+                    gaps = await scan_filesystem_gaps(stream_id, twenty_four_hours_ago, now)
 
-                    if not segments:
-                        continue
+                    # Align gaps to 1-minute segment boundaries (any minute containing a gap should be recovered)
+                    seg_time = settings.segment_time_seconds
+                    for gap_start, gap_end in gaps:
+                        start_minute = int((gap_start // seg_time) * seg_time)
+                        end_minute = int((gap_end // seg_time) * seg_time)
+                        for temp_start in range(start_minute, end_minute + int(seg_time), int(seg_time)):
+                            gap_key = (stream_id, int(temp_start))
+                            if gap_key not in attempted_gaps:
+                                attempted_gaps.add(gap_key)
+                                
+                                # Build recovery URL using vendor framework
+                                make_val = stream.camera.make if stream.camera else None
+                                provider = get_playback_recovery_provider(make_val)
+                                next_end = temp_start + seg_time
+                                recovery_url = provider.build_playback_url(stream, temp_start, next_end)
 
-                    # Check for gaps between consecutive segments
-                    for i in range(len(segments) - 1):
-                        current_seg = segments[i]
-                        next_seg = segments[i + 1]
-                        
-                        gap_start = current_seg.end_ts
-                        gap_end = next_seg.start_ts
-                        gap_duration = gap_end - gap_start
-
-                        if gap_duration >= 5.0:
-                            # Align temp_start to the start of the minute boundary (e.g., XX:XX:00)
-                            temp_start = (gap_start // settings.segment_time_seconds) * settings.segment_time_seconds
-                            while temp_start < gap_end:
-                                gap_key = (stream_id, int(temp_start))
-                                if gap_key not in attempted_gaps:
-                                    attempted_gaps.add(gap_key)
-                                    
-                                    # Build recovery URL using vendor framework
-                                    make_val = stream.camera.make if stream.camera else None
-                                    provider = get_playback_recovery_provider(make_val)
-                                    next_end = temp_start + settings.segment_time_seconds
-                                    recovery_url = provider.build_playback_url(stream, temp_start, next_end)
-
-                                    gaps_to_recover.append({
-                                        "stream_id": stream_id,
-                                        "recovery_url": recovery_url,
-                                        "start_ts": temp_start,
-                                        "end_ts": next_end
-                                    })
-                                temp_start += settings.segment_time_seconds
+                                gaps_to_recover.append({
+                                    "stream_id": stream_id,
+                                    "recovery_url": recovery_url,
+                                    "start_ts": temp_start,
+                                    "end_ts": next_end
+                                })
 
             if not gaps_to_recover:
+                await asyncio.sleep(60.0)
                 continue
 
             print(f"[recovery] Found {len(gaps_to_recover)} missing segments to recover across all active cameras.")
@@ -282,6 +392,48 @@ async def camera_gap_recovery_loop():
                 stream_record_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{dt_start.strftime('%Y%m%d_%H%M')}_recovered.mp4"
                 output_path = stream_record_dir / filename
+
+                # Pre-check file existence and completeness
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    is_complete = False
+                    try:
+                        dur = await get_file_duration_async(str(output_path), semaphore)
+                        if dur >= settings.segment_time_seconds - 5.0:
+                            is_complete = True
+                    except Exception:
+                        pass
+
+                    if is_complete:
+                        print(f"[recovery] [{stream_id}] File already exists and is complete, skipping download: {filename}")
+                        try:
+                            async for insert_session in get_session():
+                                parts = Path(output_path).parts
+                                relative_path = "/".join(parts[-3:])
+                                stmt_check = select(RecordingSegment).where(
+                                    RecordingSegment.stream_id == stream_id,
+                                    RecordingSegment.file_path == relative_path
+                                )
+                                res_check = await insert_session.execute(stmt_check)
+                                existing_seg = res_check.scalar_one_or_none()
+                                if not existing_seg:
+                                    new_seg = RecordingSegment(
+                                        stream_id=stream_id,
+                                        file_path=relative_path,
+                                        start_ts=temp_start,
+                                        end_ts=temp_end
+                                    )
+                                    insert_session.add(new_seg)
+                                    await insert_session.commit()
+                                    print(f"[recovery] [{stream_id}] Indexed existing segment: {filename}")
+                        except Exception as e:
+                            print(f"[recovery] [{stream_id}] Failed to index existing segment: {e}")
+                        return
+                    else:
+                        print(f"[recovery] [{stream_id}] File exists but is incomplete (duration < 55s), deleting to re-download: {filename}")
+                        try:
+                            output_path.unlink()
+                        except Exception:
+                            pass
 
                 async with semaphore:
                     print(f"[recovery] [{stream_id}] Downloading gap segment: {filename}...")
