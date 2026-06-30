@@ -785,6 +785,7 @@ async def download_sd_card_stream(
     requested_duration = end_ts - start_ts
     use_local = len(valid_local_files) > 0 and (total_local_duration / requested_duration >= 0.95)
     
+    from datetime import datetime
     start_dt = datetime.fromtimestamp(start_ts)
     friendly_filename = f"{camera.name.replace(' ', '_')}_{start_dt.strftime('%Y%m%d_%H%M%S')}_playback.mp4"
 
