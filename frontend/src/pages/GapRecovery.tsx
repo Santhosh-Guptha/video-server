@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import type { Camera } from '../types'
-import { Database, Search, RefreshCw, Clock, CheckCircle, ChevronDown, Calendar } from 'lucide-react'
+import { Database, Search, RefreshCw, Clock, CheckCircle, ChevronDown, Calendar, Download, Loader2 } from 'lucide-react'
 
 type GapChunk = {
   start_ts: number
@@ -44,10 +44,63 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
   const [stats, setStats] = useState<RecoveredStats | null>(null)
   const [isStatsLoading, setIsStatsLoading] = useState(false)
 
+  // On-demand SD card download states
+  const [isOnDemandDownloading, setIsOnDemandDownloading] = useState(false)
+  const [onDemandError, setOnDemandError] = useState<string | null>(null)
+  const [onDemandStatus, setOnDemandStatus] = useState<string | null>(null)
+
   // Searchable dropdown states
   const [searchQuery, setSearchQuery] = useState('')
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  const handleOnDemandDownload = async () => {
+    if (!selectedCamera) return
+    setIsOnDemandDownloading(true)
+    setOnDemandError(null)
+    setOnDemandStatus('Connecting to camera SD card and downloading footage...')
+    
+    try {
+      const start_ts = new Date(startTime).getTime() / 1000
+      const end_ts = new Date(endTime).getTime() / 1000
+      
+      const payload = {
+        stream_id: selectedCamera.stream_id,
+        start_ts,
+        end_ts
+      }
+      
+      const res = await fetch('/api/recordings/sd-card/retrieve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      
+      if (!res.ok) {
+        const errData = await res.json()
+        throw new Error(errData.detail || 'Failed to download footage from camera SD card.')
+      }
+      
+      const data = await res.json() as { download_url: string; filename: string }
+      setOnDemandStatus('Download ready! Starting download...')
+      
+      // Trigger native browser download
+      const link = document.createElement('a')
+      link.href = data.download_url
+      link.setAttribute('download', data.filename)
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      setTimeout(() => setOnDemandStatus(null), 5000)
+    } catch (e: any) {
+      console.error(e)
+      setOnDemandError(e.message || 'An error occurred during SD card download.')
+      setOnDemandStatus(null)
+    } finally {
+      setIsOnDemandDownloading(false)
+    }
+  }
 
   // Initialize time fields to last 24 hours
   useEffect(() => {
@@ -466,6 +519,61 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
             {scanMessage && (
               <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '12px', textAlign: 'center' }}>
                 {scanMessage}
+              </div>
+            )}
+          </div>
+
+          {/* On-Demand Download Card */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.2)', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: '16px', padding: '20px' }}>
+            <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 12px 0' }}>
+              <Download size={14} /> On-Demand SD Card Footage Download
+            </h3>
+            <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'block', marginBottom: '16px' }}>
+              Directly retrieve and download any recorded video clip from the camera's local SD card storage on-demand.
+            </span>
+            
+            <button 
+              className="batchBtn" 
+              onClick={handleOnDemandDownload}
+              disabled={isOnDemandDownloading || !selectedCamera}
+              style={{
+                width: '100%',
+                background: 'linear-gradient(135deg, #10b981, #047857)',
+                color: '#fff',
+                border: 'none',
+                padding: '10px',
+                fontWeight: 600,
+                borderRadius: '8px',
+                cursor: 'pointer',
+                transition: 'opacity 0.2s',
+                opacity: isOnDemandDownloading || !selectedCamera ? 0.6 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}
+            >
+              {isOnDemandDownloading ? (
+                <>
+                  <Loader2 size={16} className="spin" />
+                  Downloading from Camera SD Card...
+                </>
+              ) : (
+                <>
+                  <Download size={16} />
+                  Download Custom Range
+                </>
+              )}
+            </button>
+
+            {onDemandError && (
+              <div style={{ fontSize: '0.8rem', color: '#ef4444', marginTop: '12px', textAlign: 'center' }}>
+                {onDemandError}
+              </div>
+            )}
+            {onDemandStatus && (
+              <div style={{ fontSize: '0.8rem', color: '#10b981', marginTop: '12px', textAlign: 'center' }}>
+                {onDemandStatus}
               </div>
             )}
           </div>

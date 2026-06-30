@@ -893,3 +893,38 @@ async def transcoder_watchdog_loop():
         except Exception as e:
             print(f"[scheduler] Error in transcoder watchdog: {e}")
         await asyncio.sleep(15)
+
+
+async def sd_card_on_demand_cleanup_loop():
+    """
+    Background loop that periodically cleans up temporary on-demand SD card download files
+    that have exceeded the retention timeout.
+    """
+    print("[scheduler] Starting SD Card On-Demand Retrieval cleanup loop...")
+    import os
+    import time
+    from pathlib import Path
+    
+    # Wait for startup
+    await asyncio.sleep(60.0)
+    
+    while True:
+        try:
+            temp_dir = Path("./data/on_demand_temp")
+            if temp_dir.exists():
+                now = time.time()
+                for f in temp_dir.iterdir():
+                    if f.is_file() and f.suffix == ".mp4":
+                        try:
+                            mtime = f.stat().st_mtime
+                            age = now - mtime
+                            retention = settings.sd_card_on_demand_retention_seconds
+                            if age > retention:
+                                f.unlink()
+                                print(f"[cleanup] Evicted expired on-demand SD card file: {f.name} (Age: {age:.0f}s, Limit: {retention}s)")
+                        except Exception as e:
+                            print(f"[cleanup] Error cleaning up SD card file {f}: {e}")
+        except Exception as e:
+            print(f"[cleanup] Error in SD Card on-demand cleanup: {e}")
+            
+        await asyncio.sleep(300.0) # Run every 5 minutes

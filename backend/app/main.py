@@ -389,7 +389,8 @@ async def startup():
         camera_gap_recovery_loop,
         camera_archive_cleanup_loop,
         webrtc_session_watchdog_loop,
-        transcoder_watchdog_loop
+        transcoder_watchdog_loop,
+        sd_card_on_demand_cleanup_loop
     )
     from .health_monitor import health_monitor_loop
     from .camera_watchdog import camera_health_watchdog_loop, edge_push_watchdog_loop
@@ -401,6 +402,7 @@ async def startup():
     asyncio.create_task(webrtc_session_watchdog_loop())
     asyncio.create_task(health_monitor_loop())
     asyncio.create_task(transcoder_watchdog_loop())
+    asyncio.create_task(sd_card_on_demand_cleanup_loop())
     # Phase 3: Camera lifecycle watchdogs
     asyncio.create_task(camera_health_watchdog_loop())   # Ping/ffprobe cycle every 120s
     asyncio.create_task(edge_push_watchdog_loop())       # Push heartbeat monitor every 30s
@@ -726,6 +728,157 @@ async def recording_recovery_loop():
                 await index_recordings(session, settings.recording_dir)
             except Exception as e:
                 print("[indexer] Recovery scanner loop error:", e)
+
+
+class SDCardRetrievePayload(BaseModel):
+    stream_id: str
+    start_ts: float
+    end_ts: float
+
+@app.post("/api/recordings/sd-card/retrieve")
+async def retrieve_sd_card_recording(
+    payload: SDCardRetrievePayload,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    import uuid
+    from pathlib import Path
+    
+    # 1. Enforce feature enablement check
+    if not settings.enable_sd_card_on_demand:
+        raise HTTPException(
+            status_code=403, 
+            detail="SD Card On-Demand Retrieval is disabled in backend configurations."
+        )
+        
+    # 2. Resolve stream and camera details
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(payload.stream_id, session)
+    if not stream:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+        
+    camera = stream.camera
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera details not found for stream")
+        
+    # 3. Format dynamic replay RTSP URL
+    from .providers import get_playback_recovery_provider
+    try:
+        provider = get_playback_recovery_provider(camera.make)
+        rtsp_replay_url = provider.build_playback_url(stream, payload.start_ts, payload.end_ts)
+        print(f"[sd_card] Formatted replay RTSP URL: {rtsp_replay_url}")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to generate RTSP playback URL: {e}"
+        )
+        
+    # 4. Prepare temporary output directory
+    temp_dir = Path("./data/on_demand_temp")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    file_id = str(uuid.uuid4())
+    output_filename = f"{file_id}.mp4"
+    output_filepath = temp_dir / output_filename
+    
+    # 5. Spawn FFmpeg to pull segment from camera's SD card
+    # We copy the stream payload directly to avoid local CPU transcoding overhead
+    cmd = [
+        settings.ffmpeg_path,
+        "-rtsp_transport", "tcp",
+        "-i", rtsp_replay_url,
+        "-c", "copy",
+        "-y",
+        str(output_filepath)
+    ]
+    
+    print(f"[sd_card] Executing ffmpeg to retrieve footage: {' '.join(cmd)}")
+    
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Limit the ffmpeg process to a 90-second timeout to prevent locking if camera is dead
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=90.0)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=504, 
+                detail="Timeout waiting for camera SD card streaming response."
+            )
+            
+        if process.returncode != 0:
+            err_log = stderr.decode('utf-8', errors='replace')
+            print(f"[sd_card] ffmpeg retrieval failed (code {process.returncode}):\n{err_log}")
+            raise HTTPException(
+                status_code=502, 
+                detail=f"Camera SD card download failed: {err_log[-200:]}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[sd_card] Error downloading footage: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to retrieve camera footage: {e}"
+        )
+        
+    # Verify file was written and is not empty
+    if not output_filepath.exists() or output_filepath.stat().st_size == 0:
+        raise HTTPException(
+            status_code=502, 
+            detail="Retrieved file was empty or not written successfully by media encoder."
+        )
+        
+    start_dt = datetime.fromtimestamp(payload.start_ts)
+    friendly_name = f"{camera.name.replace(' ', '_')}_{start_dt.strftime('%Y%m%d_%H%M%S')}_sdcard.mp4"
+    
+    return {
+        "file_id": file_id,
+        "filename": friendly_name,
+        "download_url": f"/api/recordings/sd-card/download/{file_id}"
+    }
+
+@app.get("/api/recordings/sd-card/download/{file_id}")
+async def download_sd_card_file(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    from fastapi.responses import FileResponse
+    import os
+    
+    if not settings.enable_sd_card_on_demand:
+        raise HTTPException(status_code=403, detail="SD Card On-Demand Retrieval is disabled")
+        
+    temp_dir = Path("./data/on_demand_temp")
+    filepath = temp_dir / f"{file_id}.mp4"
+    
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Requested file has expired or does not exist")
+        
+    # Schedule absolute deletion of the temporary file after download completes
+    def remove_file(path: str):
+        try:
+            os.remove(path)
+            print(f"[sd_card] Cleaned up temporary download file: {path}")
+        except Exception as e:
+            print(f"[sd_card] Error deleting temporary file: {e}")
+            
+    background_tasks.add_task(remove_file, str(filepath))
+    
+    return FileResponse(
+        str(filepath), 
+        media_type="video/mp4", 
+        filename=f"sdcard_playback_{file_id[:8]}.mp4"
+    )
 
 
 @app.get("/api/recordings/recovered-stats")
