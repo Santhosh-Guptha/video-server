@@ -130,11 +130,11 @@ export function resolveStreamId(cam: Camera, profileType: string): string {
 export function resolveLiveStreamId(cam: Camera, policy: VMSPolicy, layoutSize: number = 0): string {
   let targetProfile: string
   if (layoutSize === 1) {
-    targetProfile = 'MAIN'
+    targetProfile = policy.live?.resolved_1x1 || 'MAIN'
   } else if (layoutSize > 1) {
-    targetProfile = 'SUB'
+    targetProfile = policy.live?.resolved_grid || 'SUB'
   } else {
-    targetProfile = 'MAIN'
+    targetProfile = policy.live?.resolved_1x1 || 'MAIN'
   }
   return resolveStreamId(cam, targetProfile)
 }
