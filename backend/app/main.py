@@ -1658,38 +1658,20 @@ async def get_recording_gaps(
         if gap_duration >= 1.0:
             gaps.append((current_time, end_ts))
 
-    # Align gaps to 1-minute segment boundaries (any minute containing a gap should be recovered)
-    aligned_gaps = []
-    seg_time = settings.segment_time_seconds
-    seen_starts = set()
+    # Return raw second-level gaps directly with formatted start/end times containing seconds
+    raw_gaps = []
     for g_start, g_end in gaps:
-        start_minute = int((g_start // seg_time) * seg_time)
-        end_minute = int((g_end // seg_time) * seg_time)
-        for m_start in range(start_minute, end_minute + int(seg_time), int(seg_time)):
-            if m_start in seen_starts:
-                continue
-            seen_starts.add(m_start)
-            m_end = m_start + seg_time
-            
-            # Calculate exact missing seconds within this minute [m_start, m_end)
-            missing_sec = 0.0
-            for gap_s, gap_e in gaps:
-                overlap_s = max(gap_s, m_start)
-                overlap_e = min(gap_e, m_end)
-                if overlap_s < overlap_e:
-                    missing_sec += (overlap_e - overlap_s)
-                    
-            dt_start = datetime.fromtimestamp(m_start)
-            dt_end = datetime.fromtimestamp(m_end)
-            aligned_gaps.append({
-                "start_ts": m_start,
-                "end_ts": m_end,
-                "duration": int(missing_sec),
-                "formatted_start": dt_start.strftime("%Y-%m-%d %H:%M:%S"),
-                "formatted_end": dt_end.strftime("%Y-%m-%d %H:%M:%S")
-            })
+        dt_start = datetime.fromtimestamp(g_start)
+        dt_end = datetime.fromtimestamp(g_end)
+        raw_gaps.append({
+            "start_ts": g_start,
+            "end_ts": g_end,
+            "duration": int(g_end - g_start),
+            "formatted_start": dt_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "formatted_end": dt_end.strftime("%Y-%m-%d %H:%M:%S")
+        })
 
-    return aligned_gaps
+    return raw_gaps
 
 async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
     print(f"[recovery] [manual] Starting manual recovery task for {stream_id} ({len(gap_chunks)} chunks)...")
@@ -1713,8 +1695,12 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
         semaphore = asyncio.Semaphore(3)
 
         async def download_chunk(chunk):
-            temp_start = chunk["start_ts"]
-            temp_end = chunk["end_ts"]
+            start_ts = chunk["start_ts"]
+            end_ts = chunk["end_ts"]
+            
+            # Align the chunk to the 1-minute segment boundaries to fetch full segments
+            temp_start = int((start_ts // settings.segment_time_seconds) * settings.segment_time_seconds)
+            temp_end = temp_start + settings.segment_time_seconds
             
             make_val = stream.camera.make if stream.camera else None
             provider = get_playback_recovery_provider(make_val)
