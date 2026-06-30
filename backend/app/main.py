@@ -988,7 +988,7 @@ async def get_recovered_stats(
 
 
 @app.get("/api/recordings/file")
-async def recording_file(path: str):
+async def recording_file(path: str, range: Optional[str] = Header(None)):
     p = Path(path)
     if not p.is_absolute() or not p.exists():
         # Fallback to resolving relative path dynamically
@@ -998,7 +998,51 @@ async def recording_file(path: str):
         
     if not p.exists():
         raise HTTPException(404, f"File not found: {path}")
-    return FileResponse(p, media_type="video/mp4")
+        
+    file_path = str(p)
+    file_size = os.path.getsize(file_path)
+    
+    if not range:
+        return FileResponse(file_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
+        
+    try:
+        range_val = range.strip().split("=")[-1]
+        start_str, end_str = range_val.split("-")
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else file_size - 1
+    except Exception:
+        return FileResponse(file_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
+        
+    if start >= file_size or end >= file_size or start > end:
+        return Response(
+            status_code=416,
+            headers={"Content-Range": f"bytes */{file_size}"}
+        )
+        
+    chunk_size = end - start + 1
+    
+    def file_generator():
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            bytes_left = chunk_size
+            while bytes_left > 0:
+                to_read = min(65536, bytes_left)
+                data = f.read(to_read)
+                if not data:
+                    break
+                bytes_left -= len(data)
+                yield data
+                
+    return StreamingResponse(
+        file_generator(),
+        status_code=206,
+        media_type="video/mp4",
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(chunk_size),
+        }
+    )
 
 @app.get("/api/recordings/download")
 async def download_recording(
@@ -1084,7 +1128,7 @@ async def download_recording(
             cmd = [
                 settings.ffmpeg_path,
                 "-ss", f"{start_offset:.3f}",
-                "-i", str(valid_files[0]),
+                "-i", os.path.abspath(str(valid_files[0])),
                 "-t", f"{duration:.3f}",
                 "-c", "copy",
                 "-y",
@@ -1101,7 +1145,7 @@ async def download_recording(
             list_file_path = os.path.join(temp_dir, f"{stream_id}_{int(start_ts)}_{int(end_ts)}_list.txt")
             with open(list_file_path, "w", encoding="utf-8") as f:
                 for file_path in valid_files:
-                    safe_path = str(file_path).replace("\\", "/")
+                    safe_path = os.path.abspath(str(file_path)).replace("\\", "/")
                     f.write(f"file '{safe_path}'\n")
                     
             cmd = [
