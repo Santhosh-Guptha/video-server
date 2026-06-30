@@ -286,9 +286,18 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
     tasks = [get_segment_duration(seg) for seg in segments_to_check]
     results = await asyncio.gather(*tasks)
     
-    # Map to segment boundaries
-    segments = [(f_start, f_start + dur) for f_start, dur in results]
-    segments.sort(key=lambda x: x[0])
+    # Map to segment boundaries (adjusting durations of consecutive files to eliminate fake GOP-alignment gaps)
+    results.sort(key=lambda x: x[0])
+    segments = []
+    seg_time = settings.segment_time_seconds
+    for i in range(len(results)):
+        f_start, dur = results[i]
+        if i < len(results) - 1:
+            next_start = results[i + 1][0]
+            time_diff = next_start - f_start
+            if time_diff > 0 and time_diff <= seg_time + 5.0:
+                dur = time_diff
+        segments.append((f_start, f_start + dur))
 
     # Filter segments to the requested time window and clip them
     active_segs = []
