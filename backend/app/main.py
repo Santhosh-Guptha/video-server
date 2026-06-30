@@ -1630,20 +1630,20 @@ async def get_recording_gaps(
         if s_end > start_ts and s_start < end_ts:
             active_segs.append((max(s_start, start_ts), min(s_end, end_ts)))
 
-    # Detect gaps between files
+    # Detect gaps between files (threshold set to 1.0s to capture all short segments)
     gaps = []
     current_time = start_ts
     
     for s_start, s_end in active_segs:
         if s_start > current_time:
             gap_duration = s_start - current_time
-            if gap_duration >= 5.0:
+            if gap_duration >= 1.0:
                 gaps.append((current_time, s_start))
         current_time = max(current_time, s_end)
         
     if current_time < end_ts:
         gap_duration = end_ts - current_time
-        if gap_duration >= 5.0:
+        if gap_duration >= 1.0:
             gaps.append((current_time, end_ts))
 
     # Align gaps to 1-minute segment boundaries (any minute containing a gap should be recovered)
@@ -1735,27 +1735,42 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
             codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-c:a", "copy"] if is_hevc else ["-c", "copy"]
 
             if output_path.exists() and output_path.stat().st_size > 0:
-                print(f"[recovery] [manual] [{stream_id}] File already exists on disk, skipping download: {filename}")
-                parts = Path(output_path).parts
-                relative_path = "/".join(parts[-3:])
-                async for insert_session in get_session():
-                    stmt_check = select(RecordingSegment).where(
-                        RecordingSegment.stream_id == stream_id,
-                        RecordingSegment.file_path == relative_path
-                    )
-                    res_check = await insert_session.execute(stmt_check)
-                    existing_seg = res_check.scalar_one_or_none()
-                    if not existing_seg:
-                        new_seg = RecordingSegment(
-                            stream_id=stream_id,
-                            file_path=relative_path,
-                            start_ts=temp_start,
-                            end_ts=temp_end
+                is_complete = False
+                try:
+                    dur = await get_file_duration_async(str(output_path), semaphore)
+                    if dur >= settings.segment_time_seconds - 5.0:
+                        is_complete = True
+                except Exception:
+                    pass
+
+                if is_complete:
+                    print(f"[recovery] [manual] [{stream_id}] File already exists and is complete, skipping download: {filename}")
+                    parts = Path(output_path).parts
+                    relative_path = "/".join(parts[-3:])
+                    async for insert_session in get_session():
+                        stmt_check = select(RecordingSegment).where(
+                            RecordingSegment.stream_id == stream_id,
+                            RecordingSegment.file_path == relative_path
                         )
-                        insert_session.add(new_seg)
-                        await insert_session.commit()
-                        print(f"[recovery] [manual] [{stream_id}] Indexed existing segment: {filename}")
-                return
+                        res_check = await insert_session.execute(stmt_check)
+                        existing_seg = res_check.scalar_one_or_none()
+                        if not existing_seg:
+                            new_seg = RecordingSegment(
+                                stream_id=stream_id,
+                                file_path=relative_path,
+                                start_ts=temp_start,
+                                end_ts=temp_end
+                            )
+                            insert_session.add(new_seg)
+                            await insert_session.commit()
+                            print(f"[recovery] [manual] [{stream_id}] Indexed existing segment: {filename}")
+                    return
+                else:
+                    print(f"[recovery] [manual] [{stream_id}] File exists but is incomplete on disk, deleting to re-download: {filename}")
+                    try:
+                        output_path.unlink()
+                    except Exception:
+                        pass
 
             async with semaphore:
                 print(f"[recovery] [manual] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {is_hevc})...")
