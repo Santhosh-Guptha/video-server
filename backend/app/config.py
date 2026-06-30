@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     enable_local_transcode: bool = False
 
     # ── SD Card On-Demand Retrieval policy ─────────────────────────────────────
-    enable_sd_card_on_demand: bool = False
+    enable_sd_card_on_demand: bool = True
     sd_card_on_demand_retention_seconds: int = 3600
 
     class Config:

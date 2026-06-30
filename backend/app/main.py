@@ -1083,6 +1083,8 @@ async def download_recording(
     if stream:
         stream_id = stream.stream_id
 
+    await sync_disk_recordings_to_db(stream_id, session)
+
     # 2. Query database for segments overlapping with this range
     stmt = (
         select(RecordingSegment)
@@ -1723,12 +1725,65 @@ async def hls_segment(
 # ----------------------------------------------------
 # Playback API Endpoints
 # ----------------------------------------------------
+async def sync_disk_recordings_to_db(stream_id: str, session: AsyncSession):
+    import glob
+    from datetime import datetime
+    stream_dir = Path(settings.recording_dir) / stream_id
+    if not stream_dir.exists():
+        return
+        
+    db_res = await session.execute(
+        select(RecordingSegment.file_path).where(RecordingSegment.stream_id == stream_id)
+    )
+    existing_paths = set(db_res.scalars().all())
+    
+    mp4_files = glob.glob(str(stream_dir / "**" / "*.mp4"), recursive=True)
+    new_segments = []
+    
+    for f in mp4_files:
+        p = Path(f)
+        parts = p.parts
+        rel_path = "/".join(parts[-3:])
+        
+        if rel_path in existing_paths:
+            continue
+            
+        name = p.stem
+        try:
+            time_parts = name.split("_")
+            if len(time_parts) >= 2:
+                dt_str = time_parts[0] + time_parts[1]
+                start_dt = datetime.strptime(dt_str, "%Y%m%d%H%M%S")
+                start_ts = start_dt.timestamp()
+                duration = 60.0
+                if len(time_parts) >= 3 and time_parts[2].isdigit():
+                    end_dt_str = time_parts[0] + time_parts[2]
+                    end_dt = datetime.strptime(end_dt_str, "%Y%m%d%H%M%S")
+                    duration = end_dt.timestamp() - start_ts
+                
+                new_seg = RecordingSegment(
+                    stream_id=stream_id,
+                    file_path=rel_path,
+                    start_ts=start_ts,
+                    end_ts=start_ts + duration
+                )
+                session.add(new_seg)
+                new_segments.append(new_seg)
+        except Exception as e:
+            print(f"[sync] Failed to parse filename {name}: {e}")
+            
+    if new_segments:
+        await session.commit()
+        print(f"[sync] Dynamically indexed {len(new_segments)} new files from disk for stream {stream_id}")
+
 @app.get("/api/playback/{stream_id}", response_model=list[RecordingSegmentOut])
 async def playback(stream_id: str, start_ts: float, end_ts: float, session: Annotated[AsyncSession, Depends(get_session)]):
     from .webrtc import resolve_stream_by_identifier
     stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
     if stream:
         stream_id = stream.stream_id
+
+    await sync_disk_recordings_to_db(stream_id, session)
 
     res = await session.execute(
         select(RecordingSegment)

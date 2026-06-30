@@ -9,5 +9,5 @@ stream_policy:
   playback_allow_mobile_fallback: false
   viewer_grace_seconds: 5
   stream_grace_seconds: 60
-  enable_sd_card_on_demand: false
+  enable_sd_card_on_demand: true
   sd_card_on_demand_retention_seconds: 3600
