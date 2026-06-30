@@ -2,7 +2,6 @@ import asyncio
 from sqlalchemy import select
 from ..db import get_session
 from ..models import CameraStream, Camera
-from ..services.mediamtx_service import mediamtx_service_client  # We'll define this or import from stream_manager
 from ..registries.camera_registry import CameraRegistry
 from ..config import settings
 
