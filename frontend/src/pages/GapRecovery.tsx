@@ -80,7 +80,12 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
       const start_ts = new Date(startTime).getTime() / 1000
       const end_ts = new Date(endTime).getTime() / 1000
       
-      const downloadUrl = `/api/recordings/sd-card/download?stream_id=${encodeURIComponent(selectedStreamId)}&start_ts=${start_ts}&end_ts=${end_ts}`
+      let downloadUrl = `/api/recordings/sd-card/download?stream_id=${encodeURIComponent(selectedStreamId)}&start_ts=${start_ts}&end_ts=${end_ts}`
+      
+      // Bypass Vite dev proxy in development to avoid socket timeouts
+      if (window.location.port === '5173') {
+        downloadUrl = `http://${window.location.hostname}:8005${downloadUrl}`
+      }
       
       // Trigger native browser download directly on the streaming endpoint
       const link = document.createElement('a')
