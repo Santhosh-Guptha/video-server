@@ -156,6 +156,88 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     return { start: wStart, end: wEnd, duration }
   }, [zoomLevel, currentAbsoluteTs, dayBoundaries, selectedDate])
 
+  const timeFrames = useMemo(() => {
+    if (!rawSegments || rawSegments.length === 0) return []
+    
+    const blocks: { start: number; end: number; label: string }[] = []
+    let currentBlock: { start: number; end: number } | null = null
+    
+    const sorted = [...rawSegments].sort((a, b) => a.start_ts - b.start_ts)
+    
+    for (const seg of sorted) {
+      if (!currentBlock) {
+        currentBlock = { start: seg.start_ts, end: seg.end_ts }
+      } else {
+        if (seg.start_ts - currentBlock.end <= 5) {
+          currentBlock.end = seg.end_ts
+        } else {
+          const dur = Math.round((currentBlock.end - currentBlock.start) / 60)
+          blocks.push({
+            start: currentBlock.start,
+            end: currentBlock.end,
+            label: `${new Date(currentBlock.start * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} - ${new Date(currentBlock.end * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} (${dur} min)`
+          })
+          currentBlock = { start: seg.start_ts, end: seg.end_ts }
+        }
+      }
+    }
+    if (currentBlock) {
+      const dur = Math.round((currentBlock.end - currentBlock.start) / 60)
+      blocks.push({
+        start: currentBlock.start,
+        end: currentBlock.end,
+        label: `${new Date(currentBlock.start * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} - ${new Date(currentBlock.end * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} (${dur} min)`
+      })
+    }
+    return blocks
+  }, [rawSegments])
+
+  const trimOverlay = useMemo(() => {
+    if (!selectedDate || !timelineWindow.start) return null
+    try {
+      const startParts = downloadStart.split(':')
+      const endParts = downloadEnd.split(':')
+      
+      const startH = parseInt(startParts[0]) || 0
+      const startM = parseInt(startParts[1]) || 0
+      const startS = parseInt(startParts[2]) || 0
+      
+      const endH = parseInt(endParts[0]) || 0
+      const endM = parseInt(endParts[1]) || 0
+      const endS = parseInt(endParts[2]) || 0
+      
+      const startD = new Date(`${selectedDate}T00:00:00`)
+      startD.setHours(startH, startM, startS)
+      const startTs = Math.floor(startD.getTime() / 1000)
+      
+      const endD = new Date(`${selectedDate}T00:00:00`)
+      endD.setHours(endH, endM, endS)
+      const endTs = Math.floor(endD.getTime() / 1000)
+      
+      if (startTs >= endTs) return null
+      
+      const overlapStart = Math.max(startTs, timelineWindow.start)
+      const overlapEnd = Math.min(endTs, timelineWindow.end)
+      if (overlapStart >= overlapEnd) return null
+      
+      const leftPct = ((overlapStart - timelineWindow.start) / timelineWindow.duration) * 100
+      const widthPct = ((overlapEnd - overlapStart) / timelineWindow.duration) * 100
+      
+      return { left: leftPct, width: widthPct }
+    } catch {
+      return null
+    }
+  }, [selectedDate, downloadStart, downloadEnd, timelineWindow])
+
+  function formatToTimeInputWithSeconds(ts: number) {
+    if (!ts) return '00:00:00'
+    const d = new Date(ts * 1000)
+    const hrs = String(d.getHours()).padStart(2, '0')
+    const mins = String(d.getMinutes()).padStart(2, '0')
+    const secs = String(d.getSeconds()).padStart(2, '0')
+    return `${hrs}:${mins}:${secs}`
+  }
+
   // Fetch timeline segments and coverage statistics
   async function loadTimelineData(targetTsToPlay?: number) {
     if (!streamId || !selectedDate) return
@@ -197,13 +279,22 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
 
   const handleDownload = () => {
     if (!streamId || !selectedDate) return
-    const startIso = `${selectedDate}T${downloadStart}:00`
-    const endIso = `${selectedDate}T${downloadEnd}:59`
+    
+    const normaliseTimeStr = (str: string, defaultSecs: string) => {
+      const parts = str.split(':')
+      if (parts.length === 2) return `${str}:${defaultSecs}`
+      if (parts.length === 1) return `${str}:00:${defaultSecs}`
+      return str
+    }
+    
+    const startIso = `${selectedDate}T${normaliseTimeStr(downloadStart, '00')}`
+    const endIso = `${selectedDate}T${normaliseTimeStr(downloadEnd, '59')}`
+    
     const url = `/api/recordings/download?stream_id=${encodeURIComponent(streamId)}&start_time=${encodeURIComponent(startIso)}&end_time=${encodeURIComponent(endIso)}`
     
     const a = document.createElement('a')
     a.href = url
-    a.download = `${streamId}_${selectedDate}_${downloadStart.replace(':', '')}_to_${downloadEnd.replace(':', '')}.mp4`
+    a.download = `${streamId}_${selectedDate}_${downloadStart.replaceAll(':', '')}_to_${downloadEnd.replaceAll(':', '')}.mp4`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -686,6 +777,43 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                   >
                     {loading ? <Loader2 className="spin" size={14} /> : 'Load Visual Logs'}
                   </button>
+
+                  {timeFrames.length > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="controlLabel" style={{ fontSize: '0.86rem', color: '#94a3b8' }}>Jump to Clip:</span>
+                      <select
+                        onChange={(e) => {
+                          const idx = parseInt(e.target.value)
+                          if (!isNaN(idx)) {
+                            const block = timeFrames[idx]
+                            seekToTimestamp(block.start)
+                            const startStr = formatToTimeInputWithSeconds(block.start)
+                            const endStr = formatToTimeInputWithSeconds(block.end)
+                            setDownloadStart(startStr)
+                            setDownloadEnd(endStr)
+                          }
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '12px',
+                          border: '1px solid rgba(148, 163, 184, 0.16)',
+                          background: 'rgba(15, 23, 42, 0.8)',
+                          color: '#fff',
+                          fontSize: '0.86rem',
+                          outline: 'none',
+                          cursor: 'pointer'
+                        }}
+                        defaultValue=""
+                      >
+                        <option value="" disabled>-- Select time range --</option>
+                        {timeFrames.map((block, idx) => (
+                          <option key={idx} value={idx}>
+                            {block.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 {/* Speed Controls */}
@@ -715,10 +843,12 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                 <span className="controlLabel" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#10b981', fontWeight: 600 }}>
                   <Film size={14} /> Export / Download Footage:
                 </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>From:</span>
                   <input
                     type="time"
+                    step="1"
                     value={downloadStart}
                     onChange={(e) => setDownloadStart(e.target.value)}
                     style={{
@@ -731,11 +861,32 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                       outline: 'none'
                     }}
                   />
+                  <button
+                    className="secondaryBtn"
+                    onClick={() => {
+                      if (currentAbsoluteTs) {
+                        setDownloadStart(formatToTimeInputWithSeconds(currentAbsoluteTs))
+                      }
+                    }}
+                    style={{
+                      borderRadius: '6px',
+                      padding: '4px 8px',
+                      fontSize: '0.74rem',
+                      background: 'rgba(59, 130, 246, 0.15)',
+                      color: '#60a5fa',
+                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Set Start
+                  </button>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>To:</span>
                   <input
                     type="time"
+                    step="1"
                     value={downloadEnd}
                     onChange={(e) => setDownloadEnd(e.target.value)}
                     style={{
@@ -748,7 +899,27 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                       outline: 'none'
                     }}
                   />
+                  <button
+                    className="secondaryBtn"
+                    onClick={() => {
+                      if (currentAbsoluteTs) {
+                        setDownloadEnd(formatToTimeInputWithSeconds(currentAbsoluteTs))
+                      }
+                    }}
+                    style={{
+                      borderRadius: '6px',
+                      padding: '4px 8px',
+                      fontSize: '0.74rem',
+                      background: 'rgba(59, 130, 246, 0.15)',
+                      color: '#60a5fa',
+                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Set End
+                  </button>
                 </div>
+                
                 <button
                   className="primaryBtn"
                   onClick={handleDownload}
@@ -757,7 +928,8 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                     padding: '7px 14px',
                     fontSize: '0.78rem',
                     background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    borderColor: 'rgba(16, 185, 129, 0.3)'
+                    borderColor: 'rgba(16, 185, 129, 0.3)',
+                    cursor: 'pointer'
                   }}
                 >
                   Download Merged MP4
@@ -974,6 +1146,23 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                         )
                       })}
 
+                      {/* Trim range visual highlight */}
+                      {trimOverlay && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: `${trimOverlay.left}%`,
+                            width: `${trimOverlay.width}%`,
+                            height: '100%',
+                            background: 'rgba(59, 130, 246, 0.25)',
+                            borderLeft: '2px dashed #3b82f6',
+                            borderRight: '2px dashed #3b82f6',
+                            pointerEvents: 'none',
+                            zIndex: 4
+                          }}
+                        />
+                      )}
+                      
                       {/* Playhead marker */}
                       <div
                         className="timelinePlayhead"
