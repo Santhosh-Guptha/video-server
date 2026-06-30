@@ -58,41 +58,24 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
     if (!selectedCamera) return
     setIsOnDemandDownloading(true)
     setOnDemandError(null)
-    setOnDemandStatus('Connecting to camera SD card and downloading footage...')
+    setOnDemandStatus('Preparing stream... Your download will begin shortly.')
     
     try {
       const start_ts = new Date(startTime).getTime() / 1000
       const end_ts = new Date(endTime).getTime() / 1000
       
-      const payload = {
-        stream_id: selectedCamera.stream_id,
-        start_ts,
-        end_ts
-      }
+      const downloadUrl = `/api/recordings/sd-card/download?stream_id=${encodeURIComponent(selectedCamera.stream_id)}&start_ts=${start_ts}&end_ts=${end_ts}`
       
-      const res = await fetch('/api/recordings/sd-card/retrieve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-      
-      if (!res.ok) {
-        const errData = await res.json()
-        throw new Error(errData.detail || 'Failed to download footage from camera SD card.')
-      }
-      
-      const data = await res.json() as { download_url: string; filename: string }
-      setOnDemandStatus('Download ready! Starting download...')
-      
-      // Trigger native browser download
+      // Trigger native browser download directly on the streaming endpoint
       const link = document.createElement('a')
-      link.href = data.download_url
-      link.setAttribute('download', data.filename)
+      link.href = downloadUrl
+      link.setAttribute('download', '')
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
       
-      setTimeout(() => setOnDemandStatus(null), 5000)
+      setOnDemandStatus('Download started! Real-time download progress is active in your browser.')
+      setTimeout(() => setOnDemandStatus(null), 8000)
     } catch (e: any) {
       console.error(e)
       setOnDemandError(e.message || 'An error occurred during SD card download.')
