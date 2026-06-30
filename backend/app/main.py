@@ -610,6 +610,18 @@ async def record_segment_complete(
         await session.commit()
         print(f"[webhook] Indexed segment: {relative_path} (Duration: {duration}s)")
         await PlaybackTimelineService.invalidate_cache_for_timestamp(payload.stream_id, start_ts)
+        
+        # Auto-recovery trigger for incomplete live recording segments
+        seg_time = settings.segment_time_seconds
+        if duration < seg_time - 5.0:
+            block_start = (start_ts // seg_time) * seg_time
+            block_end = block_start + seg_time
+            if stream.stream_url and stream.stream_url.strip().startswith(("rtsp://", "rtsps://")):
+                print(f"[webhook] [{payload.stream_id}] Live recording segment is short ({duration}s < {seg_time}s). Triggering immediate background gap recovery for block: {block_start} to {block_end}")
+                asyncio.create_task(run_manual_recovery(payload.stream_id, [{
+                    "start_ts": block_start,
+                    "end_ts": block_end
+                }]))
     except IntegrityError:
         await session.rollback()
         print(f"[webhook] Duplicate segment ignored: {relative_path}")
@@ -1659,6 +1671,32 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                                 insert_session.add(new_seg)
                                 await insert_session.commit()
                                 print(f"[recovery] [manual] [{stream_id}] Indexed segment: {filename}")
+                            
+                            # Consolidate timeline: delete overlapping short segments in this minute block
+                            stmt_overlap = select(RecordingSegment).where(
+                                RecordingSegment.stream_id == stream_id,
+                                RecordingSegment.start_ts >= temp_start,
+                                RecordingSegment.start_ts < temp_end,
+                                RecordingSegment.file_path != relative_path
+                            )
+                            res_overlap = await insert_session.execute(stmt_overlap)
+                            overlapping_segs = list(res_overlap.scalars().all())
+                            
+                            for ov_seg in overlapping_segs:
+                                ov_path = Path(settings.recording_dir) / ov_seg.file_path
+                                try:
+                                    if ov_path.exists():
+                                        ov_size = ov_path.stat().st_size
+                                        if ov_size < 2 * 1024 * 1024:
+                                            print(f"[recovery] [manual] [{stream_id}] Consolidating timeline: deleting overlapping short segment file {ov_seg.file_path}")
+                                            ov_path.unlink()
+                                except Exception as delete_err:
+                                    print(f"[recovery] [manual] [{stream_id}] Failed to delete consolidated file: {delete_err}")
+                                await insert_session.delete(ov_seg)
+                            
+                            if overlapping_segs:
+                                await insert_session.commit()
+                                print(f"[recovery] [manual] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
                     else:
                         print(f"[recovery] [manual] [{stream_id}] FFmpeg exit code {proc.returncode} for: {filename}")
                         if output_path.exists():
