@@ -48,6 +48,10 @@ class StreamState(str, enum.Enum):
     OFFLINE = "OFFLINE"
     FAILED = "FAILED"
     DISABLED = "DISABLED"
+    WARM = "WARM"
+    IDLE = "IDLE"
+    MAINTENANCE = "MAINTENANCE"
+    ERROR = "ERROR"
 
 class ProfileType(str, enum.Enum):
     MAIN = "MAIN"
