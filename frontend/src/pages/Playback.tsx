@@ -294,7 +294,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     
     const a = document.createElement('a')
     a.href = url
-    a.download = `${streamId}_${selectedDate}_${downloadStart.replaceAll(':', '')}_to_${downloadEnd.replaceAll(':', '')}.mp4`
+    a.download = `${streamId}_${selectedDate}_${downloadStart.replace(/:/g, '')}_to_${downloadEnd.replace(/:/g, '')}.mp4`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
