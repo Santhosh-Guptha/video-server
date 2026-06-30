@@ -98,7 +98,7 @@ if [ -f "$BACKEND_DIR/.env" ]; then
     EXISTING_TURN_CRED=$(grep -E "^TURN_SERVER_CREDENTIAL=" "$BACKEND_DIR/.env" | cut -d'=' -f2-)
 fi
 if [ -z "$EXISTING_UPSTREAM" ]; then
-    EXISTING_UPSTREAM="https://uat1.iviscloud.net/api/cameras/camera-videoserver"
+    EXISTING_UPSTREAM="https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver"
 fi
 if [ -z "$EXISTING_TURN_URL" ]; then
     PRIMARY_IP=$(hostname -I | awk '{print $1}')
