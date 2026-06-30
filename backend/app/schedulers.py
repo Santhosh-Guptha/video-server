@@ -399,7 +399,7 @@ async def camera_gap_recovery_loop():
                 day_str = dt_start.strftime("%Y-%m-%d")
                 stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
                 stream_record_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{dt_start.strftime('%Y%m%d_%H%M')}_recovered.mp4"
+                filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_recovered.mp4"
                 output_path = stream_record_dir / filename
 
                 # Pre-check file existence and completeness
@@ -501,9 +501,9 @@ async def camera_gap_recovery_loop():
                                         ov_path = Path(settings.recording_dir) / ov_seg.file_path
                                         try:
                                             if ov_path.exists():
-                                                ov_size = ov_path.stat().st_size
-                                                if ov_size < 2 * 1024 * 1024:
-                                                    print(f"[recovery] [{stream_id}] Consolidating timeline: deleting overlapping short segment file {ov_seg.file_path}")
+                                                ov_dur = ov_seg.end_ts - ov_seg.start_ts
+                                                if ov_dur < settings.segment_time_seconds - 5.0:
+                                                    print(f"[recovery] [{stream_id}] Consolidating timeline: deleting overlapping short segment file {ov_seg.file_path} (duration {ov_dur}s)")
                                                     ov_path.unlink()
                                         except Exception as delete_err:
                                             print(f"[recovery] [{stream_id}] Failed to delete consolidated file: {delete_err}")
