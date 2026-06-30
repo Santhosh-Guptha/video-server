@@ -70,19 +70,29 @@ class UNVProvider(PlaybackRecoveryProvider):
 
 class HikvisionProvider(PlaybackRecoveryProvider):
     def build_playback_url(self, stream, start_ts: float, end_ts: float) -> str:
-        raise NotImplementedError("Hikvision playback recovery is not implemented yet")
+        base_rtsp = stream.stream_url.strip()
+        dt_start = datetime.fromtimestamp(start_ts)
+        dt_end = datetime.fromtimestamp(end_ts)
+        start_iso = dt_start.strftime("%Y%m%dT%H%M%SZ")
+        end_iso = dt_end.strftime("%Y%m%dT%H%M%SZ")
+        sep = "&" if "?" in base_rtsp else "?"
+        return f"{base_rtsp}{sep}starttime={start_iso}&endtime={end_iso}"
 
 class DahuaProvider(PlaybackRecoveryProvider):
     def build_playback_url(self, stream, start_ts: float, end_ts: float) -> str:
-        raise NotImplementedError("Dahua playback recovery is not implemented yet")
+        base_rtsp = stream.stream_url.strip()
+        dt_start = datetime.fromtimestamp(start_ts)
+        dt_end = datetime.fromtimestamp(end_ts)
+        start_time_local = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
+        end_time_local = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
+        sep = "&" if "?" in base_rtsp else "?"
+        return f"{base_rtsp}{sep}starttime={start_time_local}&endtime={end_time_local}"
 
-class AxisProvider(PlaybackRecoveryProvider):
-    def build_playback_url(self, stream, start_ts: float, end_ts: float) -> str:
-        raise NotImplementedError("Axis playback recovery is not implemented yet")
+class AxisProvider(GenericProvider):
+    pass
 
-class HanwhaProvider(PlaybackRecoveryProvider):
-    def build_playback_url(self, stream, start_ts: float, end_ts: float) -> str:
-        raise NotImplementedError("Hanwha playback recovery is not implemented yet")
+class HanwhaProvider(GenericProvider):
+    pass
 
 
 class EdgePlaybackProvider:

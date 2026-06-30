@@ -1646,24 +1646,27 @@ async def get_recording_gaps(
         if gap_duration >= 5.0:
             gaps.append((current_time, end_ts))
 
-    # Align gaps to 1-minute segment boundaries
+    # Align gaps to 1-minute segment boundaries (any minute containing a gap should be recovered)
     aligned_gaps = []
     seg_time = settings.segment_time_seconds
+    seen_starts = set()
     for g_start, g_end in gaps:
-        temp_start = (g_start // seg_time) * seg_time
-        while temp_start < g_end:
-            next_end = temp_start + seg_time
-            if next_end <= g_end:
-                dt_start = datetime.fromtimestamp(temp_start)
-                dt_end = datetime.fromtimestamp(next_end)
-                aligned_gaps.append({
-                    "start_ts": temp_start,
-                    "end_ts": next_end,
-                    "duration": seg_time,
-                    "formatted_start": dt_start.strftime("%Y-%m-%d %H:%M:%S"),
-                    "formatted_end": dt_end.strftime("%Y-%m-%d %H:%M:%S")
-                })
-            temp_start += seg_time
+        start_minute = int((g_start // seg_time) * seg_time)
+        end_minute = int((g_end // seg_time) * seg_time)
+        for m_start in range(start_minute, end_minute + int(seg_time), int(seg_time)):
+            if m_start in seen_starts:
+                continue
+            seen_starts.add(m_start)
+            m_end = m_start + seg_time
+            dt_start = datetime.fromtimestamp(m_start)
+            dt_end = datetime.fromtimestamp(m_end)
+            aligned_gaps.append({
+                "start_ts": m_start,
+                "end_ts": m_end,
+                "duration": seg_time,
+                "formatted_start": dt_start.strftime("%Y-%m-%d %H:%M:%S"),
+                "formatted_end": dt_end.strftime("%Y-%m-%d %H:%M:%S")
+            })
 
     return aligned_gaps
 
