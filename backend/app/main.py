@@ -5,7 +5,7 @@ import logging
 http.client._MAXHEADERS = 100000
 from pathlib import Path
 from typing import Annotated, Optional
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select, delete, text, or_
@@ -1505,6 +1505,277 @@ async def get_playback_gaps(
         return timeline["gaps"]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# ----------------------------------------------------
+# Manual Recording Gap Scanning & Recovery Endpoints
+# ----------------------------------------------------
+@app.get("/api/recordings/{stream_id}/gaps")
+async def get_recording_gaps(
+    stream_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    start_time: float | None = None,
+    end_time: float | None = None
+):
+    import re
+    from datetime import datetime
+    now = time.time()
+    start_ts = start_time if start_time is not None else (now - 24 * 3600)
+    end_ts = end_time if end_time is not None else now
+
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
+    if not stream:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+
+    resolved_stream_id = stream.stream_id
+    stream_dir = Path(settings.recording_dir) / resolved_stream_id
+    segments = []
+    
+    if stream_dir.exists():
+        for mp4 in stream_dir.rglob("*.mp4"):
+            name = mp4.name
+            try:
+                if mp4.stat().st_size == 0:
+                    continue
+            except Exception:
+                continue
+
+            match = re.search(r"(\d{8})_(\d{6})", name)
+            if match:
+                try:
+                    date_str, time_str = match.groups()
+                    dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                    f_start = dt.timestamp()
+                    f_end = f_start + settings.segment_time_seconds
+                    segments.append((f_start, f_end))
+                except Exception:
+                    pass
+            else:
+                match_min = re.search(r"(\d{8})_(\d{4})", name)
+                if match_min:
+                    try:
+                        date_str, time_str = match_min.groups()
+                        dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+                        f_start = dt.timestamp()
+                        f_end = f_start + settings.segment_time_seconds
+                        segments.append((f_start, f_end))
+                    except Exception:
+                        pass
+
+    # Sort segments by start time
+    segments.sort(key=lambda x: x[0])
+
+    # Filter segments to the requested time window and clip them
+    active_segs = []
+    for s_start, s_end in segments:
+        if s_end > start_ts and s_start < end_ts:
+            active_segs.append((max(s_start, start_ts), min(s_end, end_ts)))
+
+    # Detect gaps between files
+    gaps = []
+    current_time = start_ts
+    
+    for s_start, s_end in active_segs:
+        if s_start > current_time:
+            gap_duration = s_start - current_time
+            if gap_duration >= 5.0:
+                gaps.append((current_time, s_start))
+        current_time = max(current_time, s_end)
+        
+    if current_time < end_ts:
+        gap_duration = end_ts - current_time
+        if gap_duration >= 5.0:
+            gaps.append((current_time, end_ts))
+
+    # Align gaps to 1-minute segment boundaries
+    aligned_gaps = []
+    seg_time = settings.segment_time_seconds
+    for g_start, g_end in gaps:
+        temp_start = (g_start // seg_time) * seg_time
+        while temp_start < g_end:
+            next_end = temp_start + seg_time
+            if next_end <= g_end:
+                dt_start = datetime.fromtimestamp(temp_start)
+                dt_end = datetime.fromtimestamp(next_end)
+                aligned_gaps.append({
+                    "start_ts": temp_start,
+                    "end_ts": next_end,
+                    "duration": seg_time,
+                    "formatted_start": dt_start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "formatted_end": dt_end.strftime("%Y-%m-%d %H:%M:%S")
+                })
+            temp_start += seg_time
+
+    return aligned_gaps
+
+async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
+    print(f"[recovery] [manual] Starting manual recovery task for {stream_id} ({len(gap_chunks)} chunks)...")
+    from .db import get_session
+    from .models import CameraStream, Camera, RecordingSegment
+    from .providers import get_playback_recovery_provider
+    from datetime import datetime
+    import re
+    
+    async for session in get_session():
+        res = await session.execute(
+            select(CameraStream)
+            .options(selectinload(CameraStream.camera))
+            .where(CameraStream.stream_id == stream_id)
+        )
+        stream = res.scalar_one_or_none()
+        if not stream:
+            print(f"[recovery] [manual] Stream {stream_id} not found in database inside background task.")
+            return
+
+        semaphore = asyncio.Semaphore(3)
+
+        async def download_chunk(chunk):
+            temp_start = chunk["start_ts"]
+            temp_end = chunk["end_ts"]
+            
+            make_val = stream.camera.make if stream.camera else None
+            provider = get_playback_recovery_provider(make_val)
+            recovery_url = provider.build_playback_url(stream, temp_start, temp_end)
+            
+            dt_start = datetime.fromtimestamp(temp_start)
+            day_str = dt_start.strftime("%Y-%m-%d")
+            stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
+            stream_record_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{dt_start.strftime('%Y%m%d_%H%M')}_recovered.mp4"
+            output_path = stream_record_dir / filename
+
+            is_hevc = stream.codec and stream.codec.lower() in ("hevc", "h265")
+
+            if not is_hevc:
+                try:
+                    cmd_probe = [
+                        "ffprobe", "-v", "error",
+                        "-rtsp_transport", "tcp",
+                        "-select_streams", "v:0",
+                        "-show_entries", "stream=codec_name",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        recovery_url
+                    ]
+                    proc_probe = await asyncio.create_subprocess_exec(
+                        *cmd_probe,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                    if proc_probe.returncode == 0:
+                        codec_name = stdout_probe.decode().strip()
+                        if codec_name.lower() in ("hevc", "h265"):
+                            is_hevc = True
+                            print(f"[recovery] [manual] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
+                except Exception as probe_err:
+                    print(f"[recovery] [manual] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
+
+            codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-c:a", "copy"] if is_hevc else ["-c", "copy"]
+
+            if output_path.exists() and output_path.stat().st_size > 0:
+                print(f"[recovery] [manual] [{stream_id}] File already exists on disk, skipping download: {filename}")
+                parts = Path(output_path).parts
+                relative_path = "/".join(parts[-3:])
+                async for insert_session in get_session():
+                    stmt_check = select(RecordingSegment).where(
+                        RecordingSegment.stream_id == stream_id,
+                        RecordingSegment.file_path == relative_path
+                    )
+                    res_check = await insert_session.execute(stmt_check)
+                    existing_seg = res_check.scalar_one_or_none()
+                    if not existing_seg:
+                        new_seg = RecordingSegment(
+                            stream_id=stream_id,
+                            file_path=relative_path,
+                            start_ts=temp_start,
+                            end_ts=temp_end
+                        )
+                        insert_session.add(new_seg)
+                        await insert_session.commit()
+                        print(f"[recovery] [manual] [{stream_id}] Indexed existing segment: {filename}")
+                return
+
+            async with semaphore:
+                print(f"[recovery] [manual] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {is_hevc})...")
+                cmd = [
+                    settings.ffmpeg_path,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel", "warning",
+                    "-rtsp_transport", "tcp",
+                    "-stimeout", "15000000",
+                    "-i", recovery_url,
+                    "-t", str(settings.segment_time_seconds),
+                ] + codec_args + ["-movflags", "+faststart", str(output_path)]
+
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
+                    if proc.returncode == 0:
+                        print(f"[recovery] [manual] [{stream_id}] Successfully recovered: {filename}")
+                        parts = Path(output_path).parts
+                        relative_path = "/".join(parts[-3:])
+                        
+                        async for insert_session in get_session():
+                            stmt_check = select(RecordingSegment).where(
+                                RecordingSegment.stream_id == stream_id,
+                                RecordingSegment.file_path == relative_path
+                            )
+                            res_check = await insert_session.execute(stmt_check)
+                            existing_seg = res_check.scalar_one_or_none()
+                            if not existing_seg:
+                                new_seg = RecordingSegment(
+                                    stream_id=stream_id,
+                                    file_path=relative_path,
+                                    start_ts=temp_start,
+                                    end_ts=temp_end
+                                )
+                                insert_session.add(new_seg)
+                                await insert_session.commit()
+                                print(f"[recovery] [manual] [{stream_id}] Indexed segment: {filename}")
+                    else:
+                        print(f"[recovery] [manual] [{stream_id}] FFmpeg exit code {proc.returncode} for: {filename}")
+                        if output_path.exists():
+                            output_path.unlink()
+                except asyncio.TimeoutError:
+                    print(f"[recovery] [manual] [{stream_id}] Timeout downloading: {filename}")
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    if output_path.exists():
+                        output_path.unlink()
+                except Exception as e:
+                    print(f"[recovery] [manual] [{stream_id}] Error running FFmpeg: {e}")
+                    if output_path.exists():
+                        output_path.unlink()
+
+        for chunk in gap_chunks:
+            await download_chunk(chunk)
+
+@app.post("/api/recordings/{stream_id}/recover")
+async def recover_recording_gaps(
+    stream_id: str,
+    payload: list[dict],
+    background_tasks: BackgroundTasks,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(stream_id, session)
+    if not stream:
+        raise HTTPException(status_code=404, detail="Camera stream not found")
+
+    background_tasks.add_task(
+        run_manual_recovery,
+        stream.stream_id,
+        payload
+    )
+    return {"status": "started", "queued_count": len(payload)}
+
 
 @app.get("/api/playback/{stream_id}/summary")
 async def playback_summary(
