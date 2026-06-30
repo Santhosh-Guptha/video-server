@@ -794,13 +794,15 @@ async def download_sd_card_stream(
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL
+            stderr=asyncio.subprocess.PIPE
         )
+        bytes_sent = 0
         try:
             while True:
                 chunk = await process.stdout.read(262144) # Read chunks of 256KB
                 if not chunk:
                     break
+                bytes_sent += len(chunk)
                 yield chunk
         except asyncio.CancelledError:
             print("[sd_card] Streaming request cancelled by client browser.")
@@ -809,6 +811,17 @@ async def download_sd_card_stream(
             except Exception:
                 pass
         finally:
+            # Read and log any stderr from ffmpeg
+            try:
+                stderr_data = await process.stderr.read()
+                if stderr_data:
+                    stderr_text = stderr_data.decode(errors='replace')[-2000:]
+                    if bytes_sent == 0:
+                        print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
+                    else:
+                        print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
+            except Exception:
+                pass
             try:
                 process.terminate()
                 await process.wait()
