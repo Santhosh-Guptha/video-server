@@ -730,158 +730,168 @@ async def recording_recovery_loop():
                 print("[indexer] Recovery scanner loop error:", e)
 
 
-class SDCardRetrievePayload(BaseModel):
-    stream_id: str
-    start_ts: float
-    end_ts: float
-
-@app.post("/api/recordings/sd-card/retrieve")
-async def retrieve_sd_card_recording(
-    payload: SDCardRetrievePayload,
+@app.get("/api/recordings/sd-card/download")
+async def download_sd_card_stream(
+    stream_id: str,
+    start_ts: float,
+    end_ts: float,
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
-    import uuid
+    from fastapi.responses import StreamingResponse
     from pathlib import Path
+    import tempfile
+    import os
     
     # 1. Enforce feature enablement check
     if not settings.enable_sd_card_on_demand:
         raise HTTPException(
             status_code=403, 
-            detail="SD Card On-Demand Retrieval is disabled in backend configurations."
+            detail="SD Card On-Demand Retrieval is disabled in configurations."
         )
         
     # 2. Resolve stream and camera details
     from .webrtc import resolve_stream_by_identifier
-    stream = await resolve_stream_by_identifier(payload.stream_id, session)
+    stream = await resolve_stream_by_identifier(stream_id, session)
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
         
     from sqlalchemy import select
-    from .models import Camera
+    from .models import Camera, RecordingSegment
     stmt = select(Camera).where(Camera.id == stream.camera_id)
     camera = (await session.execute(stmt)).scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera details not found for stream")
-        
-    # 3. Format dynamic replay RTSP URL
-    from .providers import get_playback_recovery_provider
-    try:
-        provider = get_playback_recovery_provider(camera.make)
-        rtsp_replay_url = provider.build_playback_url(stream, payload.start_ts, payload.end_ts)
-        print(f"[sd_card] Formatted replay RTSP URL: {rtsp_replay_url}")
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Failed to generate RTSP playback URL: {e}"
-        )
-        
-    # 4. Prepare temporary output directory
-    temp_dir = Path("./data/on_demand_temp")
-    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # 3. Check if we already have the files locally
+    stmt_seg = select(RecordingSegment).where(
+        RecordingSegment.stream_id == stream_id,
+        RecordingSegment.end_ts >= start_ts,
+        RecordingSegment.start_ts <= end_ts
+    ).order_by(RecordingSegment.start_ts.asc())
     
-    file_id = str(uuid.uuid4())
-    output_filename = f"{file_id}.mp4"
-    output_filepath = temp_dir / output_filename
+    local_segments = (await session.execute(stmt_seg)).scalars().all()
     
-    # 5. Spawn FFmpeg to pull segment from camera's SD card
-    # We copy the stream payload directly to avoid local CPU transcoding overhead
-    cmd = [
-        settings.ffmpeg_path,
-        "-rtsp_transport", "tcp",
-        "-i", rtsp_replay_url,
-        "-c", "copy",
-        "-y",
-        str(output_filepath)
-    ]
+    valid_local_files = []
+    total_local_duration = 0.0
+    for seg in local_segments:
+        abs_path = Path(settings.recording_dir) / seg.file_path
+        if abs_path.exists():
+            overlap_start = max(start_ts, seg.start_ts)
+            overlap_end = min(end_ts, seg.end_ts)
+            if overlap_end > overlap_start:
+                total_local_duration += (overlap_end - overlap_start)
+                valid_local_files.append(str(abs_path))
+                
+    requested_duration = end_ts - start_ts
+    use_local = len(valid_local_files) > 0 and (total_local_duration / requested_duration >= 0.95)
     
-    print(f"[sd_card] Executing ffmpeg to retrieve footage: {' '.join(cmd)}")
-    
-    try:
+    start_dt = datetime.fromtimestamp(start_ts)
+    friendly_filename = f"{camera.name.replace(' ', '_')}_{start_dt.strftime('%Y%m%d_%H%M%S')}_playback.mp4"
+
+    async def ffmpeg_stream_generator(cmd, temp_file_to_clean=None):
+        print(f"[sd_card] Launching streaming ffmpeg command: {' '.join(cmd)}")
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.DEVNULL
         )
-        
-        # Limit the ffmpeg process to a 90-second timeout to prevent locking if camera is dead
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=90.0)
-        except asyncio.TimeoutError:
+            while True:
+                chunk = await process.stdout.read(262144) # Read chunks of 256KB
+                if not chunk:
+                    break
+                yield chunk
+        except asyncio.CancelledError:
+            print("[sd_card] Streaming request cancelled by client browser.")
             try:
                 process.kill()
             except Exception:
                 pass
-            raise HTTPException(
-                status_code=504, 
-                detail="Timeout waiting for camera SD card streaming response."
-            )
-            
-        if process.returncode != 0:
-            err_log = stderr.decode('utf-8', errors='replace')
-            print(f"[sd_card] ffmpeg retrieval failed (code {process.returncode}):\n{err_log}")
-            raise HTTPException(
-                status_code=502, 
-                detail=f"Camera SD card download failed: {err_log[-200:]}"
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[sd_card] Error downloading footage: {e}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Failed to retrieve camera footage: {e}"
-        )
-        
-    # Verify file was written and is not empty
-    if not output_filepath.exists() or output_filepath.stat().st_size == 0:
-        raise HTTPException(
-            status_code=502, 
-            detail="Retrieved file was empty or not written successfully by media encoder."
-        )
-        
-    start_dt = datetime.fromtimestamp(payload.start_ts)
-    friendly_name = f"{camera.name.replace(' ', '_')}_{start_dt.strftime('%Y%m%d_%H%M%S')}_sdcard.mp4"
-    
-    return {
-        "file_id": file_id,
-        "filename": friendly_name,
-        "download_url": f"/api/recordings/sd-card/download/{file_id}"
-    }
+        finally:
+            try:
+                process.terminate()
+                await process.wait()
+            except Exception:
+                pass
+            if temp_file_to_clean and os.path.exists(temp_file_to_clean):
+                try:
+                    os.remove(temp_file_to_clean)
+                except Exception:
+                    pass
 
-@app.get("/api/recordings/sd-card/download/{file_id}")
-async def download_sd_card_file(
-    file_id: str,
-    background_tasks: BackgroundTasks,
-    session: Annotated[AsyncSession, Depends(get_session)]
-):
-    from fastapi.responses import FileResponse
-    import os
-    
-    if not settings.enable_sd_card_on_demand:
-        raise HTTPException(status_code=403, detail="SD Card On-Demand Retrieval is disabled")
-        
-    temp_dir = Path("./data/on_demand_temp")
-    filepath = temp_dir / f"{file_id}.mp4"
-    
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail="Requested file has expired or does not exist")
-        
-    # Schedule absolute deletion of the temporary file after download completes
-    def remove_file(path: str):
+    # CASE A: Use local recordings if available
+    if use_local:
+        print(f"[sd_card] Found local footage for range ({total_local_duration:.1f}s / {requested_duration:.1f}s). Serving locally.")
+        if len(valid_local_files) == 1:
+            cmd = [
+                settings.ffmpeg_path,
+                "-i", valid_local_files[0],
+                "-c", "copy",
+                "-f", "mp4",
+                "-movflags", "frag_keyframe+empty_moov",
+                "pipe:1"
+            ]
+            return StreamingResponse(
+                ffmpeg_stream_generator(cmd),
+                media_type="video/mp4",
+                headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
+            )
+        else:
+            fd, temp_txt_path = tempfile.mkstemp(suffix=".txt")
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    for path in valid_local_files:
+                        escaped_path = path.replace("'", "'\\''")
+                        f.write(f"file '{escaped_path}'\n")
+                
+                cmd = [
+                    settings.ffmpeg_path,
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", temp_txt_path,
+                    "-c", "copy",
+                    "-f", "mp4",
+                    "-movflags", "frag_keyframe+empty_moov",
+                    "pipe:1"
+                ]
+                return StreamingResponse(
+                    ffmpeg_stream_generator(cmd, temp_txt_path),
+                    media_type="video/mp4",
+                    headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
+                )
+            except Exception as e:
+                if os.path.exists(temp_txt_path):
+                    os.remove(temp_txt_path)
+                raise HTTPException(status_code=500, detail=f"Failed to merge local video segments: {e}")
+
+    # CASE B: Retrieve from Camera SD card
+    else:
+        print(f"[sd_card] Local footage not fully available. Fetching from camera SD card.")
+        from .providers import get_playback_recovery_provider
         try:
-            os.remove(path)
-            print(f"[sd_card] Cleaned up temporary download file: {path}")
+            provider = get_playback_recovery_provider(camera.make)
+            rtsp_replay_url = provider.build_playback_url(stream, start_ts, end_ts)
+            print(f"[sd_card] Streaming from SD Card RTSP URL: {rtsp_replay_url}")
         except Exception as e:
-            print(f"[sd_card] Error deleting temporary file: {e}")
-            
-    background_tasks.add_task(remove_file, str(filepath))
-    
-    return FileResponse(
-        str(filepath), 
-        media_type="video/mp4", 
-        filename=f"sdcard_playback_{file_id[:8]}.mp4"
-    )
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to generate RTSP playback URL: {e}"
+            )
+
+        cmd = [
+            settings.ffmpeg_path,
+            "-rtsp_transport", "tcp",
+            "-i", rtsp_replay_url,
+            "-c", "copy",
+            "-f", "mp4",
+            "-movflags", "frag_keyframe+empty_moov",
+            "pipe:1"
+        ]
+        return StreamingResponse(
+            ffmpeg_stream_generator(cmd),
+            media_type="video/mp4",
+            headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
+        )
 
 
 @app.get("/api/recordings/recovered-stats")
