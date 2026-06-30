@@ -82,31 +82,44 @@ async def index_recordings(session, recording_dir):
         if stream_id not in registered_streams:
             continue
         
-        match = re.search(r"(\d{8})_(\d{6})", item["name"])
-        if match:
+        # Try dual-timestamp format first: YYYYMMDD_HHMMSS_HHMMSS
+        match_dual = re.search(r"(\d{8})_(\d{6})_(\d{6})", item["name"])
+        if match_dual:
             try:
-                date_str, time_str = match.groups()
-                dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
-                start_ts = dt.timestamp()
-                end_ts = start_ts + settings.segment_time_seconds
+                date_str, start_time_str, end_time_str = match_dual.groups()
+                dt_start = datetime.strptime(f"{date_str}_{start_time_str}", "%Y%m%d_%H%M%S")
+                dt_end = datetime.strptime(f"{date_str}_{end_time_str}", "%Y%m%d_%H%M%S")
+                start_ts = dt_start.timestamp()
+                end_ts = dt_end.timestamp()
             except Exception:
                 end_ts = item["mtime"]
                 start_ts = end_ts - settings.segment_time_seconds
         else:
-            # Try 4-digit minutes format
-            match_min = re.search(r"(\d{8})_(\d{4})", item["name"])
-            if match_min:
+            match = re.search(r"(\d{8})_(\d{6})", item["name"])
+            if match:
                 try:
-                    date_str, time_str = match_min.groups()
-                    dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+                    date_str, time_str = match.groups()
+                    dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
                     start_ts = dt.timestamp()
                     end_ts = start_ts + settings.segment_time_seconds
                 except Exception:
                     end_ts = item["mtime"]
                     start_ts = end_ts - settings.segment_time_seconds
             else:
-                end_ts = item["mtime"]
-                start_ts = end_ts - settings.segment_time_seconds
+                # Try 4-digit minutes format
+                match_min = re.search(r"(\d{8})_(\d{4})", item["name"])
+                if match_min:
+                    try:
+                        date_str, time_str = match_min.groups()
+                        dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+                        start_ts = dt.timestamp()
+                        end_ts = start_ts + settings.segment_time_seconds
+                    except Exception:
+                        end_ts = item["mtime"]
+                        start_ts = end_ts - settings.segment_time_seconds
+                else:
+                    end_ts = item["mtime"]
+                    start_ts = end_ts - settings.segment_time_seconds
 
         session.add(
             RecordingSegment(
