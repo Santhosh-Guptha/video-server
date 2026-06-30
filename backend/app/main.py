@@ -756,7 +756,10 @@ async def retrieve_sd_card_recording(
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
         
-    camera = stream.camera
+    from sqlalchemy import select
+    from .models import Camera
+    stmt = select(Camera).where(Camera.id == stream.camera_id)
+    camera = (await session.execute(stmt)).scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera details not found for stream")
         
