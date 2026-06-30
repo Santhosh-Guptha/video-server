@@ -184,17 +184,68 @@ class StreamManager:
                 if diff.total_seconds() < 900: # 15 minutes
                     source_on_demand = False
 
+            # Determine if we should perform local server-side transcoding
+            use_local_transcode = False
+            if hasattr(stream, 'transcode') and stream.transcode and settings.enable_local_transcode:
+                use_local_transcode = True
+
             # Determine recording policy: only MAIN/HD streams are recorded
             record_flag = should_record(stream)
 
-            payload = {
-                "source": "publisher" if is_push else stream.stream_url,
-                "sourceProtocol": "tcp",
-                "sourceOnDemand": False if is_push else source_on_demand,
-                "record": record_flag,
-                "runOnDemand": "",
-                "runOnUnDemand": ""
-            }
+            if use_local_transcode:
+                # Build FFmpeg command to scale and limit frame rate/bitrate
+                vf_filters = []
+                if stream.resolution and "x" in stream.resolution:
+                    parts = stream.resolution.split("x")
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        vf_filters.append(f"scale={parts[0]}:{parts[1]}")
+                if stream.fps:
+                    vf_filters.append(f"fps=fps={stream.fps}")
+                
+                vf_arg = f"-vf \"{','.join(vf_filters)}\"" if vf_filters else ""
+                
+                bitrate_arg = ""
+                if stream.bitrate:
+                    bitrate_arg = f"-b:v {stream.bitrate}k -maxrate {stream.bitrate}k -bufsize {stream.bitrate * 2}k"
+                
+                input_url = double_escape_rtsp_url(stream.stream_url)
+                ffmpeg_cmd = (
+                    f"ffmpeg -rtsp_transport tcp -i {input_url} -an "
+                    f"-c:v libx264 -preset ultrafast -tune zerolatency {bitrate_arg} {vf_arg} "
+                    f"-f rtsp -rtsp_transport tcp rtsp://localhost:8554/{path_name}"
+                )
+
+                if stream.always_on:
+                    payload = {
+                        "source": "publisher",
+                        "sourceProtocol": "tcp",
+                        "sourceOnDemand": False,
+                        "record": record_flag,
+                        "runOnInit": ffmpeg_cmd,
+                        "runOnInitRestart": True,
+                        "runOnDemand": "",
+                        "runOnUnDemand": ""
+                    }
+                else:
+                    payload = {
+                        "source": "publisher",
+                        "sourceProtocol": "tcp",
+                        "sourceOnDemand": False,
+                        "record": record_flag,
+                        "runOnInit": "",
+                        "runOnDemand": ffmpeg_cmd,
+                        "runOnUnDemand": ""
+                    }
+            else:
+                payload = {
+                    "source": "publisher" if is_push else stream.stream_url,
+                    "sourceProtocol": "tcp",
+                    "sourceOnDemand": False if is_push else source_on_demand,
+                    "record": record_flag,
+                    "runOnInit": "",
+                    "runOnDemand": "",
+                    "runOnUnDemand": ""
+                }
 
             try:
                 response = await self._post(f"/v3/config/paths/add/{path_name}", json=payload)
@@ -214,12 +265,18 @@ class StreamManager:
                             existing_src = normalize_url(existing.get("source", ""))
                             desired_src = normalize_url(payload.get("source", ""))
                             
+                            existing_run_on_init = existing.get("runOnInit", "")
+                            desired_run_on_init = payload.get("runOnInit", "")
+                            existing_run_on_demand = existing.get("runOnDemand", "")
+                            desired_run_on_demand = payload.get("runOnDemand", "")
+                            
                             # Compare existing config vs desired (record uses should_record policy)
                             if (existing_src == desired_src and
                                 existing.get("sourceProtocol") == payload.get("sourceProtocol") and
                                 existing.get("sourceOnDemand") == payload.get("sourceOnDemand") and
                                 existing.get("record") == record_flag and
-                                existing.get("runOnDemand", "") == payload.get("runOnDemand", "") and
+                                existing_run_on_init == desired_run_on_init and
+                                existing_run_on_demand == desired_run_on_demand and
                                 existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
                                 
                                 print(f"[stream_manager] Path {path_name} already exists with identical config. Skipping registration.")

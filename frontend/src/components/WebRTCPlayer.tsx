@@ -35,7 +35,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   }>({ timestamp: 0, bytesReceived: 0, framesDecoded: 0 });
 
   const reconnectCountRef = useRef(0);
-  const maxReconnectAttempts = 1;
+  const maxReconnectAttempts = 3;
 
   useEffect(() => {
     startWebRTC();
@@ -75,6 +75,19 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       connectionTimeoutRef.current = null;
     }
 
+    const video = videoRef.current;
+    if (video) {
+      if (video.srcObject) {
+        const stream = video.srcObject as MediaStream;
+        if (stream && typeof stream.getTracks === 'function') {
+          stream.getTracks().forEach(track => track.stop());
+        }
+        video.srcObject = null;
+      }
+      video.removeAttribute('src');
+      video.load();
+    }
+
     if (pcRef.current) {
       // Send WHEP session termination delete request
       const sessionUrl = stats.protocol === 'WHEP' ? (pcRef.current as any).sessionUrl : null;
@@ -92,11 +105,11 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
     setHealth('CONNECTING');
     setErrorMessage(null);
 
-    // Initial connection timeout (falls back to HLS if WebRTC fails to connect in 10 seconds)
+    // Initial connection timeout (falls back to HLS if WebRTC fails to connect in 20 seconds)
     connectionTimeoutRef.current = window.setTimeout(() => {
       console.warn(`[WebRTCPlayer:${streamId}] WebRTC connection timed out. Falling back to HLS.`);
       onFallbackToHls();
-    }, 10000);
+    }, 20000);
 
     try {
       // 1. Fetch ICE servers

@@ -361,6 +361,11 @@ async def proxy_signaling_session(
         if cam_stream:
             resolved_stream_id = cam_stream.stream_id
             mediamtx_stream_id = resolved_stream_id
+            
+            # Ensure the stream is actively registered and handshaking in MediaMTX
+            from .stream_manager import stream_manager
+            await stream_manager.add_stream(db_session, cam_stream)
+
             if cam_stream.codec and cam_stream.codec.upper() == "H265":
                 is_h265 = True
                 try:

@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     mediamtx_patch_only: bool = True
     allow_delete_add_reconfiguration: bool = False
 
+    # ── Feature toggles ────────────────────────────────────────────────────────
+    enable_device_config: bool = False
+    enable_local_transcode: bool = False
+
     class Config:
         env_file = ".env"
         extra = "ignore"
@@ -195,4 +199,6 @@ DEFAULT_RETENTION_DAYS = settings.default_retention_days
 INDEXER_INTERVAL_SECONDS = settings.indexer_interval_seconds
 MEDIAMTX_PATCH_ONLY = settings.mediamtx_patch_only
 ALLOW_DELETE_ADD_RECONFIGURATION = settings.allow_delete_add_reconfiguration
+ENABLE_DEVICE_CONFIG = settings.enable_device_config
+ENABLE_LOCAL_TRANSCODE = settings.enable_local_transcode
 

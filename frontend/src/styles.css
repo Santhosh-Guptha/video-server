@@ -250,6 +250,7 @@ code { padding: 2px 6px; border-radius: 8px; background: rgba(148,163,184,0.14);
   border-radius: 999px; background: rgba(15,23,42,0.88); border: 1px solid rgba(148,163,184,0.16); font-size: .84rem;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* Multi-selection & Video Wall enhancements */
 .cameraCard {

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import type { Camera } from '../types'
 import { Player } from '../components/Player'
-import { ServerCrash, Users, Play, Square, Maximize2, Minimize2, X } from 'lucide-react'
+import { ServerCrash, Users, Play, Square, Maximize2, Minimize2, X, RotateCw } from 'lucide-react'
 import { startLive, stopLive } from '../lib/api'
 import { usePolicy, resolveLiveStreamId } from '../lib/usePolicy'
 
@@ -35,7 +35,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   // Fetch all active cameras configured in the platform
   const fetchActiveList = async () => {
     try {
-      const res = await fetch('/api/cameras')
+      const res = await fetch('/api/cameras/active')
       if (res.ok) {
         const allCams = await res.json() as Camera[]
         // Filter standard cameras that are active
@@ -136,17 +136,10 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
     }
   }, [])
 
-  // Filter to show ONLY live recording cameras (check sub-stream status via policy)
+  // Keep liveCameras static with all active cameras to prevent grid layout shifting and player remount loops
   const liveCameras = useMemo(() => {
-    return activeCameras.filter(cam => {
-      // Use policy to resolve which stream to check for status
-      const streamId = resolveLiveStreamId(cam, policy, 4) // wall = grid profile
-      const anyStream = cam.streams.find(s => s.stream_id === streamId) || cam.streams[0]
-      if (!anyStream) return false
-      const status = streamStatuses[anyStream.stream_id] || anyStream.status || 'OFFLINE'
-      return onlineStreamIds.has(anyStream.stream_id) || status === 'ONLINE'
-    })
-  }, [activeCameras, onlineStreamIds, streamStatuses, policy])
+    return activeCameras
+  }, [activeCameras])
 
   const totalPages = Math.ceil(liveCameras.length / gridSize)
 
@@ -286,7 +279,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   }
 
   // Resolve modal parameters
-  const modalStreamId = selectedCameraForModal ? resolveLiveStreamId(selectedCameraForModal, policy, 4) : '';
+  const modalStreamId = selectedCameraForModal ? resolveLiveStreamId(selectedCameraForModal, policy, 1) : '';
   const modalStream = selectedCameraForModal?.streams.find(s => s.stream_id === modalStreamId) || selectedCameraForModal?.streams[0];
   const modalViewers = selectedCameraForModal && modalStream ? (streamViewers[modalStream.stream_id] || 0) : 0;
   const modalStatus = selectedCameraForModal && modalStream ? (streamStatuses[modalStream.stream_id] || modalStream.status || 'OFFLINE') : 'OFFLINE';
@@ -301,6 +294,24 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           </span>
         </div>
         <div className="liveWallActions" style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+          {/* Refresh Button */}
+          <button 
+            type="button"
+            className="batchBtn" 
+            onClick={fetchActiveList}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              cursor: 'pointer'
+            }}
+            title="Refresh active camera list"
+          >
+            <RotateCw size={11} /> Refresh
+          </button>
+
           {/* Grid Layout Selector */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>Grid size:</span>

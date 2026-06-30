@@ -11,6 +11,7 @@ export type CameraStream = {
   status: 'REGISTERED' | 'CONNECTING' | 'ONLINE' | 'DEGRADED' | 'RECONNECTING' | 'OFFLINE' | 'ERROR'
   error_message?: string | null
   always_on?: boolean
+  transcode?: boolean
   created_at: string
   updated_at: string
 }
