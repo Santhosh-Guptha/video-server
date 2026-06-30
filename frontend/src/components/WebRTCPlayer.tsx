@@ -3,6 +3,9 @@ import { AlertCircle, Loader2, Play, Volume2, VolumeX, Maximize2, X } from 'luci
 import { StreamHealthBadge, StreamHealthState } from './StreamHealthBadge';
 import { SessionStatsOverlay, PlayerStats } from './SessionStatsOverlay';
 
+let cachedIceServers: RTCIceServer[] | null = null;
+let pendingIceServerPromise: Promise<RTCIceServer[]> | null = null;
+
 interface WebRTCPlayerProps {
   streamId: string;
   posterLabel?: string;
@@ -36,8 +39,10 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
   const reconnectCountRef = useRef(0);
   const maxReconnectAttempts = 3;
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
+    isMountedRef.current = true;
     startWebRTC();
 
     // Visibility change handling to optimize offscreen tabs
@@ -54,6 +59,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
     document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
+      isMountedRef.current = false;
       document.removeEventListener('visibilitychange', handleVisibility);
       cleanupConnection();
     };
@@ -107,15 +113,34 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
     // Initial connection timeout (falls back to HLS if WebRTC fails to connect in 20 seconds)
     connectionTimeoutRef.current = window.setTimeout(() => {
+      if (!isMountedRef.current) return;
       console.warn(`[WebRTCPlayer:${streamId}] WebRTC connection timed out. Falling back to HLS.`);
       onFallbackToHls();
     }, 20000);
 
     try {
-      // 1. Fetch ICE servers
-      const iceResp = await fetch('/api/webrtc/ice-servers');
-      if (!iceResp.ok) throw new Error('Failed to retrieve ICE server configuration');
-      const { iceServers } = await iceResp.json();
+      // 1. Fetch ICE servers (using global cache to avoid duplicate calls)
+      let iceServers: RTCIceServer[];
+      if (cachedIceServers) {
+        iceServers = cachedIceServers;
+      } else {
+        if (!pendingIceServerPromise) {
+          pendingIceServerPromise = (async () => {
+            const iceResp = await fetch('/api/webrtc/ice-servers');
+            if (!iceResp.ok) throw new Error('Failed to retrieve ICE server configuration');
+            const data = await iceResp.json();
+            cachedIceServers = data.iceServers;
+            return data.iceServers;
+          })();
+        }
+        try {
+          iceServers = await pendingIceServerPromise;
+        } catch (err) {
+          pendingIceServerPromise = null; // Reset on failure to allow retrying
+          throw err;
+        }
+      }
+      if (!isMountedRef.current) return;
 
       // 2. Setup RTCPeerConnection
       const pc = new RTCPeerConnection({ iceServers });
@@ -126,6 +151,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       pc.addTransceiver('audio', { direction: 'recvonly' });
 
       pc.ontrack = (event) => {
+        if (!isMountedRef.current) return;
         const video = videoRef.current;
         if (video && event.streams && event.streams[0]) {
           video.srcObject = event.streams[0];
@@ -141,6 +167,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       };
 
       pc.oniceconnectionstatechange = () => {
+        if (!isMountedRef.current) return;
         console.log(`[WebRTCPlayer:${streamId}] ICE state: ${pc.iceConnectionState}`);
         if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
           handleDisconnection('ICE Connection Disconnected');
@@ -149,7 +176,9 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
       // 3. Create WebRTC offer
       const offer = await pc.createOffer();
+      if (!isMountedRef.current) { pc.close(); return; }
       await pc.setLocalDescription(offer);
+      if (!isMountedRef.current) { pc.close(); return; }
 
       // 4. Send Offer to FastAPI signaling proxy
       const user_id = uuidv4(); // Generate dummy viewer ID
@@ -158,6 +187,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
         headers: { 'Content-Type': 'application/sdp' },
         body: offer.sdp,
       });
+      if (!isMountedRef.current) { pc.close(); return; }
 
       if (!whepResp.ok) {
         const errText = await whepResp.text();
@@ -174,11 +204,18 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       (pc as any).sessionUrl = sessionUrl;
       (pc as any).sessionId = sessionUrl.split('/').pop();
 
+      if (!isMountedRef.current) {
+        fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
+        pc.close();
+        return;
+      }
+
       // Handle Trickle ICE Candidates
       pc.onicecandidate = (event) => {
+        if (!isMountedRef.current) return;
         if (event.candidate && pcRef.current === pc) {
           fetch(sessionUrl, {
-            method: 'PATCH',
+            method: 'POST',
             headers: { 'Content-Type': 'application/trickle-ice-sdpfrag' },
             body: event.candidate.candidate,
           }).catch((err) => console.error('Trickle candidate error:', err));
@@ -187,15 +224,27 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
       // Apply SDP Answer
       const answerSdp = await whepResp.text();
+      if (!isMountedRef.current) {
+        fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
+        pc.close();
+        return;
+      }
       await pc.setRemoteDescription(new RTCSessionDescription({
         type: 'answer',
         sdp: answerSdp
       }));
 
+      if (!isMountedRef.current) {
+        fetch(sessionUrl, { method: 'DELETE' }).catch(() => {});
+        pc.close();
+        return;
+      }
+
       // Initialize stats gathering
       startStatsInterval();
 
     } catch (err: any) {
+      if (!isMountedRef.current) return;
       console.error(`[WebRTCPlayer:${streamId}] WHEP connection failed:`, err);
       const isPermanent = err && (err.status === 400 || err.status === 415 || (err.message && err.message.toLowerCase().includes('codec')));
       handleDisconnection(err.message || 'Negotiation failed', isPermanent);
