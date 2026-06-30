@@ -31,8 +31,24 @@ type GapRecoveryProps = {
 
 export function GapRecovery({ cameras }: GapRecoveryProps) {
   const [selectedCamera, setSelectedCamera] = useState<Camera | null>(null)
+  const [selectedStreamId, setSelectedStreamId] = useState<string>('')
   const [startTime, setStartTime] = useState('')
   const [endTime, setEndTime] = useState('')
+
+  useEffect(() => {
+    if (selectedCamera) {
+      const matched = selectedCamera.streams.find(s => s.stream_id === selectedCamera.stream_id)
+      if (matched) {
+        setSelectedStreamId(matched.stream_id)
+      } else if (selectedCamera.streams.length > 0) {
+        setSelectedStreamId(selectedCamera.streams[0].stream_id)
+      } else {
+        setSelectedStreamId(selectedCamera.stream_id)
+      }
+    } else {
+      setSelectedStreamId('')
+    }
+  }, [selectedCamera])
   
   const [gaps, setGaps] = useState<GapChunk[]>([])
   const [selectedGaps, setSelectedGaps] = useState<Set<number>>(new Set())
@@ -64,7 +80,7 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
       const start_ts = new Date(startTime).getTime() / 1000
       const end_ts = new Date(endTime).getTime() / 1000
       
-      const downloadUrl = `/api/recordings/sd-card/download?stream_id=${encodeURIComponent(selectedCamera.stream_id)}&start_ts=${start_ts}&end_ts=${end_ts}`
+      const downloadUrl = `/api/recordings/sd-card/download?stream_id=${encodeURIComponent(selectedStreamId)}&start_ts=${start_ts}&end_ts=${end_ts}`
       
       // Trigger native browser download directly on the streaming endpoint
       const link = document.createElement('a')
@@ -164,8 +180,8 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
       const startEpoch = new Date(startTime).getTime() / 1000
       const endEpoch = new Date(endTime).getTime() / 1000
       
-      const res = await fetch(
-        `/api/recordings/${encodeURIComponent(selectedCamera.stream_id)}/gaps?start_time=${startEpoch}&end_time=${endEpoch}`
+       const res = await fetch(
+        `/api/recordings/${encodeURIComponent(selectedStreamId)}/gaps?start_time=${startEpoch}&end_time=${endEpoch}`
       )
       
       if (res.ok) {
@@ -210,7 +226,7 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
     setRecoveryStatus(`Queueing ${targets.length} segments for recovery...`)
     
     try {
-      const res = await fetch(`/api/recordings/${encodeURIComponent(selectedCamera.stream_id)}/recover`, {
+      const res = await fetch(`/api/recordings/${encodeURIComponent(selectedStreamId)}/recover`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(targets.map(t => ({ start_ts: t.start_ts, end_ts: t.end_ts })))
@@ -319,7 +335,7 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
               </div>
             </div>
             
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr 1fr', gap: '16px' }}>
               {/* Searchable Dropdown Selector */}
               <div ref={dropdownRef} style={{ position: 'relative' }}>
                 <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: '8px' }}>Select Camera</label>
@@ -431,6 +447,36 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Stream Profile Selector */}
+              <div>
+                <label style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 600, display: 'block', marginBottom: '8px' }}>Select Stream</label>
+                <select
+                  value={selectedStreamId}
+                  onChange={(e) => setSelectedStreamId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    color: '#f8fafc',
+                    padding: '8px 12px',
+                    fontSize: '0.85rem',
+                    minHeight: '38px',
+                    boxSizing: 'border-box',
+                    outline: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {selectedCamera?.streams?.map((s) => (
+                    <option key={s.stream_id} value={s.stream_id} style={{ background: '#1e293b', color: '#f8fafc' }}>
+                      {s.profile_type} ({s.stream_id.split('_').pop() || s.stream_id})
+                    </option>
+                  )) || (
+                    <option value={selectedStreamId}>{selectedStreamId}</option>
+                  )}
+                </select>
               </div>
 
               <div>
