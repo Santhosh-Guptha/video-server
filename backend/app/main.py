@@ -1354,6 +1354,43 @@ async def get_playback_gaps(
 # ----------------------------------------------------
 # Manual Recording Gap Scanning & Recovery Endpoints
 # ----------------------------------------------------
+async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) -> float:
+    """Uses ffprobe asynchronously to extract the duration of a video file."""
+    import os
+    import json
+    import asyncio
+    ffprobe_path = "ffprobe"
+    ffmpeg_path = settings.ffmpeg_path
+    if "/" in ffmpeg_path or "\\" in ffmpeg_path:
+        dirname = os.path.dirname(ffmpeg_path)
+        basename = os.path.basename(ffmpeg_path)
+        ext = os.path.splitext(basename)[1]
+        ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
+
+    cmd = [
+        ffprobe_path,
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        file_path
+    ]
+    async with semaphore:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
+            if proc.returncode == 0:
+                data = json.loads(stdout.decode())
+                duration_str = data.get("format", {}).get("duration")
+                if duration_str:
+                    return float(duration_str)
+        except Exception:
+            pass
+    return float(settings.segment_time_seconds)
+
 @app.get("/api/recordings/{stream_id}/gaps")
 async def get_recording_gaps(
     stream_id: str,
@@ -1374,13 +1411,14 @@ async def get_recording_gaps(
 
     resolved_stream_id = stream.stream_id
     stream_dir = Path(settings.recording_dir) / resolved_stream_id
-    segments = []
+    segments_to_check = []
     
     if stream_dir.exists():
         for mp4 in stream_dir.rglob("*.mp4"):
             name = mp4.name
             try:
-                if mp4.stat().st_size == 0:
+                file_size = mp4.stat().st_size
+                if file_size == 0:
                     continue
             except Exception:
                 continue
@@ -1391,8 +1429,12 @@ async def get_recording_gaps(
                     date_str, time_str = match.groups()
                     dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
                     f_start = dt.timestamp()
-                    f_end = f_start + settings.segment_time_seconds
-                    segments.append((f_start, f_end))
+                    if f_start + settings.segment_time_seconds >= start_ts and f_start <= end_ts:
+                        segments_to_check.append({
+                            "start_ts": f_start,
+                            "path": str(mp4),
+                            "size": file_size
+                        })
                 except Exception:
                     pass
             else:
@@ -1402,12 +1444,29 @@ async def get_recording_gaps(
                         date_str, time_str = match_min.groups()
                         dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
                         f_start = dt.timestamp()
-                        f_end = f_start + settings.segment_time_seconds
-                        segments.append((f_start, f_end))
+                        if f_start + settings.segment_time_seconds >= start_ts and f_start <= end_ts:
+                            segments_to_check.append({
+                                "start_ts": f_start,
+                                "path": str(mp4),
+                                "size": file_size
+                            })
                     except Exception:
                         pass
 
-    # Sort segments by start time
+    # Query file durations. For files >= 2MB, assume full segment duration to optimize speed.
+    semaphore = asyncio.Semaphore(15)
+    
+    async def get_segment_duration(seg):
+        if seg["size"] >= 2 * 1024 * 1024:
+            return seg["start_ts"], float(settings.segment_time_seconds)
+        dur = await get_file_duration_async(seg["path"], semaphore)
+        return seg["start_ts"], dur
+
+    tasks = [get_segment_duration(seg) for seg in segments_to_check]
+    results = await asyncio.gather(*tasks)
+    
+    # Map to segment boundaries
+    segments = [(f_start, f_start + dur) for f_start, dur in results]
     segments.sort(key=lambda x: x[0])
 
     # Filter segments to the requested time window and clip them
