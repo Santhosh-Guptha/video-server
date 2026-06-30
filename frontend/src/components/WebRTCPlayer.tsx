@@ -191,8 +191,13 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       if (!isMountedRef.current) { pc.close(); return; }
 
       // 4. Send Offer to FastAPI signaling proxy
+      let tabId = sessionStorage.getItem('vms_tab_id');
+      if (!tabId) {
+        tabId = uuidv4();
+        sessionStorage.setItem('vms_tab_id', tabId);
+      }
       const user_id = uuidv4(); // Generate dummy viewer ID
-      const whepResp = await fetch(`/api/streams/${streamId}/live/whep?user_id=${user_id}`, {
+      const whepResp = await fetch(`/api/streams/${streamId}/live/whep?user_id=${user_id}&browser_tab_id=${tabId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
         body: offer.sdp,

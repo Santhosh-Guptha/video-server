@@ -302,7 +302,10 @@ async def get_stream_stats(
         "source": "inactive"
     }
 
-# Helper for generic WHEP/WHIP signaling proxy
+from .services.webrtc_service import WebRTCService
+from .registries.session_registry import SessionRegistry
+from .registries.stream_registry import StreamRegistry
+
 async def proxy_signaling_session(
     stream_id: str,
     protocol: str,
@@ -316,7 +319,7 @@ async def proxy_signaling_session(
     if request.method == "OPTIONS":
         return Response(status_code=204)
 
-    # 1. Enforce stream viewer limits (from vms_policy.MAX_WEBRTC_SESSIONS_PER_CAMERA)
+    # 1. Enforce stream viewer limits
     from .config import MAX_WEBRTC_SESSIONS_PER_CAMERA
     viewer_count = await RedisViewerTracker.get_viewer_count(stream_id)
     if viewer_count >= MAX_WEBRTC_SESSIONS_PER_CAMERA:
@@ -325,153 +328,28 @@ async def proxy_signaling_session(
             detail="Stream viewer limit exceeded"
         )
     
-    # 2. Extract or dynamically generate user_id to enforce user session limits
-    user_id_str = request.query_params.get("user_id")
-    user_id = None
-    if user_id_str:
-        try:
-            user_id = uuid.UUID(user_id_str)
-        except ValueError:
-            pass
-            
-    # Auto-generate user_id if not present
-    if not user_id:
-        user_id = uuid.uuid4()
-            
-    if user_id:
-        # Count active user sessions
-        stmt = select(WebRTCSession).where(
-            WebRTCSession.user_id == user_id,
-            WebRTCSession.status == "ACTIVE"
-        )
-        res = await db_session.execute(stmt)
-        active_user_sess = res.scalars().all()
-        if len(active_user_sess) >= 32: # Limit to 32 concurrent sessions per user (supports grid views)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Active session limit exceeded for this user"
-            )
-
-    # 3. Detect H.265 stream codec and route through transcoder if needed
-    resolved_stream_id = stream_id
-    mediamtx_stream_id = stream_id  # Default: proxy directly to the stream
-    is_h265 = False
-    try:
-        cam_stream = await resolve_stream_by_identifier(stream_id, db_session)
-        if cam_stream:
-            resolved_stream_id = cam_stream.stream_id
-            mediamtx_stream_id = resolved_stream_id
-            
-            # Ensure the stream is actively registered and handshaking in MediaMTX
-            from .stream_manager import stream_manager
-            await stream_manager.add_stream(db_session, cam_stream)
-
-            if cam_stream.codec and cam_stream.codec.upper() == "H265":
-                is_h265 = True
-                try:
-                    mediamtx_stream_id = await transcoder_manager.ensure_transcoder(
-                        resolved_stream_id, db_session
-                    )
-                    print(f"[webrtc] H.265 stream {resolved_stream_id} -> routing to {mediamtx_stream_id}")
-                except TranscoderCapacityError as e:
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail=str(e)
-                    )
-        else:
-            print(f"[webrtc] Warning: could not resolve stream by identifier: {stream_id}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[webrtc] Error checking stream codec for {stream_id}: {e}")
-
+    # 2. Extract user_id and browser_tab_id
+    user_id_str = request.query_params.get("user_id") or str(uuid.uuid4())
+    browser_tab_id = request.query_params.get("browser_tab_id")
+    client_ip = request.client.host if request.client else "unknown"
+    
     body_bytes = await request.body()
-    url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}"
+    sdp_offer = body_bytes.decode("utf-8", errors="replace")
     
-    print(f"[webrtc] WHEP POST request for stream_id={stream_id} (resolved to {resolved_stream_id}, proxied to {mediamtx_stream_id})")
-    print(f"[webrtc] WHEP POST destination: {url}")
-    print(f"[webrtc] WHEP POST offer SDP:\n{body_bytes.decode('utf-8', errors='replace')}")
+    # 3. Call Service layer
+    sdp_answer = await WebRTCService.proxy_whep_offer(
+        stream_id=stream_id,
+        sdp_offer=sdp_offer,
+        user_id=user_id_str,
+        browser_tab_id=browser_tab_id,
+        client_ip=client_ip,
+        db_session=db_session
+    )
     
-    mtx_resp = None
-    for attempt in range(4):
-        try:
-            headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
-            mtx_resp = await asyncio.to_thread(
-                _sync_http_request,
-                url,
-                "POST",
-                body_bytes,
-                headers_dict
-            )
-            
-            # If MediaMTX returns 404, the path might be in the middle of dynamic registration/startup.
-            # Retry after a short delay.
-            if mtx_resp.status_code == 404 and attempt < 3:
-                print(f"[webrtc] MediaMTX returned 404 for {mediamtx_stream_id}. Retrying WHEP request (attempt {attempt + 1}/4) in 0.4s...")
-                await asyncio.sleep(0.4)
-                continue
-                
-            break
-        except Exception as e:
-            if attempt < 3:
-                print(f"[webrtc] MediaMTX connection attempt {attempt + 1} failed: {e}. Retrying in 0.4s...")
-                await asyncio.sleep(0.4)
-                continue
-            import traceback
-            print(f"[webrtc] Connection to MediaMTX failed: {e}")
-            traceback.print_exc()
-            if is_h265:
-                try:
-                    await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
-                except Exception as ex:
-                    print(f"[webrtc] Error rolling back transcoder viewer count on connection failure: {ex}")
-            raise HTTPException(status_code=502, detail=f"Failed to connect to media server signaling endpoint: {e}")
-            
-    print(f"[webrtc] WHEP POST response status: {mtx_resp.status_code}")
-    print(f"[webrtc] WHEP POST response headers: {mtx_resp.headers}")
-    print(f"[webrtc] WHEP POST response body:\n{mtx_resp.content.decode('utf-8', errors='replace')}")
-            
-    for k, v in mtx_resp.headers.items():
-        if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection"):
-            response.headers[k] = v
-            
-    response.status_code = mtx_resp.status_code
-    
-    if mtx_resp.status_code in (200, 201):
-        location = mtx_resp.headers.get("Location")
-        if location:
-            session_id = location.rstrip("/").split("/")[-1]
-            client_ip = request.client.host if request.client else "unknown"
-            
-            # Create DB session and register in viewer tracker under the RESOLVED stream_id
-            await create_db_session(session_id, resolved_stream_id, protocol.upper(), client_ip, db_session, user_id)
-            await RedisViewerTracker.add_viewer_session(resolved_stream_id, session_id, {
-                "user_id": str(user_id) if user_id else None,
-                "client_ip": client_ip,
-                "protocol": protocol.upper(),
-                "created_at": datetime.utcnow().isoformat(),
-                "is_h265": is_h265
-            })
-            
-            # Rewrite Location header to refer to the ORIGINAL stream_id
-            # (transcoding is transparent to the client)
-            if "/api/webrtc" in request.url.path:
-                response.headers["Location"] = f"/api/webrtc/play/{stream_id}/{session_id}"
-            else:
-                response.headers["Location"] = f"/api/streams/{stream_id}/live/{protocol}/{session_id}"
-            print(f"[webrtc] WHEP POST session created. Rewrote Location header to: {response.headers.get('Location')}")
-    else:
-        # Signaling failed in MediaMTX (e.g. 404/400). Roll back the transcoder viewer count.
-        if is_h265:
-            try:
-                await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
-            except Exception as ex:
-                print(f"[webrtc] Error rolling back transcoder viewer count on non-2xx status: {ex}")
-            
     return Response(
-        content=mtx_resp.content,
-        status_code=mtx_resp.status_code,
-        headers=dict(response.headers)
+        content=sdp_answer,
+        status_code=201,
+        headers={"Content-Type": "application/sdp"}
     )
 
 async def proxy_signaling_action(
@@ -488,66 +366,17 @@ async def proxy_signaling_action(
     if request.method == "OPTIONS":
         return Response(status_code=204)
 
-    # Detect H.265 stream to route MediaMTX actions to the transcoded path
-    resolved_stream_id = stream_id
-    mediamtx_stream_id = stream_id
-    is_h265 = False
-    try:
-        cam_stream = await resolve_stream_by_identifier(stream_id, db_session)
-        if cam_stream:
-            resolved_stream_id = cam_stream.stream_id
-            mediamtx_stream_id = resolved_stream_id
-            if cam_stream.codec and cam_stream.codec.upper() == "H265":
-                is_h265 = True
-                mediamtx_stream_id = f"{resolved_stream_id}_h264"
-    except Exception as e:
-        print(f"[webrtc] Error checking stream codec for action on {stream_id}: {e}")
- 
     body_bytes = await request.body()
-    url = f"{settings.mediamtx_webrtc_url}/{mediamtx_stream_id}/{protocol}/{session_id}"
+    content_type = request.headers.get("Content-Type", "application/sdp")
     
-    print(f"[webrtc] WHEP {request.method} request for stream_id={stream_id} (resolved to {resolved_stream_id}, session_id={session_id}, proxied to {mediamtx_stream_id})")
-    print(f"[webrtc] WHEP {request.method} destination: {url}")
-    if request.method == "PATCH":
-        print(f"[webrtc] WHEP PATCH body:\n{body_bytes.decode('utf-8', errors='replace')}")
-        
-    try:
-        headers_dict = {"Content-Type": request.headers.get("Content-Type", "application/sdp")}
-        mtx_resp = await asyncio.to_thread(
-            _sync_http_request,
-            url,
-            request.method,
-            body_bytes,
-            headers_dict
-        )
-    except Exception as e:
-        import traceback
-        print(f"[webrtc] Action proxy to MediaMTX failed: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=502, detail=f"Failed to connect to media server session endpoint: {e}")
-            
-    print(f"[webrtc] WHEP {request.method} response status: {mtx_resp.status_code}")
-    print(f"[webrtc] WHEP {request.method} response headers: {mtx_resp.headers}")
-    print(f"[webrtc] WHEP {request.method} response body:\n{mtx_resp.content.decode('utf-8', errors='replace')}")
-            
-    for k, v in mtx_resp.headers.items():
-        if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection"):
-            response.headers[k] = v
-            
-    if request.method == "DELETE":
-        # DELETE is idempotent. If the session is already gone (404), we treat it as a success.
-        if mtx_resp.status_code in (200, 204, 404):
-            await close_db_session(session_id, db_session)
-            await RedisViewerTracker.remove_viewer_session(resolved_stream_id, session_id)
-            
-            # Notify TranscoderManager of viewer disconnect for H.265 streams
-            if is_h265:
-                try:
-                    await transcoder_manager.register_viewer_disconnect(resolved_stream_id, db_session)
-                except Exception as e:
-                    print(f"[webrtc] Error notifying transcoder disconnect for {resolved_stream_id}: {e}")
-            
-            return Response(status_code=204)
+    return await WebRTCService.proxy_whep_action(
+        stream_id=stream_id,
+        session_id=session_id,
+        method=request.method,
+        content=body_bytes,
+        content_type=content_type,
+        db_session=db_session
+    )
 
     response.status_code = mtx_resp.status_code
     return Response(

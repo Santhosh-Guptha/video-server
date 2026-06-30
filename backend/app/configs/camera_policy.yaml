@@ -1,0 +1,6 @@
+camera_policy:
+  strict_camera_validation: true
+  allow_unknown_edge_devices: false
+  sync_interval_minutes: 5
+  ping_timeout_seconds: 5
+  ping_max_concurrent: 10

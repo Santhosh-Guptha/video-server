@@ -1,0 +1,10 @@
+webrtc_policy:
+  enable_webrtc: true
+  enable_hls_fallback: true
+  webrtc_connection_timeout_seconds: 10
+  enable_h265_transcoding: true
+  transcode_grace_period_seconds: 60
+  max_active_transcoders: 10
+  transcoder_vcodec: "libx264"
+  transcoder_preset: "ultrafast"
+  transcoder_tune: "zerolatency"

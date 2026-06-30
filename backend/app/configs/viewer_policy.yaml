@@ -1,0 +1,5 @@
+viewer_policy:
+  cache_session_metadata: true
+  session_ttl_seconds: 60
+  track_client_ip: true
+  enforce_tab_uniqueness: false

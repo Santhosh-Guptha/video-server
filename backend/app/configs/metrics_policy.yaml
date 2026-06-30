@@ -1,0 +1,7 @@
+metrics_policy:
+  prometheus_enabled: true
+  metrics_path: "/api/metrics"
+  scrape_interval_seconds: 15
+  track_redis_latency: true
+  track_mediamtx_latency: true
+  latency_threshold_ms: 100

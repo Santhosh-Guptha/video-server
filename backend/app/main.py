@@ -36,8 +36,11 @@ from .onvif_client import CameraConfigClient, parse_rtsp_url
 
 app = FastAPI(title=settings.app_name)
 
+from .metrics.prometheus import router as metrics_router
+
 app.include_router(webrtc_router)
 app.include_router(webrtc_streams_router)
+app.include_router(metrics_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -385,27 +388,34 @@ async def startup():
     asyncio.create_task(recording_recovery_loop())
     
     from .schedulers import (
-        camera_scheduler_loop,
         camera_gap_recovery_loop,
         camera_archive_cleanup_loop,
-        webrtc_session_watchdog_loop,
-        transcoder_watchdog_loop,
         sd_card_on_demand_cleanup_loop
     )
     from .health_monitor import health_monitor_loop
-    from .camera_watchdog import camera_health_watchdog_loop, edge_push_watchdog_loop
 
-    # asyncio.create_task(upstream_sync_loop())
-    asyncio.create_task(camera_scheduler_loop())
+    # Start new decoupled registries and workers
+    from .workers.session_cleanup_worker import session_cleanup_worker_loop
+    from .workers.camera_sync_worker import camera_sync_worker_loop
+    from .workers.camera_health_worker import camera_health_worker_loop
+    from .workers.stream_health_worker import stream_health_worker_loop
+    from .workers.mediamtx_health_worker import mediamtx_health_worker_loop
+    from .workers.redis_health_worker import redis_health_worker_loop
+    from .workers.redis_gc_worker import redis_gc_worker_loop
+
     asyncio.create_task(camera_gap_recovery_loop())
     asyncio.create_task(camera_archive_cleanup_loop())
-    asyncio.create_task(webrtc_session_watchdog_loop())
-    asyncio.create_task(health_monitor_loop())
-    asyncio.create_task(transcoder_watchdog_loop())
     asyncio.create_task(sd_card_on_demand_cleanup_loop())
-    # Phase 3: Camera lifecycle watchdogs
-    asyncio.create_task(camera_health_watchdog_loop())   # Ping/ffprobe cycle every 120s
-    asyncio.create_task(edge_push_watchdog_loop())       # Push heartbeat monitor every 30s
+    asyncio.create_task(health_monitor_loop())
+
+    # Start redesign workers
+    asyncio.create_task(session_cleanup_worker_loop())
+    asyncio.create_task(camera_sync_worker_loop())
+    asyncio.create_task(camera_health_worker_loop())
+    asyncio.create_task(stream_health_worker_loop())
+    asyncio.create_task(mediamtx_health_worker_loop())
+    asyncio.create_task(redis_health_worker_loop())
+    asyncio.create_task(redis_gc_worker_loop())
 
     if settings.edge_receiver_enabled:
         from .edge_receiver import start_edge_receiver

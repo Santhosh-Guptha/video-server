@@ -1,0 +1,9 @@
+worker_policy:
+  camera_sync_interval_seconds: 10
+  camera_health_check_interval_seconds: 120
+  stream_health_check_interval_seconds: 10
+  mediamtx_health_check_interval_seconds: 30
+  redis_health_check_interval_seconds: 30
+  session_cleanup_interval_seconds: 10
+  redis_gc_interval_seconds: 60
+  metrics_aggregation_interval_seconds: 15
