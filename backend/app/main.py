@@ -791,10 +791,13 @@ async def download_sd_card_stream(
 
     async def ffmpeg_stream_generator(cmd, temp_file_to_clean=None):
         print(f"[sd_card] Launching streaming ffmpeg command: {' '.join(cmd)}")
+        # Write stderr to a temp file to avoid PIPE deadlock
+        stderr_log_fd, stderr_log_path = tempfile.mkstemp(suffix="_ffmpeg_err.log")
+        stderr_file = os.fdopen(stderr_log_fd, 'w')
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=stderr_file
         )
         bytes_sent = 0
         try:
@@ -811,15 +814,22 @@ async def download_sd_card_stream(
             except Exception:
                 pass
         finally:
-            # Read and log any stderr from ffmpeg
             try:
-                stderr_data = await process.stderr.read()
-                if stderr_data:
-                    stderr_text = stderr_data.decode(errors='replace')[-2000:]
-                    if bytes_sent == 0:
-                        print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
-                    else:
-                        print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
+                stderr_file.close()
+            except Exception:
+                pass
+            # Log ffmpeg stderr for debugging
+            try:
+                with open(stderr_log_path, 'r') as f:
+                    stderr_text = f.read()[-2000:]
+                if bytes_sent == 0 and stderr_text:
+                    print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
+                else:
+                    print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
+            except Exception:
+                pass
+            try:
+                os.remove(stderr_log_path)
             except Exception:
                 pass
             try:
