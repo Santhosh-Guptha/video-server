@@ -15,7 +15,8 @@ class CameraRegistry:
     @staticmethod
     async def get_active_cameras(session: AsyncSession) -> List[Camera]:
         """Retrieve all active physical cameras."""
-        stmt = select(Camera).where(Camera.active == True)
+        from sqlalchemy.orm import selectinload
+        stmt = select(Camera).where(Camera.active == True).options(selectinload(Camera.streams))
         res = await session.execute(stmt)
         return list(res.scalars().all())
 
