@@ -254,6 +254,13 @@ class StreamManager:
                     await self.set_stream_state(session, stream, StreamState.CONNECTING)
                 else:
                     if "already exists" in response.text or response.status_code == 400:
+                        # Skip path patching or re-registration if the path is already active/viewed
+                        # to prevent disrupting other stable sessions (multi-user concurrency guard).
+                        if await self._has_active_readers_or_publishers(path_name):
+                            print(f"[stream_manager] Path {path_name} already has active readers/publishers in MediaMTX. Skipping registration/patching to avoid user disruption.")
+                            await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                            return
+
                         # GET existing config to compare
                         get_resp = await self._get(f"/v3/config/paths/get/{path_name}")
                         if get_resp.status_code == 200:
