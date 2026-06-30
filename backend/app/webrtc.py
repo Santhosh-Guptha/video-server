@@ -337,7 +337,7 @@ async def proxy_signaling_session(
     sdp_offer = body_bytes.decode("utf-8", errors="replace")
     
     # 3. Call Service layer
-    sdp_answer = await WebRTCService.proxy_whep_offer(
+    sdp_answer, session_id = await WebRTCService.proxy_whep_offer(
         stream_id=stream_id,
         sdp_offer=sdp_offer,
         user_id=user_id_str,
@@ -346,10 +346,19 @@ async def proxy_signaling_session(
         db_session=db_session
     )
     
+    # 4. Construct Location header
+    if "/api/webrtc" in request.url.path:
+        location_url = f"/api/webrtc/play/{stream_id}/{session_id}"
+    else:
+        location_url = f"/api/streams/{stream_id}/live/whep/{session_id}"
+        
     return Response(
         content=sdp_answer,
         status_code=201,
-        headers={"Content-Type": "application/sdp"}
+        headers={
+            "Content-Type": "application/sdp",
+            "Location": location_url
+        }
     )
 
 async def proxy_signaling_action(

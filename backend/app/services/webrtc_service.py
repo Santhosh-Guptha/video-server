@@ -28,8 +28,8 @@ class WebRTCService:
         browser_tab_id: Optional[str],
         client_ip: str,
         db_session
-    ) -> str:
-        """Proxies WHEP SDP offer to passive MediaMTX and returns SDP answer."""
+    ) -> tuple[str, str]:
+        """Proxies WHEP SDP offer to passive MediaMTX and returns (SDP answer, session ID)."""
         client = await cls.get_http_client()
         url = f"{settings.mediamtx_webrtc_url}/{stream_id}/whep"
         
@@ -44,20 +44,25 @@ class WebRTCService:
             
             # Extract session ID from Location header
             location = resp.headers.get("Location")
+            session_id = None
             if location:
                 session_id = location.rstrip("/").split("/")[-1]
-                # Register in registries
-                await SessionRegistry.create_session(
-                    session_id=session_id,
-                    stream_id=stream_id,
-                    protocol="WHEP",
-                    client_ip=client_ip,
-                    user_id=user_id,
-                    browser_tab_id=browser_tab_id,
-                    db_session=db_session
-                )
+            if not session_id:
+                import uuid
+                session_id = str(uuid.uuid4())
+
+            # Register in registries
+            await SessionRegistry.create_session(
+                session_id=session_id,
+                stream_id=stream_id,
+                protocol="WHEP",
+                client_ip=client_ip,
+                user_id=user_id,
+                browser_tab_id=browser_tab_id,
+                db_session=db_session
+            )
                 
-            return resp.text
+            return resp.text, session_id
         except httpx.RequestError as e:
             raise HTTPException(
                 status_code=502,
