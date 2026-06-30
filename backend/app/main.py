@@ -659,6 +659,24 @@ async def record_segment_complete(
     duration = await asyncio.to_thread(get_file_duration, str(p), settings.ffmpeg_path)
     start_ts = end_ts - duration
     
+    
+    # 5.5 Rename file to include both start and end timestamps if it follows the live naming pattern
+    try:
+        dt_start = datetime.fromtimestamp(start_ts)
+        dt_end = datetime.fromtimestamp(end_ts)
+        # Format: YYYYMMDD_HHMMSS_HHMMSS_live.mp4
+        new_filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{dt_end.strftime('%H%M%S')}_live.mp4"
+        new_relative_path = str(Path(relative_path).parent / new_filename).replace("\\", "/")
+        new_absolute_path = Path(settings.recording_dir) / new_relative_path
+        
+        # Check if the file is not already renamed
+        if Path(relative_path).name != new_filename:
+            p.rename(new_absolute_path)
+            print(f"[webhook] Renamed live segment to new convention: {new_filename}")
+            relative_path = new_relative_path
+    except Exception as rename_err:
+        print(f"[webhook] Failed to rename segment file: {rename_err}")
+
     # 6. Insert RecordingSegment idempotent using relative path
     seg = RecordingSegment(
         stream_id=payload.stream_id,
