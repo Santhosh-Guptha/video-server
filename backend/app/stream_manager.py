@@ -310,6 +310,14 @@ class StreamManager:
         Deletes a path configuration from MediaMTX and updates status to OFFLINE.
         """
         path_name = stream.stream_id
+        
+        # Prevent stopping the stream if it's always-on or still has active viewers (multi-user concurrency)
+        from .redis_viewer_tracker import RedisViewerTracker
+        viewer_count = await RedisViewerTracker.get_viewer_count(path_name)
+        if stream.always_on or viewer_count > 0:
+            print(f"[stream_manager] Keep stream active: path_name={path_name}, always_on={stream.always_on}, active_viewers={viewer_count}")
+            return
+
         lock_name = f"stream:{path_name}"
         
         # Acquire lock
