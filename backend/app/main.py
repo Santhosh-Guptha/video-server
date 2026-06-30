@@ -1036,6 +1036,124 @@ async def configure_camera(
         "message": f"Successfully configured camera at {ip_clean} and updated VMS database records"
     }
 
+class TestConnectionRequest(BaseModel):
+    input_mode: str
+    rtsp_url: str | None = None
+    username: str | None = None
+    password: str | None = None
+    ip_host: str | None = None
+    port: int | None = None
+    path: str | None = None
+    query: str | None = None
+
+@app.post("/api/cameras/test-connection")
+async def test_camera_connection(req: TestConnectionRequest):
+    import os
+    import asyncio
+    
+    url = ""
+    if req.input_mode == "combined":
+        url = req.rtsp_url.strip() if req.rtsp_url else ""
+    else:
+        if not req.ip_host:
+            raise HTTPException(status_code=400, detail="IP / Host is required in custom input mode")
+            
+        creds = ""
+        if req.username and req.password:
+            creds = f"{req.username}:{req.password}@"
+        elif req.username:
+            creds = f"{req.username}@"
+            
+        port_str = f":{req.port}" if req.port else ""
+        path_str = req.path.strip() if req.path else ""
+        if path_str and not path_str.startswith("/"):
+            path_str = f"/{path_str}"
+            
+        query_str = req.query.strip() if req.query else ""
+        if query_str and not query_str.startswith("?"):
+            query_str = f"?{query_str}"
+            
+        url = f"rtsp://{creds}{req.ip_host.strip()}{port_str}{path_str}{query_str}"
+
+    if not url.startswith(("rtsp://", "rtsps://", "rtmp://")):
+        raise HTTPException(status_code=400, detail="Invalid stream URL scheme. Must be rtsp://, rtsps://, or rtmp://")
+
+    # Run ffprobe test
+    ffprobe_path = "ffprobe"
+    ffmpeg_path = settings.ffmpeg_path
+    if "/" in ffmpeg_path or "\\" in ffmpeg_path:
+        dirname = os.path.dirname(ffmpeg_path)
+        basename = os.path.basename(ffmpeg_path)
+        ext = os.path.splitext(basename)[1]
+        ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
+        
+    cmd = [
+        ffprobe_path,
+        "-v", "error",
+        "-rtsp_transport", "tcp",
+        "-stimeout", "5000000",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        url
+    ]
+    
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=6.0)
+        
+        if proc.returncode != 0:
+            err_msg = stderr.decode().strip() or f"Connection test failed (exit code {proc.returncode})"
+            return {"status": "failed", "detail": err_msg}
+            
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except:
+            pass
+        return {"status": "failed", "detail": "Connection test timed out after 5 seconds."}
+    except Exception as e:
+        return {"status": "failed", "detail": str(e)}
+
+    # Connection test succeeded! Spawn temporary path in MediaMTX
+    temp_stream_id = f"temp_test_{int(time.time())}"
+    payload = {
+        "source": url,
+        "sourceProtocol": "tcp",
+        "sourceOnDemand": False,
+        "record": False,
+        "runOnInit": "",
+        "runOnDemand": "",
+        "runOnUnDemand": ""
+    }
+    
+    try:
+        response = await stream_manager._post(f"/v3/config/paths/add/{temp_stream_id}", json=payload)
+        if response.status_code not in (200, 201) and "already exists" not in response.text:
+            return {"status": "failed", "detail": f"Failed to register test path in MediaMTX: {response.text}"}
+    except Exception as e:
+        return {"status": "failed", "detail": f"Failed to connect to MediaMTX: {str(e)}"}
+
+    return {
+        "status": "success",
+        "stream_id": temp_stream_id,
+        "rtsp_url": url
+    }
+
+@app.post("/api/cameras/test-connection/cleanup/{stream_id}")
+async def cleanup_test_connection(stream_id: str):
+    if stream_id.startswith("temp_test_"):
+        try:
+            await stream_manager._delete(f"/v3/config/paths/delete/{stream_id}")
+            print(f"[stream_manager] Cleaned up temporary test path: {stream_id}")
+        except Exception as e:
+            print(f"[stream_manager] Failed to delete temporary test path: {e}")
+    return {"status": "ok"}
+
 @app.post("/api/cameras/sync", response_model=SyncResponse)
 async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], skip_mediamtx_api: bool = False):
     raw_cameras = await fetch_upstream_cameras()

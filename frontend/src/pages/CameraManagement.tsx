@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Plus, Edit, Trash2, Camera as CameraIcon, Save, X, Activity, Sliders, Database, AlertTriangle, Layers, Clock } from 'lucide-react'
+import { Plus, Edit, Trash2, Camera as CameraIcon, Save, X, Activity, Sliders, Database, AlertTriangle, Layers, Clock, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react'
 import type { Camera } from '../types'
 import { createCamera, updateCamera, deleteCamera, getSystemSettings, updateSystemSettings } from '../lib/api'
+import { WebRTCPlayer } from '../components/WebRTCPlayer'
 
 type Props = {
   cameras: Camera[]
@@ -65,6 +66,21 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   const [transcode, setTranscode] = useState(false)
   const [active, setActive] = useState(true)
 
+  // RTSP input mode: 'combined' = full URL, 'custom' = individual fields
+  const [rtspInputMode, setRtspInputMode] = useState<'combined' | 'custom'>('combined')
+  const [rtspUsername, setRtspUsername] = useState('')
+  const [rtspPassword, setRtspPassword] = useState('')
+  const [rtspIpHost, setRtspIpHost] = useState('')
+  const [rtspPort, setRtspPort] = useState('554')
+  const [rtspPath, setRtspPath] = useState('')
+  const [rtspQuery, setRtspQuery] = useState('')
+
+  // Test connection states
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle')
+  const [testError, setTestError] = useState<string | null>(null)
+  const [testStreamId, setTestStreamId] = useState<string | null>(null)
+  const [showPreview, setShowPreview] = useState(false)
+
   // Hardware configuration states
   const [cameraIp, setCameraIp] = useState('')
   const [cameraUser, setCameraUser] = useState('admin')
@@ -74,6 +90,147 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   const [hwResolution, setHwResolution] = useState('')
   const [hwFps, setHwFps] = useState('')
   const [hwBitrate, setHwBitrate] = useState('')
+
+  // Build RTSP URL from custom fields
+  const buildRtspUrl = () => {
+    if (!rtspIpHost) return ''
+    let creds = ''
+    if (rtspUsername && rtspPassword) creds = `${rtspUsername}:${encodeURIComponent(rtspPassword)}@`
+    else if (rtspUsername) creds = `${rtspUsername}@`
+    const portStr = rtspPort ? `:${rtspPort}` : ''
+    let pathStr = rtspPath.trim()
+    if (pathStr && !pathStr.startsWith('/')) pathStr = `/${pathStr}`
+    let queryStr = rtspQuery.trim()
+    if (queryStr && !queryStr.startsWith('?')) queryStr = `?${queryStr}`
+    return `rtsp://${creds}${rtspIpHost.trim()}${portStr}${pathStr}${queryStr}`
+  }
+
+  // Parse RTSP URL into custom fields
+  const parseRtspUrlIntoFields = (url: string) => {
+    if (!url) return
+    try {
+      let cleanUrl = url
+      if (cleanUrl.toLowerCase().startsWith('rtsp://')) cleanUrl = cleanUrl.substring(7)
+      else if (cleanUrl.toLowerCase().startsWith('rtsps://')) cleanUrl = cleanUrl.substring(8)
+      
+      let username = '', password = '', rest = cleanUrl
+      if (cleanUrl.includes('@')) {
+        const atIdx = cleanUrl.lastIndexOf('@')
+        const credsPart = cleanUrl.substring(0, atIdx)
+        rest = cleanUrl.substring(atIdx + 1)
+        if (credsPart.includes(':')) {
+          const colonIdx = credsPart.indexOf(':')
+          username = credsPart.substring(0, colonIdx)
+          password = decodeURIComponent(credsPart.substring(colonIdx + 1))
+        } else {
+          username = credsPart
+        }
+      }
+      
+      let hostPort = rest.split('/')[0].split('?')[0]
+      let pathAndQuery = rest.substring(hostPort.length)
+      let host = hostPort, port = '554'
+      if (hostPort.includes(':')) {
+        const parts = hostPort.split(':')
+        host = parts[0]
+        port = parts[1]
+      }
+      
+      let path = '', query = ''
+      if (pathAndQuery.includes('?')) {
+        const qIdx = pathAndQuery.indexOf('?')
+        path = pathAndQuery.substring(0, qIdx)
+        query = pathAndQuery.substring(qIdx + 1)
+      } else {
+        path = pathAndQuery
+      }
+      
+      setRtspUsername(username)
+      setRtspPassword(password)
+      setRtspIpHost(host)
+      setRtspPort(port)
+      setRtspPath(path)
+      setRtspQuery(query)
+    } catch (e) {
+      console.error('Failed to parse RTSP URL into fields:', e)
+    }
+  }
+
+  // When switching to custom mode, parse the current combined URL
+  const handleInputModeSwitch = (mode: 'combined' | 'custom') => {
+    if (mode === 'custom' && rtspInputMode === 'combined') {
+      parseRtspUrlIntoFields(streamUrl)
+    } else if (mode === 'combined' && rtspInputMode === 'custom') {
+      const built = buildRtspUrl()
+      if (built) setStreamUrl(built)
+    }
+    setRtspInputMode(mode)
+  }
+
+  // Update combined URL when custom fields change
+  useEffect(() => {
+    if (rtspInputMode === 'custom') {
+      const built = buildRtspUrl()
+      if (built) setStreamUrl(built)
+    }
+  }, [rtspUsername, rtspPassword, rtspIpHost, rtspPort, rtspPath, rtspQuery, rtspInputMode])
+
+  // Test connection handler
+  const handleTestConnection = async () => {
+    setTestStatus('testing')
+    setTestError(null)
+    setShowPreview(false)
+    // Cleanup previous test stream
+    if (testStreamId) {
+      try { await fetch(`/api/cameras/test-connection/cleanup/${testStreamId}`, { method: 'POST' }) } catch {}
+      setTestStreamId(null)
+    }
+    try {
+      const body: any = { input_mode: rtspInputMode }
+      if (rtspInputMode === 'combined') {
+        body.rtsp_url = streamUrl
+      } else {
+        body.username = rtspUsername || undefined
+        body.password = rtspPassword || undefined
+        body.ip_host = rtspIpHost || undefined
+        body.port = rtspPort ? parseInt(rtspPort, 10) : undefined
+        body.path = rtspPath || undefined
+        body.query = rtspQuery || undefined
+      }
+      const res = await fetch('/api/cameras/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setTestStatus('success')
+        setTestStreamId(data.stream_id)
+        setShowPreview(true)
+        // If we get back the constructed URL and we're in custom mode, also update the combined URL
+        if (data.rtsp_url && rtspInputMode === 'custom') {
+          setStreamUrl(data.rtsp_url)
+        }
+      } else {
+        setTestStatus('failed')
+        setTestError(data.detail || 'Connection test failed')
+      }
+    } catch (err: any) {
+      setTestStatus('failed')
+      setTestError(err.message || 'Network error during test')
+    }
+  }
+
+  // Cleanup test stream on unmount or form close
+  const cleanupTestStream = () => {
+    if (testStreamId) {
+      fetch(`/api/cameras/test-connection/cleanup/${testStreamId}`, { method: 'POST' }).catch(() => {})
+      setTestStreamId(null)
+    }
+    setTestStatus('idle')
+    setTestError(null)
+    setShowPreview(false)
+  }
 
   // Extractor utility for RTSP credentials
   const extractCredentialsFromRtsp = (rtspUrl: string) => {
@@ -135,6 +292,14 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     setHwResolution('')
     setHwFps('')
     setHwBitrate('')
+    setRtspInputMode('combined')
+    setRtspUsername('')
+    setRtspPassword('')
+    setRtspIpHost('')
+    setRtspPort('554')
+    setRtspPath('')
+    setRtspQuery('')
+    cleanupTestStream()
   }
 
   const handleAddClick = () => {
@@ -373,7 +538,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
               {editingCamera ? `Edit Camera: ${editingCamera.name}` : 'Register Local Camera'}
             </h3>
             <button 
-              onClick={() => { setShowAddForm(false); setEditingCamera(null) }}
+              onClick={() => { cleanupTestStream(); setShowAddForm(false); setEditingCamera(null) }}
               style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
             >
               <X size={20} />
@@ -425,10 +590,159 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                 <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Bitrate (kbps)</label>
                 <input type="number" value={bitrate} onChange={e => setBitrate(e.target.value)} placeholder="e.g. 2048" style={formInputStyle} />
               </div>
-              <div>
-                <label style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>RTSP Ingress URL *</label>
-                <input value={streamUrl} onChange={e => setStreamUrl(e.target.value)} required placeholder="rtsp://host:port/stream" style={formInputStyle} />
+            </div>
+
+            {/* RTSP Connection Section */}
+            <div style={{ padding: '20px', background: 'rgba(99, 102, 241, 0.04)', border: '1px solid rgba(99, 102, 241, 0.15)', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h4 style={{ margin: 0, color: '#818cf8', fontSize: '0.88rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Activity size={16} /> RTSP Stream Connection
+                </h4>
+                <div style={{ display: 'flex', gap: '4px', background: 'rgba(15, 23, 42, 0.5)', borderRadius: '10px', padding: '3px' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleInputModeSwitch('combined')}
+                    style={{
+                      padding: '6px 14px', fontSize: '0.72rem', border: 'none', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s',
+                      background: rtspInputMode === 'combined' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                      color: rtspInputMode === 'combined' ? '#a5b4fc' : '#64748b',
+                      fontWeight: rtspInputMode === 'combined' ? 600 : 400
+                    }}
+                  >Full URL</button>
+                  <button
+                    type="button"
+                    onClick={() => handleInputModeSwitch('custom')}
+                    style={{
+                      padding: '6px 14px', fontSize: '0.72rem', border: 'none', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s',
+                      background: rtspInputMode === 'custom' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                      color: rtspInputMode === 'custom' ? '#a5b4fc' : '#64748b',
+                      fontWeight: rtspInputMode === 'custom' ? 600 : 400
+                    }}
+                  >Custom Fields</button>
+                </div>
               </div>
+
+              {rtspInputMode === 'combined' ? (
+                <div>
+                  <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>RTSP Ingress URL *</label>
+                  <input
+                    value={streamUrl}
+                    onChange={e => setStreamUrl(e.target.value)}
+                    required
+                    placeholder="rtsp://username:password@192.168.1.100:554/cam/realmonitor?channel=1&subtype=0"
+                    style={{ ...formInputStyle, fontFamily: 'monospace', fontSize: '0.82rem' }}
+                  />
+                  <div style={{ fontSize: '0.68rem', color: '#64748b', marginTop: '6px' }}>Format: rtsp://[username:password@]host[:port][/path][?query]</div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Username</label>
+                      <input value={rtspUsername} onChange={e => setRtspUsername(e.target.value)} placeholder="admin" style={formInputStyle} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Password</label>
+                      <input type="password" value={rtspPassword} onChange={e => setRtspPassword(e.target.value)} placeholder="••••••••" style={formInputStyle} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>IP Address / Hostname *</label>
+                      <input value={rtspIpHost} onChange={e => setRtspIpHost(e.target.value)} required={rtspInputMode === 'custom'} placeholder="192.168.1.100" style={formInputStyle} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Port</label>
+                      <input type="number" value={rtspPort} onChange={e => setRtspPort(e.target.value)} placeholder="554" style={formInputStyle} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Path</label>
+                      <input value={rtspPath} onChange={e => setRtspPath(e.target.value)} placeholder="/cam/realmonitor" style={{ ...formInputStyle, fontFamily: 'monospace', fontSize: '0.82rem' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Query Parameters</label>
+                      <input value={rtspQuery} onChange={e => setRtspQuery(e.target.value)} placeholder="channel=1&subtype=0" style={{ ...formInputStyle, fontFamily: 'monospace', fontSize: '0.82rem' }} />
+                    </div>
+                  </div>
+                  {streamUrl && (
+                    <div style={{ padding: '10px 14px', background: 'rgba(15, 23, 42, 0.5)', borderRadius: '10px', fontFamily: 'monospace', fontSize: '0.75rem', color: '#94a3b8', wordBreak: 'break-all' }}>
+                      <span style={{ color: '#64748b', marginRight: '8px' }}>Generated:</span>{streamUrl}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Test Connection Button + Status */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={testStatus === 'testing' || !streamUrl}
+                  className="batchBtn"
+                  style={{
+                    background: testStatus === 'success' ? 'rgba(16, 185, 129, 0.12)' : testStatus === 'failed' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(99, 102, 241, 0.12)',
+                    color: testStatus === 'success' ? '#34d399' : testStatus === 'failed' ? '#f87171' : '#a5b4fc',
+                    borderColor: testStatus === 'success' ? 'rgba(16, 185, 129, 0.25)' : testStatus === 'failed' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(99, 102, 241, 0.25)',
+                    fontSize: '0.78rem', padding: '8px 18px', transition: 'all 0.3s'
+                  }}
+                >
+                  {testStatus === 'testing' ? (
+                    <><RefreshCw size={14} style={{ marginRight: '6px', animation: 'spin 1s linear infinite' }} /> Testing Connection...</>
+                  ) : testStatus === 'success' ? (
+                    <><CheckCircle size={14} style={{ marginRight: '6px' }} /> Connected Successfully</>
+                  ) : testStatus === 'failed' ? (
+                    <><AlertCircle size={14} style={{ marginRight: '6px' }} /> Retry Test Connection</>
+                  ) : (
+                    <><Activity size={14} style={{ marginRight: '6px' }} /> Test Connection</>
+                  )}
+                </button>
+                {testStatus === 'failed' && testError && (
+                  <span style={{ fontSize: '0.72rem', color: '#f87171', maxWidth: '400px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={testError}>
+                    {testError}
+                  </span>
+                )}
+                {testStatus === 'success' && showPreview && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview(false)}
+                    className="batchBtn"
+                    style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.08)', color: '#94a3b8', fontSize: '0.72rem', padding: '6px 12px' }}
+                  >
+                    <X size={12} style={{ marginRight: '4px' }} /> Hide Preview
+                  </button>
+                )}
+                {testStatus === 'success' && !showPreview && testStreamId && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview(true)}
+                    className="batchBtn"
+                    style={{ background: 'rgba(16, 185, 129, 0.08)', borderColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', fontSize: '0.72rem', padding: '6px 12px' }}
+                  >
+                    <CameraIcon size={12} style={{ marginRight: '4px' }} /> Show Preview
+                  </button>
+                )}
+              </div>
+
+              {/* Live Preview */}
+              {showPreview && testStreamId && testStatus === 'success' && (
+                <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid rgba(16, 185, 129, 0.2)', background: '#000', aspectRatio: '16/9', maxHeight: '360px', position: 'relative' }}>
+                  <div style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 10, display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(0,0,0,0.6)', borderRadius: '8px', padding: '4px 10px', fontSize: '0.7rem', color: '#34d399' }}>
+                    <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#34d399', animation: 'pulse 2s infinite' }} />
+                    LIVE PREVIEW
+                  </div>
+                  <WebRTCPlayer
+                    streamId={testStreamId}
+                    posterLabel="Test Preview"
+                    onFallbackToHls={() => {}}
+                    onClose={() => setShowPreview(false)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0' }}>
             </div>
 
             <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
@@ -509,7 +823,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '10px' }}>
               <button 
                 type="button" 
-                onClick={() => { setShowAddForm(false); setEditingCamera(null) }}
+                onClick={() => { cleanupTestStream(); setShowAddForm(false); setEditingCamera(null) }}
                 className="batchBtn"
                 style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.1)', color: '#cbd5e1' }}
               >
