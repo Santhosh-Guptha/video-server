@@ -74,6 +74,17 @@ async def resolve_stream_by_identifier(
     res = await db_session.execute(stmt)
     stream = res.scalar_one_or_none()
     if stream:
+        if purpose == "live" and stream.status == StreamState.OFFLINE:
+            alt_stmt = select(CameraStream).where(
+                CameraStream.camera_id == stream.camera_id,
+                CameraStream.id != stream.id
+            )
+            alt_res = await db_session.execute(alt_stmt)
+            alt_streams = alt_res.scalars().all()
+            for alt in alt_streams:
+                if alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING):
+                    print(f"[webrtc] Exact match {stream.stream_id} is OFFLINE. Falling back to active alt: {alt.stream_id}")
+                    return alt
         return stream
         
     # 2. Case-insensitive match on stream_id
@@ -81,6 +92,17 @@ async def resolve_stream_by_identifier(
     res = await db_session.execute(stmt)
     stream = res.scalar_one_or_none()
     if stream:
+        if purpose == "live" and stream.status == StreamState.OFFLINE:
+            alt_stmt = select(CameraStream).where(
+                CameraStream.camera_id == stream.camera_id,
+                CameraStream.id != stream.id
+            )
+            alt_res = await db_session.execute(alt_stmt)
+            alt_streams = alt_res.scalars().all()
+            for alt in alt_streams:
+                if alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING):
+                    print(f"[webrtc] Case-insensitive match {stream.stream_id} is OFFLINE. Falling back to active alt: {alt.stream_id}")
+                    return alt
         return stream
         
     # 3. Check if the identifier matches a camera name (case-insensitive)

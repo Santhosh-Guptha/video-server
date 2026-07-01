@@ -1495,7 +1495,13 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
             await session.flush()
 
         # 2. Sync CameraStream Child Row
-        stream_id = str(raw.get("streamId") or f"{raw.get('serverCameraId','camera')}_{raw.get('streamType','NORMAL')}")
+        server_cam_id = raw.get("serverCameraId")
+        stream_type_val = str(raw.get("streamType") or "NORMAL").upper()
+        if not server_cam_id:
+            stream_id = str(raw.get("streamId") or f"camera_{source_id}_{stream_type_val}")
+        else:
+            stream_id = f"{server_cam_id}_{stream_type_val}"
+            
         stream_url = str(raw.get("rtspUrl") or "").strip()
         if not stream_url.startswith(("rtsp://", "rtsps://", "rtmp://")):
             stream_url = f"rtsp://{stream_url}"
