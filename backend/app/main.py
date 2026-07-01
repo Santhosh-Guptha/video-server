@@ -616,6 +616,35 @@ def get_file_duration(file_path: str, ffmpeg_path: str = "ffmpeg") -> float:
     
     return float(settings.segment_time_seconds)
 
+
+def has_audio_stream(file_path: str, ffmpeg_path: str = "ffmpeg") -> bool:
+    """Uses ffprobe to check if the video file contains an audio stream."""
+    ffprobe_path = "ffprobe"
+    if "/" in ffmpeg_path or "\\" in ffmpeg_path:
+        dirname = os.path.dirname(ffmpeg_path)
+        basename = os.path.basename(ffmpeg_path)
+        ext = os.path.splitext(basename)[1]
+        ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
+    
+    cmd = [
+        ffprobe_path,
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_streams",
+        "-select_streams", "a",
+        file_path
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            streams = data.get("streams", [])
+            return len(streams) > 0
+    except Exception as e:
+        print(f"[metadata] ffprobe audio check failed for {file_path}: {e}")
+    return False
+
+
 @app.post("/api/recordings/segment-complete")
 async def record_segment_complete(
     payload: SegmentCompletePayload,
@@ -1125,6 +1154,8 @@ async def download_recording(
     list_file_path = None
 
     try:
+        has_audio = has_audio_stream(os.path.abspath(str(valid_files[0])), settings.ffmpeg_path)
+
         # Case 1: Exactly 1 file
         if len(valid_files) == 1:
             cmd = [
@@ -1132,10 +1163,16 @@ async def download_recording(
                 "-ss", f"{start_offset:.3f}",
                 "-i", os.path.abspath(str(valid_files[0])),
                 "-t", f"{duration:.3f}",
-                "-c", "copy",
+                "-c:v", "copy"
+            ]
+            if has_audio:
+                cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+            else:
+                cmd.extend(["-an"])
+            cmd.extend([
                 "-y",
                 output_path
-            ]
+            ])
             print(f"[download] Running ffmpeg trim: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode != 0:
@@ -1157,10 +1194,16 @@ async def download_recording(
                 "-i", list_file_path,
                 "-ss", f"{start_offset:.3f}",
                 "-t", f"{duration:.3f}",
-                "-c", "copy",
+                "-c:v", "copy"
+            ]
+            if has_audio:
+                cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+            else:
+                cmd.extend(["-an"])
+            cmd.extend([
                 "-y",
                 output_path
-            ]
+            ])
             print(f"[download] Running ffmpeg concat and trim: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0:
@@ -2463,16 +2506,35 @@ async def stream_playback(
     tmp_file.write(concat_content)
     tmp_file.close()
 
+    # Detect audio stream presence
+    first_path = ""
+    if segments:
+        seg = segments[0]
+        p = Path(seg.file_path)
+        if not p.is_absolute() or not p.exists():
+            parts = Path(seg.file_path).parts
+            rel_path = "/".join(parts[-3:])
+            p = Path(settings.recording_dir) / rel_path
+        first_path = os.path.abspath(str(p))
+
+    has_audio = has_audio_stream(first_path, settings.ffmpeg_path) if first_path else False
+
     cmd = [
         settings.ffmpeg_path,
         "-f", "concat",
         "-safe", "0",
         "-i", tmp_file.name,
-        "-c", "copy",
+        "-c:v", "copy"
+    ]
+    if has_audio:
+        cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+    else:
+        cmd.extend(["-an"])
+    cmd.extend([
         "-f", "mp4",
         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         "pipe:1"
-    ]
+    ])
 
     print(f"[stream] Running: {' '.join(cmd)}")
 
