@@ -1502,7 +1502,7 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
         else:
             stream_id = f"{server_cam_id}_{stream_type_val}"
             
-        stream_url = str(raw.get("rtspUrl") or "").strip()
+        stream_url = str(raw.get("rtspUrl") or "").strip().replace(" ", "")
         if not stream_url.startswith(("rtsp://", "rtsps://", "rtmp://")):
             stream_url = f"rtsp://{stream_url}"
 
