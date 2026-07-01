@@ -340,8 +340,9 @@ async def startup():
             try:
                 async with db.engine.begin() as conn:
                     await conn.execute(text(sql))
-            except Exception:
-                pass
+                    print(f"[migration] Upgrade succeeded: {sql}")
+            except Exception as e:
+                print(f"[migration] Upgrade skipped/failed: {sql}. Error: {e}")
 
     try:
         async with db.engine.begin() as conn:
