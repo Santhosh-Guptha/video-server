@@ -327,32 +327,26 @@ async def startup():
     # Attempt to auto-create PostgreSQL tables on start (fallback logic)
     from . import db
     
-    async def apply_dynamic_schema_upgrades(conn):
-        try:
-            await conn.execute(text("ALTER TABLE cameras ADD COLUMN make VARCHAR(128);"))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text("ALTER TABLE cameras ADD COLUMN synced_from_api BOOLEAN DEFAULT FALSE NOT NULL;"))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text("UPDATE cameras SET synced_from_api = TRUE;"))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text("ALTER TABLE cameras ADD COLUMN camera_source VARCHAR(32) DEFAULT 'UPSTREAM' NOT NULL;"))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text("ALTER TABLE cameras ADD COLUMN is_read_only BOOLEAN DEFAULT TRUE NOT NULL;"))
-        except Exception:
-            pass
+    async def apply_dynamic_schema_upgrades():
+        upgrades = [
+            "ALTER TABLE cameras ADD COLUMN make VARCHAR(128);",
+            "ALTER TABLE cameras ADD COLUMN synced_from_api BOOLEAN DEFAULT FALSE NOT NULL;",
+            "UPDATE cameras SET synced_from_api = TRUE;",
+            "ALTER TABLE cameras ADD COLUMN camera_source VARCHAR(32) DEFAULT 'UPSTREAM' NOT NULL;",
+            "ALTER TABLE cameras ADD COLUMN is_read_only BOOLEAN DEFAULT TRUE NOT NULL;",
+            "UPDATE cameras SET camera_source = 'UPSTREAM', is_read_only = TRUE WHERE synced_from_api = TRUE;"
+        ]
+        for sql in upgrades:
+            try:
+                async with db.engine.begin() as conn:
+                    await conn.execute(text(sql))
+            except Exception:
+                pass
 
     try:
         async with db.engine.begin() as conn:
             await conn.run_sync(db.Base.metadata.create_all)
-            await apply_dynamic_schema_upgrades(conn)
+        await apply_dynamic_schema_upgrades()
     except Exception as e:
         print(f"[startup] PostgreSQL connection/migration failed: {e}. Falling back to local SQLite.")
         from .db import reset_db_engine
@@ -362,7 +356,7 @@ async def startup():
         # Create SQLite tables
         async with db.engine.begin() as conn:
             await conn.run_sync(db.Base.metadata.create_all)
-            await apply_dynamic_schema_upgrades(conn)
+        await apply_dynamic_schema_upgrades()
 
     Path(settings.recording_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.hls_dir).mkdir(parents=True, exist_ok=True)
