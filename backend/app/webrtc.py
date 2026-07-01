@@ -57,6 +57,28 @@ def _sync_http_request(url: str, method: str, content: bytes, headers: dict) -> 
 router = APIRouter(prefix="/api/webrtc", tags=["webrtc"])
 streams_router = APIRouter(prefix="/api/streams", tags=["streams"])
 
+def is_private_rtsp_url(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        host = url.split("://", 1)[-1].split("@")[-1].split("/")[0].split(":")[0]
+        if host == "localhost" or host == "127.0.0.1":
+            return True
+        if host.startswith("10.") or host.startswith("192.168."):
+            return True
+        if host.startswith("172."):
+            parts = host.split(".")
+            if len(parts) >= 2:
+                try:
+                    second_octet = int(parts[1])
+                    if 16 <= second_octet <= 31:
+                        return True
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    return False
+
 async def resolve_stream_by_identifier(
     identifier: str,
     db_session: AsyncSession,
@@ -74,7 +96,8 @@ async def resolve_stream_by_identifier(
     res = await db_session.execute(stmt)
     stream = res.scalar_one_or_none()
     if stream:
-        if purpose == "live" and stream.status not in (StreamState.ONLINE, StreamState.WARM):
+        if purpose == "live":
+            is_req_private = is_private_rtsp_url(stream.stream_url)
             alt_stmt = select(CameraStream).where(
                 CameraStream.camera_id == stream.camera_id,
                 CameraStream.id != stream.id
@@ -82,8 +105,10 @@ async def resolve_stream_by_identifier(
             alt_res = await db_session.execute(alt_stmt)
             alt_streams = alt_res.scalars().all()
             for alt in alt_streams:
-                if alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING):
-                    print(f"[webrtc] Exact match {stream.stream_id} status is {stream.status}. Falling back to active alt: {alt.stream_id}")
+                is_alt_private = is_private_rtsp_url(alt.stream_url)
+                if (is_req_private and not is_alt_private) or \
+                   (stream.status not in (StreamState.ONLINE, StreamState.WARM) and alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING)):
+                    print(f"[webrtc] Exact match fallback: {stream.stream_id} (private={is_req_private}) -> alt: {alt.stream_id} (private={is_alt_private})")
                     return alt
         return stream
         
@@ -92,7 +117,8 @@ async def resolve_stream_by_identifier(
     res = await db_session.execute(stmt)
     stream = res.scalar_one_or_none()
     if stream:
-        if purpose == "live" and stream.status not in (StreamState.ONLINE, StreamState.WARM):
+        if purpose == "live":
+            is_req_private = is_private_rtsp_url(stream.stream_url)
             alt_stmt = select(CameraStream).where(
                 CameraStream.camera_id == stream.camera_id,
                 CameraStream.id != stream.id
@@ -100,8 +126,10 @@ async def resolve_stream_by_identifier(
             alt_res = await db_session.execute(alt_stmt)
             alt_streams = alt_res.scalars().all()
             for alt in alt_streams:
-                if alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING):
-                    print(f"[webrtc] Case-insensitive match {stream.stream_id} status is {stream.status}. Falling back to active alt: {alt.stream_id}")
+                is_alt_private = is_private_rtsp_url(alt.stream_url)
+                if (is_req_private and not is_alt_private) or \
+                   (stream.status not in (StreamState.ONLINE, StreamState.WARM) and alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING)):
+                    print(f"[webrtc] Case-insensitive match fallback: {stream.stream_id} (private={is_req_private}) -> alt: {alt.stream_id} (private={is_alt_private})")
                     return alt
         return stream
         
