@@ -87,6 +87,8 @@ async def resolve_stream_by_identifier(
     """
     Resolves a camera stream from a flexible identifier (exact stream_id,
     case-insensitive stream_id, stream_id prefix, or camera name).
+    Always returns the exact matching stream config, without any sibling fallback
+    or switching to other stream profiles.
     """
     if not identifier:
         return None
@@ -96,20 +98,6 @@ async def resolve_stream_by_identifier(
     res = await db_session.execute(stmt)
     stream = res.scalar_one_or_none()
     if stream:
-        if purpose == "live":
-            is_req_private = is_private_rtsp_url(stream.stream_url)
-            alt_stmt = select(CameraStream).where(
-                CameraStream.camera_id == stream.camera_id,
-                CameraStream.id != stream.id
-            )
-            alt_res = await db_session.execute(alt_stmt)
-            alt_streams = alt_res.scalars().all()
-            for alt in alt_streams:
-                is_alt_private = is_private_rtsp_url(alt.stream_url)
-                if (is_req_private and not is_alt_private) or \
-                   (stream.status not in (StreamState.ONLINE, StreamState.WARM) and alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING)):
-                    print(f"[webrtc] Exact match fallback: {stream.stream_id} (private={is_req_private}) -> alt: {alt.stream_id} (private={is_alt_private})")
-                    return alt
         return stream
         
     # 2. Case-insensitive match on stream_id
@@ -117,26 +105,9 @@ async def resolve_stream_by_identifier(
     res = await db_session.execute(stmt)
     stream = res.scalar_one_or_none()
     if stream:
-        if purpose == "live":
-            is_req_private = is_private_rtsp_url(stream.stream_url)
-            alt_stmt = select(CameraStream).where(
-                CameraStream.camera_id == stream.camera_id,
-                CameraStream.id != stream.id
-            )
-            alt_res = await db_session.execute(alt_stmt)
-            alt_streams = alt_res.scalars().all()
-            for alt in alt_streams:
-                is_alt_private = is_private_rtsp_url(alt.stream_url)
-                if (is_req_private and not is_alt_private) or \
-                   (stream.status not in (StreamState.ONLINE, StreamState.WARM) and alt.status in (StreamState.ONLINE, StreamState.WARM, StreamState.CONNECTING)):
-                    print(f"[webrtc] Case-insensitive match fallback: {stream.stream_id} (private={is_req_private}) -> alt: {alt.stream_id} (private={is_alt_private})")
-                    return alt
         return stream
         
-    # 3. Check if the identifier matches a camera name (case-insensitive)
-    # or is a prefix of a stream_id.
-    # Let's get all streams that start with this identifier (e.g. IDENTIFIER_HD, IDENTIFIER_NORMAL)
-    # or belong to a camera named IDENTIFIER.
+    # 3. Check if the identifier matches a camera name (case-insensitive) or stream_id prefix
     stmt = select(CameraStream).join(Camera).where(
         (func.lower(CameraStream.stream_id).like(f"{identifier.lower()}%")) |
         (func.lower(Camera.name) == identifier.lower())
@@ -144,40 +115,10 @@ async def resolve_stream_by_identifier(
     res = await db_session.execute(stmt)
     streams = res.scalars().all()
     
-    if not streams:
-        return None
+    if streams:
+        return streams[0]
         
-    # If multiple profiles exist, select the preferred profile according to the active policy
-    if purpose == "playback":
-        from .config import resolve_playback_profile
-        preferred_profile_type = resolve_playback_profile()  # Returns "MAIN", "SUB", or "MOBILE"
-    else:
-        from .config import resolve_live_profile
-        preferred_profile_type = resolve_live_profile()  # Returns "MAIN", "SUB", or "MOBILE"
-    
-    # Try to find the stream matching the preferred profile type
-    for s in streams:
-        if s.profile_type == preferred_profile_type:
-            return s
-            
-    # Fallback logic
-    if purpose == "playback":
-        from .config import PLAYBACK_ALLOW_NORMAL_FALLBACK
-        fallbacks = []
-        if PLAYBACK_ALLOW_NORMAL_FALLBACK:
-            fallbacks.append("SUB")
-        fallbacks.extend(["MAIN", "SUB", "MOBILE"])
-        for profile in fallbacks:
-            for s in streams:
-                if s.profile_type == profile:
-                    return s
-    else:
-        for profile in ["SUB", "MAIN", "MOBILE"]:
-            for s in streams:
-                if s.profile_type == profile:
-                    return s
-                
-    return streams[0]
+    return None
 
 class StatsPayload(BaseModel):
     session_id: str

@@ -19,7 +19,7 @@ export type CameraStream = {
 export type Camera = {
   id: string
   pk?: number // Backward compatibility
-  source_camera_id: number
+  source_camera_id?: number | null
   stream_id: string // Primary stream shortcut
   name: string
   stream_type: string // Primary stream type shortcut
@@ -36,6 +36,8 @@ export type Camera = {
   server_http_port?: number | null
   make?: string | null
   synced_from_api?: boolean
+  camera_source?: 'UPSTREAM' | 'LOCAL'
+  is_read_only?: boolean
   raw_json: string
   streams: CameraStream[]
   created_at: string

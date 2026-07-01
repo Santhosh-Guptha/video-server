@@ -15,6 +15,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'all' | 'upstream' | 'local'>('all')
 
   const [useUpstreamCameras, setUseUpstreamCameras] = useState(true)
   const [enableDeviceConfig, setEnableDeviceConfig] = useState(false)
@@ -311,6 +312,11 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   }
 
   const handleEditClick = (cam: Camera) => {
+    const isUpstream = cam.camera_source === 'UPSTREAM' || (cam.camera_source !== 'LOCAL' && cam.synced_from_api)
+    if (isUpstream) {
+      setError('Cannot edit upstream managed cameras')
+      return
+    }
     setError(null)
     setSuccess(null)
     setEditingCamera(cam)
@@ -845,9 +851,63 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
       {/* Camera Inventory List */}
       {!showAddForm && !editingCamera && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#e2e8f0', margin: '10px 0 0 0' }}>
-            Registered Ingress Configurations ({cameras.length})
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '10px 0 0 0' }}>
+            <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#e2e8f0', margin: 0 }}>
+              Registered Ingress Configurations ({cameras.length})
+            </h3>
+            
+            {/* Source Tab Filters */}
+            <div style={{ display: 'flex', gap: '6px', background: 'rgba(15, 23, 42, 0.4)', padding: '4px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <button
+                onClick={() => setActiveTab('all')}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  fontSize: '0.76rem',
+                  fontWeight: 600,
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: activeTab === 'all' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                  color: activeTab === 'all' ? '#60a5fa' : '#94a3b8',
+                  transition: 'all 0.2s'
+                }}
+              >
+                All ({cameras.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('upstream')}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  fontSize: '0.76rem',
+                  fontWeight: 600,
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: activeTab === 'upstream' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                  color: activeTab === 'upstream' ? '#60a5fa' : '#94a3b8',
+                  transition: 'all 0.2s'
+                }}
+              >
+                Upstream ({cameras.filter(c => c.camera_source === 'UPSTREAM' || (c.camera_source !== 'LOCAL' && c.synced_from_api)).length})
+              </button>
+              <button
+                onClick={() => setActiveTab('local')}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  fontSize: '0.76rem',
+                  fontWeight: 600,
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: activeTab === 'local' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                  color: activeTab === 'local' ? '#60a5fa' : '#94a3b8',
+                  transition: 'all 0.2s'
+                }}
+              >
+                Local ({cameras.filter(c => c.camera_source === 'LOCAL' || (c.camera_source !== 'UPSTREAM' && !c.synced_from_api)).length})
+              </button>
+            </div>
+          </div>
 
           {cameras.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', background: 'rgba(30, 41, 59, 0.2)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '16px' }}>
@@ -857,76 +917,99 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {cameras.map((cam) => {
-                const stream = cam.streams[0]
-                return (
-                  <div 
-                    key={cam.id} 
-                    style={{ 
-                      padding: '16px 20px', 
-                      background: 'rgba(15, 23, 42, 0.3)', 
-                      border: '1px solid rgba(255,255,255,0.05)', 
-                      borderRadius: '16px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                      <div style={{ padding: '10px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
-                        <CameraIcon size={20} />
-                      </div>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#f8fafc' }}>{cam.name}</span>
-                          <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: cam.active ? 'rgba(52,211,153,0.12)' : 'rgba(239,68,68,0.12)', color: cam.active ? '#34d399' : '#f87171', border: cam.active ? '1px solid rgba(52,211,153,0.2)' : '1px solid rgba(239,68,68,0.2)' }}>
-                            {cam.active ? 'Active' : 'Disabled'}
-                          </span>
-                          {cam.synced_from_api && (
-                            <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: 'rgba(59,130,246,0.12)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)' }}>
-                              Synced (Cloud)
+              {cameras
+                .filter((cam) => {
+                  const isUpstream = cam.camera_source === 'UPSTREAM' || (cam.camera_source !== 'LOCAL' && cam.synced_from_api)
+                  if (activeTab === 'upstream') return isUpstream
+                  if (activeTab === 'local') return !isUpstream
+                  return true
+                })
+                .map((cam) => {
+                  const stream = cam.streams[0]
+                  const isUpstream = cam.camera_source === 'UPSTREAM' || (cam.camera_source !== 'LOCAL' && cam.synced_from_api)
+                  return (
+                    <div 
+                      key={cam.id} 
+                      style={{ 
+                        padding: '16px 20px', 
+                        background: 'rgba(15, 23, 42, 0.3)', 
+                        border: '1px solid rgba(255,255,255,0.05)', 
+                        borderRadius: '16px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                        <div style={{ padding: '10px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
+                          <CameraIcon size={20} />
+                        </div>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#f8fafc' }}>{cam.name}</span>
+                            <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: cam.active ? 'rgba(52,211,153,0.12)' : 'rgba(239,68,68,0.12)', color: cam.active ? '#34d399' : '#f87171', border: cam.active ? '1px solid rgba(52,211,153,0.2)' : '1px solid rgba(239,68,68,0.2)' }}>
+                              {cam.active ? 'Active' : 'Disabled'}
                             </span>
-                          )}
-                        </div>
-                        <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '0.76rem', color: '#94a3b8' }}>
-                          <span>Make: {cam.make || 'Generic'}</span>
-                          <span>•</span>
-                          <span>Stream ID: <code style={{ fontFamily: 'monospace', color: '#38bdf8' }}>{stream?.stream_id || '—'}</code></span>
-                          <span>•</span>
-                          <span>RTSP Ingress: <code style={{ fontFamily: 'monospace' }}>{stream?.stream_url || '—'}</code></span>
-                          {stream?.always_on && (
-                            <>
-                              <span>•</span>
-                              <span style={{ color: '#fbbf24', fontWeight: 500 }}>24/7 Rec</span>
-                            </>
-                          )}
+                            {isUpstream ? (
+                              <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: 'rgba(59,130,246,0.12)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)' }} title="Configuration controlled externally">
+                                Managed by Upstream
+                              </span>
+                            ) : (
+                              <span style={{ padding: '2px 8px', borderRadius: '8px', fontSize: '0.68rem', fontWeight: 600, background: 'rgba(52,211,153,0.12)', color: '#34d399', border: '1px solid rgba(52,211,153,0.2)' }}>
+                                Managed Locally
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '0.76rem', color: '#94a3b8' }}>
+                            <span>Make: {cam.make || 'Generic'}</span>
+                            <span>•</span>
+                            <span>Stream ID: <code style={{ fontFamily: 'monospace', color: '#38bdf8' }}>{stream?.stream_id || '—'}</code></span>
+                            <span>•</span>
+                            <span>RTSP Ingress: <code style={{ fontFamily: 'monospace' }}>{stream?.stream_url || '—'}</code></span>
+                            {stream?.always_on && (
+                              <>
+                                <span>•</span>
+                                <span style={{ color: '#fbbf24', fontWeight: 500 }}>24/7 Rec</span>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                      <button 
-                        onClick={() => handleEditClick(cam)}
-                        className="batchBtn"
-                        title="Edit Camera Details"
-                        style={{ padding: '8px', minWidth: 'auto', background: 'rgba(255,255,255,0.03)', borderColor: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}
-                      >
-                        <Edit size={16} />
-                      </button>
-                      {!cam.synced_from_api && (
-                        <button 
-                          onClick={() => stream && handleDelete(stream.stream_id)}
-                          className="batchBtn"
-                          title="Delete Camera Configuration"
-                          style={{ padding: '8px', minWidth: 'auto', background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.1)', color: '#f87171' }}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        {!isUpstream ? (
+                          <>
+                            <button 
+                              onClick={() => handleEditClick(cam)}
+                              className="batchBtn"
+                              title="Edit Camera Details"
+                              style={{ padding: '8px', minWidth: 'auto', background: 'rgba(255,255,255,0.03)', borderColor: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}
+                            >
+                              <Edit size={16} />
+                            </button>
+                            <button 
+                              onClick={() => stream && handleDelete(stream.stream_id)}
+                              className="batchBtn"
+                              title="Delete Camera Configuration"
+                              style={{ padding: '8px', minWidth: 'auto', background: 'rgba(239,68,68,0.05)', borderColor: 'rgba(239,68,68,0.1)', color: '#f87171' }}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={onRefresh}
+                            className="batchBtn"
+                            title="Refresh Upstream Configuration"
+                            style={{ padding: '8px', minWidth: 'auto', background: 'rgba(59,130,246,0.05)', borderColor: 'rgba(59,130,246,0.1)', color: '#60a5fa' }}
+                          >
+                            <RefreshCw size={16} style={{ animation: loading ? 'spin 1.5s linear infinite' : 'none' }} />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })}
             </div>
           )}
         </div>

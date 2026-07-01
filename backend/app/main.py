@@ -340,6 +340,14 @@ async def startup():
             await conn.execute(text("UPDATE cameras SET synced_from_api = TRUE;"))
         except Exception:
             pass
+        try:
+            await conn.execute(text("ALTER TABLE cameras ADD COLUMN camera_source VARCHAR(32) DEFAULT 'UPSTREAM' NOT NULL;"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE cameras ADD COLUMN is_read_only BOOLEAN DEFAULT TRUE NOT NULL;"))
+        except Exception:
+            pass
 
     try:
         async with db.engine.begin() as conn:
@@ -1465,9 +1473,11 @@ async def cleanup_test_connection(stream_id: str):
 async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], skip_mediamtx_api: bool = False):
     raw_cameras = await fetch_upstream_cameras()
     updated_count = 0
+    received_source_ids = set()
     
     for raw in raw_cameras:
         source_id = int(raw.get("cameraId") or raw.get("id"))
+        received_source_ids.add(source_id)
         name = str(raw.get("name") or f"Camera {source_id}")
         active = bool(raw.get("active", True))
 
@@ -1483,7 +1493,9 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
                 name=name,
                 active=active,
                 make=make,
-                synced_from_api=True
+                synced_from_api=True,
+                camera_source="UPSTREAM",
+                is_read_only=True
             )
             session.add(camera)
             await session.flush()
@@ -1492,6 +1504,8 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
             camera.active = active
             camera.make = make
             camera.synced_from_api = True
+            camera.camera_source = "UPSTREAM"
+            camera.is_read_only = True
             await session.flush()
 
         # 2. Sync CameraStream Child Row
@@ -1575,6 +1589,23 @@ async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
                 await stream_manager.remove_stream(session, stream)
 
         updated_count += 1
+
+    # 3. Disable removed upstream cameras (never touch local ones)
+    active_upstream_res = await session.execute(
+        select(Camera).options(selectinload(Camera.streams)).where(
+            Camera.camera_source == "UPSTREAM",
+            Camera.active == True
+        )
+    )
+    for db_cam in active_upstream_res.scalars().all():
+        if db_cam.source_camera_id not in received_source_ids:
+            print(f"[sync_cameras] Upstream camera {db_cam.name} (id={db_cam.source_camera_id}) not in upstream response, disabling.")
+            db_cam.active = False
+            for s in db_cam.streams:
+                try:
+                    await stream_manager.remove_stream(session, s)
+                except Exception as e:
+                    print(f"[sync_cameras] Failed to remove stream {s.stream_id} during sync cleanup: {e}")
 
     await session.commit()
 
@@ -3086,12 +3117,19 @@ async def create_camera(
     payload: CameraCreate,
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
-    # Validate unique source_camera_id
-    existing_cam = await session.execute(
-        select(Camera).where(Camera.source_camera_id == payload.source_camera_id)
-    )
-    if existing_cam.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail=f"Camera with ID {payload.source_camera_id} already exists")
+    from sqlalchemy import func
+    # Generate unique source_camera_id for LOCAL camera if not provided
+    if payload.source_camera_id is None or payload.source_camera_id == 0:
+        min_id_res = await session.execute(select(func.min(Camera.source_camera_id)))
+        min_id = min_id_res.scalar() or 0
+        payload.source_camera_id = min(min_id - 1, -1)
+    else:
+        # Validate unique source_camera_id
+        existing_cam = await session.execute(
+            select(Camera).where(Camera.source_camera_id == payload.source_camera_id)
+        )
+        if existing_cam.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail=f"Camera with ID {payload.source_camera_id} already exists")
 
     # Validate unique stream_id
     existing_stream = await session.execute(
@@ -3113,6 +3151,8 @@ async def create_camera(
         active=payload.active,
         make=payload.make,
         synced_from_api=False, # Manually created
+        camera_source="LOCAL",
+        is_read_only=False
     )
     session.add(camera)
     await session.flush()
@@ -3165,6 +3205,8 @@ async def update_camera(
         raise HTTPException(status_code=404, detail="Camera stream not found")
 
     camera = stream.camera
+    if camera.camera_source == "UPSTREAM" or camera.is_read_only:
+        raise HTTPException(status_code=400, detail="Cannot modify read-only upstream cameras")
     
     # Update camera parent fields
     camera.name = payload.name
@@ -3217,6 +3259,8 @@ async def delete_camera(
         raise HTTPException(status_code=404, detail="Camera stream not found")
 
     camera = stream.camera
+    if camera.camera_source == "UPSTREAM" or camera.is_read_only:
+        raise HTTPException(status_code=400, detail="Cannot delete read-only upstream cameras")
 
     # Fetch all streams for this camera to remove them from MediaMTX and disk
     streams_res = await session.execute(
