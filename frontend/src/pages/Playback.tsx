@@ -40,6 +40,8 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0)
   const [videoSrc, setVideoSrc] = useState<string>('')
   const [isPaused, setIsPaused] = useState(true)
+  const [playbackRangeEnd, setPlaybackRangeEnd] = useState<number | null>(null)
+  const [clipGroupSize, setClipGroupSize] = useState<number>(10) // default 10 min
   const [downloadStart, setDownloadStart] = useState('00:00')
   const [downloadEnd, setDownloadEnd] = useState('23:59')
 
@@ -159,7 +161,8 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
   const timeFrames = useMemo(() => {
     if (!rawSegments || rawSegments.length === 0) return []
     
-    const blocks: { start: number; end: number; label: string }[] = []
+    // Step 1: Group segments into contiguous blocks (gap <= 5s)
+    const contiguousBlocks: { start: number; end: number }[] = []
     let currentBlock: { start: number; end: number } | null = null
     
     const sorted = [...rawSegments].sort((a, b) => a.start_ts - b.start_ts)
@@ -171,26 +174,57 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
         if (seg.start_ts - currentBlock.end <= 5) {
           currentBlock.end = seg.end_ts
         } else {
-          const dur = Math.round((currentBlock.end - currentBlock.start) / 60)
-          blocks.push({
-            start: currentBlock.start,
-            end: currentBlock.end,
-            label: `${new Date(currentBlock.start * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} - ${new Date(currentBlock.end * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} (${dur} min)`
-          })
+          contiguousBlocks.push(currentBlock)
           currentBlock = { start: seg.start_ts, end: seg.end_ts }
         }
       }
     }
     if (currentBlock) {
-      const dur = Math.round((currentBlock.end - currentBlock.start) / 60)
-      blocks.push({
-        start: currentBlock.start,
-        end: currentBlock.end,
-        label: `${new Date(currentBlock.start * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} - ${new Date(currentBlock.end * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} (${dur} min)`
-      })
+      contiguousBlocks.push(currentBlock)
     }
-    return blocks
-  }, [rawSegments])
+
+    // Step 2: Slice contiguous blocks into chunks if clipGroupSize > 0
+    const chunks: { start: number; end: number; label: string }[] = []
+    
+    for (const block of contiguousBlocks) {
+      const blockStart = block.start
+      const blockEnd = block.end
+      const blockDuration = blockEnd - blockStart
+      
+      if (clipGroupSize <= 0) {
+        // Full contiguous block
+        const dur = Math.round(blockDuration / 60)
+        chunks.push({
+          start: blockStart,
+          end: blockEnd,
+          label: `${new Date(blockStart * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} - ${new Date(blockEnd * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} (${dur} min)`
+        })
+      } else {
+        const chunkSizeSec = clipGroupSize * 60
+        let chunkStart = blockStart
+        
+        while (chunkStart < blockEnd) {
+          let chunkEnd = chunkStart + chunkSizeSec
+          if (chunkEnd > blockEnd) {
+            chunkEnd = blockEnd
+          }
+          
+          const durSec = chunkEnd - chunkStart
+          const dur = Math.ceil(durSec / 60)
+          
+          chunks.push({
+            start: chunkStart,
+            end: chunkEnd,
+            label: `${new Date(chunkStart * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} - ${new Date(chunkEnd * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} (${dur} min)`
+          })
+          
+          chunkStart = chunkEnd
+        }
+      }
+    }
+    
+    return chunks
+  }, [rawSegments, clipGroupSize])
 
   const trimOverlay = useMemo(() => {
     if (!selectedDate || !timelineWindow.start) return null
@@ -367,6 +401,20 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     }
     
     const currentAbs = currentSegment.start_ts + video.currentTime
+    
+    // Stop at playbackRangeEnd constraint if set
+    if (playbackRangeEnd !== null && currentAbs >= playbackRangeEnd) {
+      video.pause()
+      setIsPaused(true)
+      setPlaybackRangeEnd(null)
+      const endOffset = playbackRangeEnd - currentSegment.start_ts
+      if (endOffset >= 0 && endOffset <= video.duration) {
+        video.currentTime = endOffset
+      }
+      setCurrentAbsoluteTs(playbackRangeEnd)
+      return
+    }
+    
     setCurrentAbsoluteTs(currentAbs)
   }
 
@@ -531,6 +579,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     const handleMouseUp = () => {
       setIsDragging(false)
       seekToTimestamp(currentAbsoluteTs)
+      setPlaybackRangeEnd(null)
     }
 
     window.addEventListener('mousemove', handleMouseMove)
@@ -780,17 +829,50 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
 
                   {timeFrames.length > 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span className="controlLabel" style={{ fontSize: '0.86rem', color: '#94a3b8' }}>Jump to Clip:</span>
+                      <span className="controlLabel" style={{ fontSize: '0.86rem', color: '#94a3b8' }}>Interval:</span>
+                      <select
+                        value={clipGroupSize}
+                        onChange={(e) => {
+                          setClipGroupSize(parseInt(e.target.value))
+                          setPlaybackRangeEnd(null)
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '12px',
+                          border: '1px solid rgba(148, 163, 184, 0.16)',
+                          background: 'rgba(15, 23, 42, 0.8)',
+                          color: '#fff',
+                          fontSize: '0.86rem',
+                          outline: 'none',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <option value="10">10 Min Chunks</option>
+                        <option value="5">5 Min Chunks</option>
+                        <option value="2">2 Min Chunks</option>
+                        <option value="0">Contiguous Blocks</option>
+                      </select>
+
+                      <span className="controlLabel" style={{ fontSize: '0.86rem', color: '#94a3b8', marginLeft: '8px' }}>Jump to Clip:</span>
                       <select
                         onChange={(e) => {
                           const idx = parseInt(e.target.value)
                           if (!isNaN(idx)) {
                             const block = timeFrames[idx]
                             seekToTimestamp(block.start)
+                            setPlaybackRangeEnd(block.end)
+                            setIsPaused(false)
+                            
                             const startStr = formatToTimeInputWithSeconds(block.start)
                             const endStr = formatToTimeInputWithSeconds(block.end)
                             setDownloadStart(startStr)
                             setDownloadEnd(endStr)
+
+                            setTimeout(() => {
+                              if (videoRef.current) {
+                                videoRef.current.play().catch(() => {})
+                              }
+                            }, 100)
                           }
                         }}
                         style={{
