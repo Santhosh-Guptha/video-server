@@ -275,7 +275,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
   // Reset form helper
   const resetForm = () => {
     setName('')
-    setSourceCameraId(cameras.length > 0 ? Math.max(...cameras.map(c => c.source_camera_id)) + 1 : 1)
+    setSourceCameraId(cameras.length > 0 ? Math.max(...cameras.map(c => c.source_camera_id || 0)) + 1 : 1)
     setMake('')
     setStreamId('')
     setProfileType('MAIN')
@@ -324,7 +324,7 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
     
     // Fill form
     setName(cam.name)
-    setSourceCameraId(cam.source_camera_id)
+    setSourceCameraId(cam.source_camera_id || 0)
     setMake(cam.make || '')
     setActive(cam.active)
     
