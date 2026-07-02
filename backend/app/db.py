@@ -8,8 +8,17 @@ connect_args = {}
 if "sqlite" in settings.database_url:
     connect_args = {"timeout": 30.0}
 
+# Configure database pool size and overflow for PostgreSQL to prevent pool exhaustion
+pool_args = {}
+if "sqlite" not in settings.database_url:
+    pool_args = {
+        "pool_size": 50,
+        "max_overflow": 100,
+        "pool_timeout": 30
+    }
+
 # Active database engine and session maker references
-engine = create_async_engine(settings.database_url, future=True, echo=False, connect_args=connect_args)
+engine = create_async_engine(settings.database_url, future=True, echo=False, connect_args=connect_args, **pool_args)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 @event.listens_for(engine.sync_engine, "connect")
@@ -31,7 +40,14 @@ def reset_db_engine(new_url: str):
     """Dynamically re-binds the database engine to a fallback database."""
     global engine, SessionLocal
     connect_args = {"timeout": 30.0} if "sqlite" in new_url else {}
-    engine = create_async_engine(new_url, future=True, echo=False, connect_args=connect_args)
+    pool_args = {}
+    if "sqlite" not in new_url:
+        pool_args = {
+            "pool_size": 50,
+            "max_overflow": 100,
+            "pool_timeout": 30
+        }
+    engine = create_async_engine(new_url, future=True, echo=False, connect_args=connect_args, **pool_args)
     
     # Listen to connection event for fallback DB
     @event.listens_for(engine.sync_engine, "connect")
