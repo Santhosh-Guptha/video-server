@@ -17,6 +17,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: always
 
   redis:
     image: redis:7-alpine
@@ -31,6 +32,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: always
 
   mediamtx:
     image: bluenviron/mediamtx:latest
@@ -41,13 +43,12 @@ services:
       - "8080:8080"  # HLS Egress
       - "8889:8889"  # WebRTC (WHEP/WHIP) Egress/Ingress
       - "9997:9997"  # REST API Port
-    environment:
-      - BACKEND_WEBHOOK_URL=http://backend:8000
     volumes:
       - ./backend/app/mediamtx.yml:/mediamtx.yml:ro
-      - ./backend/data:/app/data
+      - /opt/video-server/backend/data:/app/data  # Mount shared recordings folder
     depends_on:
       - redis
+    restart: always
 
   coturn:
     image: coturn/coturn:latest
@@ -61,6 +62,7 @@ services:
       - --lt-cred-mech
       - --user=vms_user:vms_turn_password
       - --realm=vms.local
+    restart: always
 
   backend:
     build: ./backend
@@ -69,10 +71,12 @@ services:
       - DATABASE_URL=postgresql+asyncpg://vms_admin:vms_secure_password@postgres:5432/vms_db
       - REDIS_URL=redis://redis:6379/0
       - MEDIAMTX_API_URL=http://mediamtx:9997
+      - MEDIAMTX_WEBRTC_URL=http://mediamtx:8889
     ports:
-      - "8000:8000"
+      - "8005:8000"
     volumes:
       - ./backend:/app
+      - /opt/video-server/backend/data:/app/data  # Mount data recordings/db on host
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,18 +84,7 @@ services:
         condition: service_healthy
       mediamtx:
         condition: service_started
-
-  frontend:
-    image: node:20-alpine
-    container_name: vms-frontend
-    working_dir: /app
-    volumes:
-      - ./frontend:/app
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
-    ports:
-      - "5173:5173"
-    depends_on:
-      - backend
+    restart: always
 
 volumes:
   pgdata:
