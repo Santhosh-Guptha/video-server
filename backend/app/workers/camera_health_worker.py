@@ -1,6 +1,7 @@
 import asyncio
 from ..db import get_session
 from ..registries.camera_registry import CameraRegistry
+from ..registries.stream_registry import StreamRegistry
 from ..camera_watchdog import _ffprobe_rtsp
 
 async def camera_health_worker_loop():
@@ -17,12 +18,13 @@ async def camera_health_worker_loop():
                     online = False
                     if cam.streams:
                         # Probe the first stream RTSP port
-                        rtsp_url = cam.streams[0].stream_url
+                        stream = cam.streams[0]
+                        rtsp_url = stream.stream_url
                         online = await _ffprobe_rtsp(rtsp_url, timeout_seconds=3)
                     
-                    status = "ONLINE" if online else "OFFLINE"
-                    if cam.status != status:
-                        await CameraRegistry.update_camera_status(cam.id, status, session)
+                        status = "ONLINE" if online else "OFFLINE"
+                        if stream.status != status:
+                            await StreamRegistry.update_stream_state(stream.stream_id, status, None, session)
         except Exception as e:
             print(f"[worker] Camera health worker error: {e}")
 
