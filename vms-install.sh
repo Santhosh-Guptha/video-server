@@ -428,7 +428,7 @@ After=network.target postgresql.service redis-server.service
 
 [Service]
 WorkingDirectory=$INSTALL_DIR/backend
-ExecStart=$UVICORN_BIN app.main:app --host 0.0.0.0 --port 8000
+ExecStart=$UVICORN_BIN app.main:app --host 0.0.0.0 --port 8005
 Restart=always
 RestartSec=5
 User=root
@@ -513,7 +513,7 @@ STATUS_COTURN="FAIL"
 STATUS_STORAGE="FAIL"
 
 # 1. Validate Backend API
-if curl -s -f http://127.0.0.1:8000/health &>/dev/null; then
+if curl -s -f http://127.0.0.1:8005/health &>/dev/null; then
     STATUS_BACKEND="OK"
 fi
 
@@ -575,8 +575,8 @@ cat <<EOF > "$SUMMARY_PATH"
                         VMS DEPLOYMENT SUMMARY
 ======================================================================
 Admin Panel UI         : http://$SERVER_IP:5173/
-Backend REST API       : http://$SERVER_IP:8000/
-Backend Docs           : http://$SERVER_IP:8000/docs
+Backend REST API       : http://$SERVER_IP:8005/
+Backend Docs           : http://$SERVER_IP:8005/docs
 MediaMTX API           : http://$SERVER_IP:9997/v3/config/global
 MediaMTX Metrics       : http://$SERVER_IP:9998/metrics
 TURN Server Endpoint   : turn:$SERVER_IP:$TURN_PORT
