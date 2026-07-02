@@ -1,125 +1,108 @@
+import json
+import os
+from typing import List
 from pydantic_settings import BaseSettings
 
+# Load default config from default_settings.json outside the code
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), "configs")
+DEFAULTS_FILE = os.path.join(CONFIG_DIR, "default_settings.json")
+try:
+    with open(DEFAULTS_FILE, "r") as f:
+        defaults = json.load(f)
+except Exception as e:
+    print(f"[config] Failed to load defaults file: {e}")
+    defaults = {}
+
 class Settings(BaseSettings):
-    app_name: str = "camera-video-platform"
-    enable_webrtc: bool = True
-    # Switch default to postgresql+asyncpg for production, fallback to SQLite for local development without container
-    database_url: str = "postgresql+asyncpg://vms_admin:vms_secure_password@localhost:5432/vms_db"
-    redis_url: str = "redis://127.0.0.1:6379/0"
-    mediamtx_api_url: str = "http://127.0.0.1:9997"
-    mediamtx_webrtc_url: str = "http://127.0.0.1:8889"
-    stun_servers: list[str] = ["stun:stun.l.google.com:19302"]
-    turn_server_url: str = "turn:localhost:3478"
-    turn_server_username: str = "vms_user"
-    turn_server_credential: str = "vms_turn_password"
+    app_name: str = defaults.get("app_name", "camera-video-platform")
+    enable_webrtc: bool = defaults.get("enable_webrtc", True)
+    database_url: str = defaults.get("database_url", "postgresql+asyncpg://vms_admin:vms_secure_password@localhost:5432/vms_db")
+    redis_url: str = defaults.get("redis_url", "redis://127.0.0.1:6379/0")
+    mediamtx_api_url: str = defaults.get("mediamtx_api_url", "http://127.0.0.1:9997")
+    mediamtx_webrtc_url: str = defaults.get("mediamtx_webrtc_url", "http://127.0.0.1:8889")
+    stun_servers: List[str] = defaults.get("stun_servers", ["stun:stun.l.google.com:19302"])
+    turn_server_url: str = defaults.get("turn_server_url", "turn:localhost:3478")
+    turn_server_username: str = defaults.get("turn_server_username", "vms_user")
+    turn_server_credential: str = defaults.get("turn_server_credential", "vms_turn_password")
 
-    upstream_camera_api_url: str = ""
-    upstream_timeout_seconds: float = 10.0
-    upstream_sync_interval_minutes: int = 5
-    ffmpeg_path: str = "ffmpeg"
-    recording_dir: str = "./data/recordings"
-    hls_dir: str = "./data/hls"
-    segment_time_seconds: int = 60
-    max_subscribers_per_stream: int = 200
-    ui_poll_seconds: int = 5
-    scheduler_interval_seconds: int = 10
-    recovery_interval_seconds: int = 300
-    cleanup_interval_seconds: int = 600
-    indexer_interval_seconds: int = 600
+    upstream_camera_api_url: str = defaults.get("upstream_camera_api_url", "")
+    upstream_timeout_seconds: float = defaults.get("upstream_timeout_seconds", 10.0)
+    upstream_sync_interval_minutes: int = defaults.get("upstream_sync_interval_minutes", 5)
+    ffmpeg_path: str = defaults.get("ffmpeg_path", "ffmpeg")
+    recording_dir: str = defaults.get("recording_dir", "./data/recordings")
+    hls_dir: str = defaults.get("hls_dir", "./data/hls")
+    segment_time_seconds: int = defaults.get("segment_time_seconds", 60)
+    max_subscribers_per_stream: int = defaults.get("max_subscribers_per_stream", 200)
+    ui_poll_seconds: int = defaults.get("ui_poll_seconds", 5)
+    scheduler_interval_seconds: int = defaults.get("scheduler_interval_seconds", 10)
+    recovery_interval_seconds: int = defaults.get("recovery_interval_seconds", 300)
+    cleanup_interval_seconds: int = defaults.get("cleanup_interval_seconds", 600)
+    indexer_interval_seconds: int = defaults.get("indexer_interval_seconds", 600)
 
-    recovery_rtsp_template: str = "{rtsp_url}?starttime={start_iso}&endtime={end_iso}"
+    recovery_rtsp_template: str = defaults.get("recovery_rtsp_template", "{rtsp_url}?starttime={start_iso}&endtime={end_iso}")
 
-    edge_receiver_host: str = "0.0.0.0"
-    edge_receiver_port: int = 9999
-    edge_receiver_enabled: bool = True
-    allow_unknown_edge_devices: bool = False
-    strict_camera_validation: bool = True
+    edge_receiver_host: str = defaults.get("edge_receiver_host", "0.0.0.0")
+    edge_receiver_port: int = defaults.get("edge_receiver_port", 9999)
+    edge_receiver_enabled: bool = defaults.get("edge_receiver_enabled", True)
+    allow_unknown_edge_devices: bool = defaults.get("allow_unknown_edge_devices", False)
+    strict_camera_validation: bool = defaults.get("strict_camera_validation", True)
 
-    # ── H.265 on-demand transcoder ─────────────────────────────────────────────
-    max_active_transcoders: int = 10
-    transcoder_vcodec: str = "libx264"      # "h264_nvenc" for NVIDIA, "h264_qsv" for Intel QSV
-    transcoder_preset: str = "ultrafast"
-    transcoder_tune: str = "zerolatency"
-    transcoder_grace_period_seconds: int = 60
+    max_active_transcoders: int = defaults.get("max_active_transcoders", 10)
+    transcoder_vcodec: str = defaults.get("transcoder_vcodec", "libx264")
+    transcoder_preset: str = defaults.get("transcoder_preset", "ultrafast")
+    transcoder_tune: str = defaults.get("transcoder_tune", "zerolatency")
+    transcoder_grace_period_seconds: int = defaults.get("transcoder_grace_period_seconds", 60)
 
-    # ── Recording policy ───────────────────────────────────────────────────────
-    # True  = only MAIN/HD profile streams are recorded (default — saves ~50% storage)
-    # False = use RECORD_NORMAL / RECORD_MOBILE to fine-tune
-    record_hd_only: bool = True
-    record_normal: bool = False             # Record SUB/NORMAL streams
-    record_mobile: bool = False             # Record MOBILE streams
+    record_hd_only: bool = defaults.get("record_hd_only", True)
+    record_normal: bool = defaults.get("record_normal", False)
+    record_mobile: bool = defaults.get("record_mobile", False)
 
-    # ── Live streaming policy ──────────────────────────────────────────────────
-    # Profile used for live streaming when adaptive mode is disabled.
-    # Options: "HD" | "NORMAL" | "MOBILE"
-    live_stream_profile: str = "NORMAL"
+    live_stream_profile: str = defaults.get("live_stream_profile", "NORMAL")
+    enable_adaptive_profile: bool = defaults.get("enable_adaptive_profile", True)
+    focus_view_profile: str = defaults.get("focus_view_profile", "HD")
+    grid_view_profile: str = defaults.get("grid_view_profile", "NORMAL")
+    mobile_view_profile: str = defaults.get("mobile_view_profile", "MOBILE")
 
-    # Enable adaptive live profile switching based on the UI layout grid size.
-    enable_adaptive_profile: bool = True
+    playback_profile: str = defaults.get("playback_profile", "HD")
+    playback_allow_normal_fallback: bool = defaults.get("playback_allow_normal_fallback", True)
+    playback_allow_mobile_fallback: bool = defaults.get("playback_allow_mobile_fallback", False)
+    playback_speeds: List[float] = defaults.get("playback_speeds", [0.5, 1.0, 2.0, 4.0, 8.0])
 
-    # 1x1 single-camera view — use HD for the best quality in focus mode
-    focus_view_profile: str = "HD"
+    max_webrtc_sessions_per_camera: int = defaults.get("max_webrtc_sessions_per_camera", 100)
+    enable_h265_transcoding: bool = defaults.get("enable_h265_transcoding", True)
+    enable_hls_fallback: bool = defaults.get("enable_hls_fallback", True)
+    webrtc_connection_timeout_seconds: int = defaults.get("webrtc_connection_timeout_seconds", 10)
 
-    # 2x2, 3x3 grid view — use NORMAL to save bandwidth with many cameras
-    grid_view_profile: str = "NORMAL"
+    camera_ping_interval_seconds: int = defaults.get("camera_ping_interval_seconds", 120)
+    camera_ping_timeout_seconds: int = defaults.get("camera_ping_timeout_seconds", 5)
+    camera_ping_max_concurrent: int = defaults.get("camera_ping_max_concurrent", 10)
+    enable_rtsp_health_check: bool = defaults.get("enable_rtsp_health_check", True)
 
-    # Mobile / low-bandwidth client view
-    mobile_view_profile: str = "MOBILE"
+    edge_push_heartbeat_timeout_seconds: int = defaults.get("edge_push_heartbeat_timeout_seconds", 120)
+    edge_push_check_interval_seconds: int = defaults.get("edge_push_check_interval_seconds", 30)
+    enable_edge_push: bool = defaults.get("enable_edge_push", True)
+    edge_push_priority: bool = defaults.get("edge_push_priority", True)
 
-    # ── Playback policy ────────────────────────────────────────────────────────
-    # Profile to use when serving recorded video for playback.
-    # Options: "HD" | "NORMAL" | "MOBILE"
-    playback_profile: str = "HD"
+    enable_retention: bool = defaults.get("enable_retention", True)
+    default_retention_days: int = defaults.get("default_retention_days", 30)
+    enable_low_disk_eviction: bool = defaults.get("enable_low_disk_eviction", True)
+    low_disk_space_threshold_gb: float = defaults.get("low_disk_space_threshold_gb", 5.0)
+    target_free_space_gb: float = defaults.get("target_free_space_gb", 10.0)
 
-    # Allow falling back to NORMAL recordings when HD recordings are unavailable.
-    playback_allow_normal_fallback: bool = True
-    playback_allow_mobile_fallback: bool = False
-    playback_speeds: list[float] = [0.5, 1.0, 2.0, 4.0, 8.0]
+    enable_recording: bool = defaults.get("enable_recording", True)
 
-    # ── WebRTC policy ──────────────────────────────────────────────────────────
-    max_webrtc_sessions_per_camera: int = 100
-    enable_h265_transcoding: bool = True
-    enable_hls_fallback: bool = True
-    webrtc_connection_timeout_seconds: int = 10
+    timeline_cache_seconds: int = defaults.get("timeline_cache_seconds", 60)
+    timeline_merge_threshold_seconds: int = defaults.get("timeline_merge_threshold_seconds", 5)
+    timeline_default_zoom: str = defaults.get("timeline_default_zoom", "24h")
 
-    # ── Camera health watchdog ─────────────────────────────────────────────────
-    camera_ping_interval_seconds: int = 120
-    camera_ping_timeout_seconds: int = 5
-    camera_ping_max_concurrent: int = 10
-    enable_rtsp_health_check: bool = True
+    mediamtx_patch_only: bool = defaults.get("mediamtx_patch_only", True)
+    allow_delete_add_reconfiguration: bool = defaults.get("allow_delete_add_reconfiguration", False)
 
-    # ── Edge push policy ───────────────────────────────────────────────────────
-    edge_push_heartbeat_timeout_seconds: int = 120
-    edge_push_check_interval_seconds: int = 30
-    enable_edge_push: bool = True
-    edge_push_priority: bool = True
+    enable_device_config: bool = defaults.get("enable_device_config", False)
+    enable_local_transcode: bool = defaults.get("enable_local_transcode", False)
 
-    # ── Storage retention policy ───────────────────────────────────────────────
-    enable_retention: bool = True
-    default_retention_days: int = 30
-    enable_low_disk_eviction: bool = True
-    low_disk_space_threshold_gb: float = 5.0
-    target_free_space_gb: float = 10.0
-
-    # ── Recording policy constants ─────────────────────────────────────────────
-    enable_recording: bool = True
-
-    # ── Playback timeline policy constants ─────────────────────────────────────
-    timeline_cache_seconds: int = 60
-    timeline_merge_threshold_seconds: int = 5
-    timeline_default_zoom: str = "24h"
-
-    # ── MediaMTX safety constants ──────────────────────────────────────────────
-    mediamtx_patch_only: bool = True
-    allow_delete_add_reconfiguration: bool = False
-
-    # ── Feature toggles ────────────────────────────────────────────────────────
-    enable_device_config: bool = False
-    enable_local_transcode: bool = False
-
-    # ── SD Card On-Demand Retrieval policy ─────────────────────────────────────
-    enable_sd_card_on_demand: bool = True
-    sd_card_on_demand_retention_seconds: int = 3600
+    enable_sd_card_on_demand: bool = defaults.get("enable_sd_card_on_demand", True)
+    sd_card_on_demand_retention_seconds: int = defaults.get("sd_card_on_demand_retention_seconds", 3600)
 
     class Config:
         env_file = ".env"
@@ -205,4 +188,3 @@ MEDIAMTX_PATCH_ONLY = settings.mediamtx_patch_only
 ALLOW_DELETE_ADD_RECONFIGURATION = settings.allow_delete_add_reconfiguration
 ENABLE_DEVICE_CONFIG = settings.enable_device_config
 ENABLE_LOCAL_TRANSCODE = settings.enable_local_transcode
-
