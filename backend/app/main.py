@@ -904,7 +904,8 @@ async def download_sd_card_stream(
             cmd = [
                 settings.ffmpeg_path,
                 "-i", valid_local_files[0],
-                "-c", "copy",
+                "-c:v", "copy",
+                "-an",
                 "-f", "mp4",
                 "-movflags", "frag_keyframe+empty_moov",
                 "pipe:1"
@@ -927,7 +928,8 @@ async def download_sd_card_stream(
                     "-f", "concat",
                     "-safe", "0",
                     "-i", temp_txt_path,
-                    "-c", "copy",
+                    "-c:v", "copy",
+                    "-an",
                     "-f", "mp4",
                     "-movflags", "frag_keyframe+empty_moov",
                     "pipe:1"
@@ -960,7 +962,8 @@ async def download_sd_card_stream(
             settings.ffmpeg_path,
             "-rtsp_transport", "tcp",
             "-i", rtsp_replay_url,
-            "-c", "copy",
+            "-c:v", "copy",
+            "-an",
             "-f", "mp4",
             "-movflags", "frag_keyframe+empty_moov",
             "pipe:1"
@@ -2312,7 +2315,7 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                 except Exception as probe_err:
                     print(f"[recovery] [manual] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
 
-            codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-c:a", "copy"] if is_hevc else ["-c", "copy"]
+            codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-an"] if is_hevc else ["-c:v", "copy", "-an"]
 
             if output_path.exists() and output_path.stat().st_size > 0:
                 is_complete = False

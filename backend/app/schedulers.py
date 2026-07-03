@@ -482,7 +482,8 @@ async def camera_gap_recovery_loop():
                         "-rtsp_transport", "tcp",
                         "-i", recovery_url,
                         "-t", str(settings.segment_time_seconds),
-                        "-c", "copy",
+                        "-c:v", "copy",
+                        "-an",
                         str(output_path)
                     ]
 
