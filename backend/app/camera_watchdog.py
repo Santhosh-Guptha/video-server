@@ -34,7 +34,7 @@ from .config import (
 from .db import get_session
 from .models import Camera, CameraStream, ProfileType, StreamState
 from .redis_client import RedisManager
-from .stream_manager import stream_manager
+from .stream_manager import stream_manager, double_escape_rtsp_url
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -342,7 +342,7 @@ async def edge_push_watchdog_loop():
                     if _is_valid_rtsp(rtsp_url):
                         # Patch MediaMTX source back to RTSP URL
                         patched = await _patch_mediamtx(stream_id, {
-                            "source": rtsp_url,
+                            "source": double_escape_rtsp_url(rtsp_url),
                             "sourceProtocol": "tcp",
                             "sourceOnDemand": not stream.always_on,
                         })

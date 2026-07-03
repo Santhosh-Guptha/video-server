@@ -83,7 +83,7 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
     import subprocess
     import os
     from pathlib import Path
-    from .stream_manager import should_record
+    from .stream_manager import should_record, double_escape_rtsp_url
     
     # 1. Fetch all active streams
     res = await session.execute(
@@ -163,7 +163,7 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
                 }
         else:
             paths_dict[stream.stream_id] = {
-                "source": source_url,
+                "source": double_escape_rtsp_url(source_url),
                 "sourceProtocol": "tcp",
                 "sourceOnDemand": not stream.always_on,
                 "record": should_record(stream),

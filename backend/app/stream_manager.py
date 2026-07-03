@@ -106,7 +106,7 @@ class StreamManager:
 
             # 2. Add configuration to MediaMTX
             payload = {
-                "source": "publisher" if is_push else stream.stream_url,
+                "source": "publisher" if is_push else double_escape_rtsp_url(stream.stream_url),
                 "sourceProtocol": "tcp",
                 "sourceOnDemand": True,  # Keep permanent, connect RTSP on-demand
                 "record": should_record(stream),
