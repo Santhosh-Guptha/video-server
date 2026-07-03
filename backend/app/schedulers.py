@@ -372,7 +372,7 @@ async def camera_gap_recovery_loop():
                     .options(selectinload(CameraStream.camera))
                     .join(Camera)
                     .where(Camera.active == True)
-                    .where(CameraStream.status == StreamState.ONLINE)
+                    .where(CameraStream.status.in_([StreamState.ONLINE, StreamState.WARM]))
                 )
                 active_streams = list(res.scalars().all())
 
