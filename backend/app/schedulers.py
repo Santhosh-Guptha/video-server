@@ -241,8 +241,8 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
             except Exception:
                 continue
 
-            # Try dual-timestamp format first: YYYYMMDD_HHMMSS_HHMMSS_recovered.mp4
-            match_dual = re.search(r"(\d{8})_(\d{6})_(\d{6})_recovered", name)
+            # Try dual-timestamp format first: YYYYMMDD_HHMMSS_HHMMSS_recovered.mp4 or _live.mp4
+            match_dual = re.search(r"(\d{8})_(\d{6})_(\d{6})_(?:recovered|live)", name)
             if match_dual:
                 try:
                     date_str, start_time_str, end_time_str = match_dual.groups()
