@@ -336,7 +336,11 @@ async def startup():
             "ALTER TABLE cameras ADD COLUMN camera_source VARCHAR(32) DEFAULT 'UPSTREAM' NOT NULL;",
             "ALTER TABLE cameras ADD COLUMN is_read_only BOOLEAN DEFAULT TRUE NOT NULL;",
             "UPDATE cameras SET camera_source = 'UPSTREAM', is_read_only = TRUE WHERE synced_from_api = TRUE;",
-            "ALTER TABLE cameras ADD COLUMN server_camera_id VARCHAR(128);"
+            "ALTER TABLE cameras ADD COLUMN server_camera_id VARCHAR(128);",
+            "ALTER TABLE camera_streams ADD COLUMN always_on BOOLEAN DEFAULT FALSE NOT NULL;",
+            "ALTER TABLE camera_streams ADD COLUMN transcode BOOLEAN DEFAULT FALSE NOT NULL;",
+            "ALTER TABLE camera_streams ADD COLUMN camera_priority INTEGER DEFAULT 3 NOT NULL;",
+            "ALTER TABLE camera_streams ADD COLUMN last_viewed TIMESTAMP WITH TIME ZONE;"
         ]
         for sql in upgrades:
             try:
