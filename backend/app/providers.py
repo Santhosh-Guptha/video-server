@@ -109,20 +109,22 @@ def get_playback_recovery_provider(make: str | None) -> PlaybackRecoveryProvider
     Only synchronization values from the Video Server API are trusted.
     """
     if not make:
-        print("[recovery] Camera make missing from Video Server API. Using GenericProvider.")
+        print("[recovery] Camera make missing. Using GenericProvider.")
         return GenericProvider()
 
-    # Exact matches based on synced data, no lowercase conversion or normalization
-    if make in ("UNV", "Uniview"):
+    # Normalize make for case-insensitive comparison
+    normalized = make.strip().lower().replace("-", "").replace(" ", "")
+
+    if normalized in ("unv", "uniview"):
         return UNVProvider()
-    elif make == "Hikvision":
+    elif normalized in ("hikvision", "prama", "impact"):
         return HikvisionProvider()
-    elif make == "Dahua":
+    elif normalized in ("dahua", "cpplus", "cpplus"):
         return DahuaProvider()
-    elif make == "Axis":
+    elif normalized == "axis":
         return AxisProvider()
-    elif make == "Hanwha":
+    elif normalized == "hanwha":
         return HanwhaProvider()
     else:
-        print(f"[recovery] Unknown camera make '{make}' from Video Server API. Using GenericProvider.")
+        print(f"[recovery] Unknown camera make '{make}'. Using GenericProvider.")
         return GenericProvider()
