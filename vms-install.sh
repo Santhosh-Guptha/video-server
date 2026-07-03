@@ -386,11 +386,36 @@ fi
 
 # Read existing .env values if they exist to maintain configuration across runs
 UPSTREAM_URL="https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver"
+TURN_SERVER_URL_VAL=""
 if [[ -f "$INSTALL_DIR/backend/.env" ]]; then
     EXISTING_UPSTREAM=$(grep -E "^UPSTREAM_CAMERA_API_URL=" "$INSTALL_DIR/backend/.env" | cut -d'=' -f2- || true)
     if [[ -n "$EXISTING_UPSTREAM" ]]; then
         UPSTREAM_URL="$EXISTING_UPSTREAM"
     fi
+
+    EXISTING_TURN_URL=$(grep -E "^TURN_SERVER_URL=" "$INSTALL_DIR/backend/.env" | cut -d'=' -f2- || true)
+    if [[ -n "$EXISTING_TURN_URL" ]]; then
+        TURN_SERVER_URL_VAL="$EXISTING_TURN_URL"
+    fi
+
+    EXISTING_TURN_USER=$(grep -E "^TURN_SERVER_USERNAME=" "$INSTALL_DIR/backend/.env" | cut -d'=' -f2- || true)
+    if [[ -n "$EXISTING_TURN_USER" ]]; then
+        TURN_USER="$EXISTING_TURN_USER"
+    fi
+
+    EXISTING_TURN_PASS=$(grep -E "^TURN_SERVER_CREDENTIAL=" "$INSTALL_DIR/backend/.env" | cut -d'=' -f2- || true)
+    if [[ -n "$EXISTING_TURN_PASS" ]]; then
+        TURN_PASS="$EXISTING_TURN_PASS"
+    fi
+fi
+
+# Auto-detect IP for new installs to avoid client-side localhost resolution errors
+if [[ -z "$TURN_SERVER_URL_VAL" ]]; then
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+    if [[ -z "$SERVER_IP" ]]; then
+        SERVER_IP="127.0.0.1"
+    fi
+    TURN_SERVER_URL_VAL="turn:$SERVER_IP:$TURN_PORT"
 fi
 
 # Write Production .env File
@@ -400,7 +425,7 @@ REDIS_URL=redis://127.0.0.1:6379/0
 MEDIAMTX_API_URL=http://127.0.0.1:9997
 MEDIAMTX_WEBRTC_URL=http://127.0.0.1:8889
 STUN_SERVERS=["stun:stun.l.google.com:19302"]
-TURN_SERVER_URL=turn:localhost:$TURN_PORT
+TURN_SERVER_URL=$TURN_SERVER_URL_VAL
 TURN_SERVER_USERNAME=$TURN_USER
 TURN_SERVER_CREDENTIAL=$TURN_PASS
 UPSTREAM_CAMERA_API_URL=$UPSTREAM_URL
