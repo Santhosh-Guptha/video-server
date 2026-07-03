@@ -439,6 +439,12 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
                 <span className="vmsModalSubtitle">Camera details & stream metadata</span>
                 
                 <div className="vmsModalSpecs">
+                  {selectedCameraForModal.server_camera_id && (
+                    <div className="vmsSpecItem">
+                      <span className="vmsSpecLabel">Camera ID</span>
+                      <span className="vmsSpecValue monospace" style={{ color: '#10b981' }}>{selectedCameraForModal.server_camera_id}</span>
+                    </div>
+                  )}
                   <div className="vmsSpecItem">
                     <span className="vmsSpecLabel">Stream ID</span>
                     <span className="vmsSpecValue monospace">{modalStreamId}</span>

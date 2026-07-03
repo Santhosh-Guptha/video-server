@@ -963,6 +963,12 @@ export function CameraManagement({ cameras, onRefresh }: Props) {
                           <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '0.76rem', color: '#94a3b8' }}>
                             <span>Make: {cam.make || 'Generic'}</span>
                             <span>•</span>
+                            {cam.server_camera_id && (
+                              <>
+                                <span>Camera ID: <code style={{ fontFamily: 'monospace', color: '#10b981' }}>{cam.server_camera_id}</code></span>
+                                <span>•</span>
+                              </>
+                            )}
                             <span>Stream ID: <code style={{ fontFamily: 'monospace', color: '#38bdf8' }}>{stream?.stream_id || '—'}</code></span>
                             <span>•</span>
                             <span>RTSP Ingress: <code style={{ fontFamily: 'monospace' }}>{stream?.stream_url || '—'}</code></span>

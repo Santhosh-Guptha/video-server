@@ -20,6 +20,7 @@ export type Camera = {
   id: string
   pk?: number // Backward compatibility
   source_camera_id?: number | null
+  server_camera_id?: string | null
   stream_id: string // Primary stream shortcut
   name: string
   stream_type: string // Primary stream type shortcut

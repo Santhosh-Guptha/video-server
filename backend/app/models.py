@@ -67,6 +67,7 @@ class Camera(Base):
         default=uuid.uuid4
     )
     source_camera_id: Mapped[int | None] = mapped_column(Integer, unique=True, index=True, nullable=True)
+    server_camera_id: Mapped[str | None] = mapped_column(String(128), unique=True, index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     make: Mapped[str | None] = mapped_column(String(128), nullable=True)

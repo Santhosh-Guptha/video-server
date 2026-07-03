@@ -25,6 +25,7 @@ class CameraStreamOut(BaseModel):
 class CameraOut(BaseModel):
     id: uuid.UUID
     source_camera_id: Optional[int] = None
+    server_camera_id: Optional[str] = None
     name: str
     active: bool
     camera_source: str = "LOCAL"
@@ -128,6 +129,7 @@ class SyncResponse(BaseModel):
 
 class CameraCreate(BaseModel):
     source_camera_id: Optional[int] = None
+    server_camera_id: Optional[str] = None
     name: str
     active: bool = True
     make: Optional[str] = None

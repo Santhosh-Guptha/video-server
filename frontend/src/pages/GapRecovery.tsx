@@ -362,7 +362,7 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
                   }}
                 >
                   <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '85%' }}>
-                    {selectedCamera ? `${selectedCamera.name} (${selectedCamera.stream_id})` : 'Select a camera...'}
+                    {selectedCamera ? `${selectedCamera.name} (${selectedCamera.server_camera_id || selectedCamera.stream_id})` : 'Select a camera...'}
                   </span>
                   <ChevronDown size={16} style={{ color: '#64748b', transform: dropdownOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', marginLeft: '6px', flexShrink: 0 }} />
                 </div>
@@ -441,7 +441,7 @@ export function GapRecovery({ cameras }: GapRecoveryProps) {
                           <span style={{ fontWeight: selectedCamera?.id === c.id ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
                             {c.name}
                           </span>
-                          <span style={{ fontSize: '0.7rem', color: '#64748b', fontFamily: 'monospace' }}>{c.stream_id}</span>
+                          <span style={{ fontSize: '0.7rem', color: '#64748b', fontFamily: 'monospace' }}>{c.server_camera_id || c.stream_id}</span>
                         </div>
                       ))}
                       {filteredCameras.length === 0 && (

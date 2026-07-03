@@ -335,7 +335,8 @@ async def startup():
             "UPDATE cameras SET synced_from_api = TRUE;",
             "ALTER TABLE cameras ADD COLUMN camera_source VARCHAR(32) DEFAULT 'UPSTREAM' NOT NULL;",
             "ALTER TABLE cameras ADD COLUMN is_read_only BOOLEAN DEFAULT TRUE NOT NULL;",
-            "UPDATE cameras SET camera_source = 'UPSTREAM', is_read_only = TRUE WHERE synced_from_api = TRUE;"
+            "UPDATE cameras SET camera_source = 'UPSTREAM', is_read_only = TRUE WHERE synced_from_api = TRUE;",
+            "ALTER TABLE cameras ADD COLUMN server_camera_id VARCHAR(128);"
         ]
         for sql in upgrades:
             try:
@@ -1482,6 +1483,12 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
         received_source_ids.add(source_id)
         name = str(raw.get("name") or f"Camera {source_id}")
         active = bool(raw.get("active", True))
+        
+        server_cam_id = raw.get("serverCameraId")
+        if not server_cam_id or not str(server_cam_id).strip():
+            server_cam_id = f"cam_{source_id}"
+        else:
+            server_cam_id = str(server_cam_id).strip()
 
         # 1. Sync Camera Parent Row
         make = raw.get("make")
@@ -1492,6 +1499,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
         if not camera:
             camera = Camera(
                 source_camera_id=source_id,
+                server_camera_id=server_cam_id,
                 name=name,
                 active=active,
                 make=make,
@@ -1505,6 +1513,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             camera.name = name
             camera.active = active
             camera.make = make
+            camera.server_camera_id = server_cam_id
             camera.synced_from_api = True
             camera.camera_source = "UPSTREAM"
             camera.is_read_only = True
@@ -3149,6 +3158,7 @@ async def create_camera(
 
     camera = Camera(
         source_camera_id=payload.source_camera_id,
+        server_camera_id=payload.server_camera_id or f"cam_{payload.source_camera_id}",
         name=payload.name,
         active=payload.active,
         make=payload.make,

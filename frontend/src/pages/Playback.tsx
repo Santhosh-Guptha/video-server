@@ -21,6 +21,10 @@ type TimelinePayload = {
 }
 
 export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Props) {
+  const selectedCamera = useMemo(() => {
+    return cameras.find(c => c.stream_id === streamId)
+  }, [cameras, streamId])
+
   // Available dates loaded from API
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [selectedDate, setSelectedDate] = useState('')
@@ -663,7 +667,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
           <div className="eyebrow">Enterprise Playback Engine</div>
           <h2 className="panelTitle">{cameraName ?? 'Select a Camera'}</h2>
           <div className="panelSub">
-            {streamId ? `Stream ID: ${streamId}` : 'Select a camera feed to open visual logs'}
+            {streamId ? (selectedCamera?.server_camera_id ? `Camera ID: ${selectedCamera.server_camera_id}` : `Stream ID: ${streamId}`) : 'Select a camera feed to open visual logs'}
           </div>
         </div>
 
@@ -705,7 +709,7 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
                     >
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                         <span style={{ fontWeight: 600 }}>{cam.name}</span>
-                        <span style={{ fontSize: '0.72rem', opacity: 0.6 }}>{cam.stream_id} ({cam.stream_type})</span>
+                        <span style={{ fontSize: '0.72rem', opacity: 0.6 }}>{cam.server_camera_id || cam.stream_id} ({cam.stream_type})</span>
                       </div>
                     </div>
                   ))
