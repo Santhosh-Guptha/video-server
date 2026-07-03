@@ -31,7 +31,7 @@ TURN_PASS="admin123"
 
 # Source code repository URL and branch
 REPO_URL="https://github.com/Santhosh-Guptha/video-server.git"
-BRANCH_NAME="feature/vms-edge-push"
+BRANCH_NAME="feature/vms-streaming-redesign"
 
 # Redirect stdout and stderr to both a log file and the console
 # We check if we are running under sudo/root first to ensure we have permission to write to /var/log
