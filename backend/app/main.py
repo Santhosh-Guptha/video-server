@@ -340,7 +340,13 @@ async def startup():
             "ALTER TABLE camera_streams ADD COLUMN always_on BOOLEAN DEFAULT FALSE NOT NULL;",
             "ALTER TABLE camera_streams ADD COLUMN transcode BOOLEAN DEFAULT FALSE NOT NULL;",
             "ALTER TABLE camera_streams ADD COLUMN camera_priority INTEGER DEFAULT 3 NOT NULL;",
-            "ALTER TABLE camera_streams ADD COLUMN last_viewed TIMESTAMP WITH TIME ZONE;"
+            "ALTER TABLE camera_streams ADD COLUMN last_viewed TIMESTAMP WITH TIME ZONE;",
+            "ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'WARM';",
+            "ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'RECOVERING';",
+            "ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'FAILED';",
+            "ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'DISABLED';",
+            "ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'IDLE';",
+            "ALTER TYPE stream_state_enum ADD VALUE IF NOT EXISTS 'MAINTENANCE';"
         ]
         for sql in upgrades:
             try:
