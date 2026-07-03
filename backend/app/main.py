@@ -2274,9 +2274,9 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
             start_ts = chunk["start_ts"]
             end_ts = chunk["end_ts"]
             
-            # Align the chunk to the 1-minute segment boundaries to fetch full segments
-            temp_start = int((start_ts // settings.segment_time_seconds) * settings.segment_time_seconds)
-            temp_end = temp_start + settings.segment_time_seconds
+            # Use the exact second-level start and end timestamps of the gap
+            temp_start = start_ts
+            temp_end = end_ts
             
             make_val = stream.camera.make if stream.camera else None
             provider = get_playback_recovery_provider(make_val)
@@ -2365,7 +2365,7 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                     "-rtsp_transport", "tcp",
                     "-stimeout", "15000000",
                     "-i", recovery_url,
-                    "-t", str(settings.segment_time_seconds),
+                    "-t", str(temp_end - temp_start),
                 ] + codec_args + ["-movflags", "+faststart", str(output_path)]
 
                 try:

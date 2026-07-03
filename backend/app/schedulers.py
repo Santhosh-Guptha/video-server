@@ -387,28 +387,23 @@ async def camera_gap_recovery_loop():
                     twenty_four_hours_ago = now - (24 * 3600)
                     gaps = await scan_filesystem_gaps(stream_id, twenty_four_hours_ago, now)
 
-                    # Align gaps to 1-minute segment boundaries (any minute containing a gap should be recovered)
-                    seg_time = settings.segment_time_seconds
+                    # Schedule recovery tasks for exact gap start and end times
                     for gap_start, gap_end in gaps:
-                        start_minute = int((gap_start // seg_time) * seg_time)
-                        end_minute = int((gap_end // seg_time) * seg_time)
-                        for temp_start in range(start_minute, end_minute + int(seg_time), int(seg_time)):
-                            gap_key = (stream_id, int(temp_start))
-                            if gap_key not in attempted_gaps:
-                                attempted_gaps.add(gap_key)
-                                
-                                # Build recovery URL using vendor framework
-                                make_val = stream.camera.make if stream.camera else None
-                                provider = get_playback_recovery_provider(make_val)
-                                next_end = temp_start + seg_time
-                                recovery_url = provider.build_playback_url(stream, temp_start, next_end)
+                        gap_key = (stream_id, int(gap_start))
+                        if gap_key not in attempted_gaps:
+                            attempted_gaps.add(gap_key)
+                            
+                            # Build recovery URL using vendor framework
+                            make_val = stream.camera.make if stream.camera else None
+                            provider = get_playback_recovery_provider(make_val)
+                            recovery_url = provider.build_playback_url(stream, gap_start, gap_end)
 
-                                gaps_to_recover.append({
-                                    "stream_id": stream_id,
-                                    "recovery_url": recovery_url,
-                                    "start_ts": temp_start,
-                                    "end_ts": next_end
-                                })
+                            gaps_to_recover.append({
+                                "stream_id": stream_id,
+                                "recovery_url": recovery_url,
+                                "start_ts": gap_start,
+                                "end_ts": gap_end
+                            })
 
             if not gaps_to_recover:
                 await asyncio.sleep(60.0)
@@ -434,7 +429,8 @@ async def camera_gap_recovery_loop():
                     is_complete = False
                     try:
                         dur = await get_file_duration_async(str(output_path), semaphore)
-                        if dur >= settings.segment_time_seconds - 5.0:
+                        expected_dur = temp_end - temp_start
+                        if dur >= expected_dur - 1.0:
                             is_complete = True
                     except Exception:
                         pass
@@ -465,7 +461,7 @@ async def camera_gap_recovery_loop():
                             print(f"[recovery] [{stream_id}] Failed to index existing segment: {e}")
                         return
                     else:
-                        print(f"[recovery] [{stream_id}] File exists but is incomplete (duration < 55s), deleting to re-download: {filename}")
+                        print(f"[recovery] [{stream_id}] File exists but is incomplete, deleting to re-download: {filename}")
                         try:
                             output_path.unlink()
                         except Exception:
@@ -479,7 +475,7 @@ async def camera_gap_recovery_loop():
                         "-loglevel", "warning",
                         "-rtsp_transport", "tcp",
                         "-i", recovery_url,
-                        "-t", str(settings.segment_time_seconds),
+                        "-t", str(temp_end - temp_start),
                         "-c:v", "copy",
                         "-an",
                         str(output_path)
