@@ -222,7 +222,7 @@ async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) 
                     return float(duration_str)
         except Exception:
             pass
-    return float(settings.segment_time_seconds)
+    return 0.0
 
 async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -> list[tuple[float, float]]:
     import re
@@ -307,8 +307,6 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
         # If the filename already encodes both start and end, use that directly
         if seg.get("has_end") and "end_ts" in seg:
             return seg["start_ts"], seg["end_ts"] - seg["start_ts"]
-        if seg["size"] >= 2 * 1024 * 1024:
-            return seg["start_ts"], float(settings.segment_time_seconds)
         dur = await get_file_duration_async(seg["path"], semaphore)
         return seg["start_ts"], dur
 
