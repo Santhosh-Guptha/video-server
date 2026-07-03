@@ -17,11 +17,8 @@ set -euo pipefail
 INSTALL_DIR="/opt/video-server"
 LOG_DIR="/opt/video-server/logs"
 DATA_DIR="/opt/video-server/data"
-if [[ -d "/mnt/storage/cameras" ]]; then
-    REC_DIR="/mnt/storage/cameras"
-elif [[ -d "/mnt/storage" ]]; then
-    mkdir -p "/mnt/storage/cameras"
-    REC_DIR="/mnt/storage/cameras"
+if [[ -d "/mnt/storage" ]]; then
+    REC_DIR="/mnt/storage"
 else
     REC_DIR="/opt/video-server/data/recordings"
 fi
