@@ -17,7 +17,14 @@ set -euo pipefail
 INSTALL_DIR="/opt/video-server"
 LOG_DIR="/opt/video-server/logs"
 DATA_DIR="/opt/video-server/data"
-REC_DIR="/opt/video-server/data/recordings"
+if [[ -d "/mnt/storage/cameras" ]]; then
+    REC_DIR="/mnt/storage/cameras"
+elif [[ -d "/mnt/storage" ]]; then
+    mkdir -p "/mnt/storage/cameras"
+    REC_DIR="/mnt/storage/cameras"
+else
+    REC_DIR="/opt/video-server/data/recordings"
+fi
 VENV_DIR="/opt/video-backend-venv"
 INSTALL_LOG="/var/log/vms-install.log"
 
@@ -221,6 +228,7 @@ ExecStart=$MEDIAMTX_DIR/mediamtx
 Restart=always
 RestartSec=5
 User=root
+Environment=BACKEND_WEBHOOK_URL=http://localhost:8005
 
 [Install]
 WantedBy=multi-user.target
@@ -433,6 +441,7 @@ LIVE_STREAM_PROFILE=HD
 ENABLE_ADAPTIVE_PROFILE=false
 PLAYBACK_PROFILE=HD
 INDEXER_INTERVAL_SECONDS=600
+RECORDING_DIR=$REC_DIR
 EOF
 
 # Run database migrations
