@@ -297,7 +297,8 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
                         pass
 
     if not segments_to_check:
-        return []
+        # If no files exist on disk, the entire window is one giant gap
+        return [(start_ts, end_ts)]
 
     # Query file durations. For files >= 2MB, assume full segment duration to optimize speed.
     semaphore = asyncio.Semaphore(15)
@@ -544,10 +545,12 @@ async def camera_gap_recovery_loop():
                                 print(f"[recovery] [{stream_id}] Failed to index recovered segment: {index_err}")
                         else:
                             print(f"[recovery] [{stream_id}] FFmpeg failed with exit code {proc.returncode} for clip: {filename}")
+                            attempted_gaps.discard((stream_id, temp_start))
                             if output_path.exists():
                                 output_path.unlink()
                     except asyncio.TimeoutError:
                         print(f"[recovery] [{stream_id}] Timeout downloading gap clip: {filename}")
+                        attempted_gaps.discard((stream_id, temp_start))
                         try:
                             proc.kill()
                         except Exception:
@@ -556,6 +559,7 @@ async def camera_gap_recovery_loop():
                             output_path.unlink()
                     except Exception as e:
                         print(f"[recovery] [{stream_id}] Error running FFmpeg for recovery: {e}")
+                        attempted_gaps.discard((stream_id, temp_start))
                         if output_path.exists():
                             output_path.unlink()
 
