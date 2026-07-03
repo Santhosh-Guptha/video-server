@@ -1,6 +1,0 @@
-mediamtx_policy:
-  mediamtx_api_url: "http://127.0.0.1:9997"
-  mediamtx_webrtc_url: "http://127.0.0.1:8889"
-  mediamtx_cache_ttl_seconds: 30
-  mediamtx_patch_only: true
-  allow_delete_add_reconfiguration: false

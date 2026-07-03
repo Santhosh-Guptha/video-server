@@ -1,7 +1,0 @@
-redis_policy:
-  redis_url: "redis://127.0.0.1:6379/0"
-  lock_timeout_seconds: 10
-  distributed_events_enabled: true
-  use_redis_streams: true
-  stream_key: "vms:system_events"
-  stream_maxlen: 10000

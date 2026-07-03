@@ -1,6 +1,0 @@
-session_policy:
-  max_webrtc_sessions_per_camera: 100
-  session_timeout_seconds: 60
-  session_heartbeat_seconds: 20
-  enforce_user_session_limit: true
-  max_sessions_per_user: 32
