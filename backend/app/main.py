@@ -1465,8 +1465,14 @@ async def cleanup_test_connection(stream_id: str):
             print(f"[stream_manager] Failed to delete temporary test path: {e}")
     return {"status": "ok"}
 
+_sync_lock = asyncio.Lock()
+
 @app.post("/api/cameras/sync", response_model=SyncResponse)
 async def sync_cameras(session: Annotated[AsyncSession, Depends(get_session)], skip_mediamtx_api: bool = False):
+    async with _sync_lock:
+        return await _sync_cameras_impl(session, skip_mediamtx_api)
+
+async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = False):
     raw_cameras = await fetch_upstream_cameras()
     updated_count = 0
     received_source_ids = set()
