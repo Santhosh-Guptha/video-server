@@ -1803,6 +1803,8 @@ async def hls_playlist(
                     media_type="application/vnd.apple.mpegurl",
                     headers=resp_headers
                 )
+            else:
+                print(f"[main] MediaMTX returned non-200 status {response.status_code} for {stream_id}. Body: {response.text[:200]}")
         except Exception as e:
             print(f"[main] Error proxying index.m3u8 for {stream_id}: {e}")
     raise HTTPException(404, "Playlist not ready")
@@ -1851,6 +1853,8 @@ async def hls_segment(
                         "Expires": "0"
                     }
                 )
+            else:
+                print(f"[main] MediaMTX returned non-200 status {response.status_code} for segment {filename} on {stream_id}. Body: {response.text[:200]}")
         except Exception as e:
             print(f"[main] Error proxying segment {filename} for {stream_id}: {e}")
     raise HTTPException(404, "Segment not found")
