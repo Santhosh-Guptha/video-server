@@ -89,19 +89,13 @@ async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool:
             timeout=float(timeout_seconds)
         )
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
         return True
     except Exception:
-        # Retry with a quick socket ping as a fallback
-        try:
-            loop = asyncio.get_event_loop()
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(float(timeout_seconds))
-            await loop.run_in_executor(None, s.connect, (host, port))
-            s.close()
-            return True
-        except Exception:
-            return False
+        return False
 
 
 async def _patch_mediamtx(path_name: str, payload: dict) -> bool:
