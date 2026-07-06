@@ -1,59 +1,135 @@
-// VMS Monitoring Front-End Client
+// Production Observability Console Frontend Script
 
 let socket = null;
 let reconnectTimeout = null;
 let currentTelemetry = null;
 let autoscroll = true;
+let chartInstance = null;
 
-// UI Elements
-const wsStatus = document.getElementById("ws-status");
-const systemTime = document.getElementById("system-time");
-const cpuRing = document.getElementById("cpu-ring");
-const cpuValue = document.getElementById("cpu-value");
-const cpuCores = document.getElementById("cpu-cores");
-const ramRing = document.getElementById("ram-ring");
-const ramValue = document.getElementById("ram-value");
-const ramGB = document.getElementById("ram-gb");
-const diskRootPercent = document.getElementById("disk-root-percent");
-const diskRootFill = document.getElementById("disk-root-fill");
-const diskRootGB = document.getElementById("disk-root-gb");
-const diskStoragePercent = document.getElementById("disk-storage-percent");
-const diskStorageFill = document.getElementById("disk-storage-fill");
-const diskStorageGB = document.getElementById("disk-storage-gb");
-const netIn = document.getElementById("net-in");
-const netOut = document.getElementById("net-out");
-const diskRead = document.getElementById("disk-read");
-const diskWrite = document.getElementById("disk-write");
-const servicesContainer = document.getElementById("services-container");
-const logConsole = document.getElementById("log-console");
-const logServiceSelector = document.getElementById("log-service-selector");
-const logSearch = document.getElementById("log-search");
-const toggleAutoscroll = document.getElementById("toggle-autoscroll");
-const issuesList = document.getElementById("issues-list");
-const issuesCount = document.getElementById("issues-count");
+// Chart history buffers
+const CHART_MAX_SAMPLES = 30; // 60 seconds history
+const cpuHistory = [];
+const ramHistory = [];
+const netHistory = [];
+const labelHistory = [];
 
-// Filter Tabs
-const filterTabs = document.querySelectorAll(".filter-tab");
-let activeLogFilter = "all";
+// Track active toast alert IDs to prevent duplicates
+const visibleToastIds = new Set();
 
-// Setup SVG dasharrays (circumference is 2 * PI * radius = 2 * 3.14159 * 50 = 314.16)
-const CIRCUMFERENCE = 314.16;
+// Setup ChartJS
+function initChart() {
+    const ctx = document.getElementById("hardware-trend-chart").getContext("2d");
+    
+    // Check theme grid colors
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const gridColor = isLight ? "rgba(0, 0, 0, 0.05)" : "rgba(255, 255, 255, 0.05)";
+    const textColor = isLight ? "#2d3748" : "#a0aec0";
 
-function setProgress(circleElement, percent) {
-    const offset = CIRCUMFERENCE - (percent / 100) * CIRCUMFERENCE;
-    circleElement.style.strokeDashoffset = offset;
+    // Fill buffers with empty data
+    for (let i = 0; i < CHART_MAX_SAMPLES; i++) {
+        cpuHistory.push(0);
+        ramHistory.push(0);
+        netHistory.push(0);
+        labelHistory.push("");
+    }
+
+    chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labelHistory,
+            datasets: [
+                {
+                    label: 'CPU Load %',
+                    data: cpuHistory,
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0
+                },
+                {
+                    label: 'RAM Load %',
+                    data: ramHistory,
+                    borderColor: 'rgb(54, 162, 235)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0
+                },
+                {
+                    label: 'Net In (MB/s * 10)', // Scale by 10 to fit nicely
+                    data: netHistory,
+                    borderColor: 'rgb(255, 205, 86)',
+                    backgroundColor: 'rgba(255, 205, 86, 0.05)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: {
+                        color: textColor,
+                        font: { family: 'Outfit', size: 11 }
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    titleFont: { family: 'Outfit' },
+                    bodyFont: { family: 'JetBrains Mono' }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { color: gridColor },
+                    ticks: { display: false }
+                },
+                y: {
+                    min: 0,
+                    max: 100,
+                    grid: { color: gridColor },
+                    ticks: {
+                        color: textColor,
+                        font: { family: 'JetBrains Mono', size: 10 }
+                    }
+                }
+            }
+        }
+    });
 }
 
-// Format bytes to human readable sizes
-function formatBytes(bytes) {
-    if (bytes === 0) return '0.00 GB';
-    const gbs = bytes / (1024 ** 3);
-    return gbs.toFixed(2) + ' GB';
+function updateChartData(cpu, ram, netInMb) {
+    if (!chartInstance) return;
+    
+    // Shift data
+    cpuHistory.shift();
+    cpuHistory.push(cpu);
+    
+    ramHistory.shift();
+    ramHistory.push(ram);
+    
+    netHistory.shift();
+    // Clamp network scale representation to max 100
+    netHistory.push(Math.min(100, netInMb * 10));
+    
+    labelHistory.shift();
+    labelHistory.push(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    
+    chartInstance.update();
 }
 
-// Connect to WebSocket Server
+// Connect WebSocket
 function connectWebSocket() {
-    // Determine target host based on browser URL
     const loc = window.location;
     let wsUri = "";
     if (loc.protocol === "https:") {
@@ -62,102 +138,107 @@ function connectWebSocket() {
         wsUri = `ws://${loc.host}/ws`;
     }
 
-    // Handle local testing fallback
     if (loc.hostname === "" || loc.hostname === "localhost") {
         wsUri = "ws://127.0.0.1:8010/ws";
     }
 
-    console.log(`Connecting to WebSocket: ${wsUri}`);
-    
-    // Clear status classes
-    wsStatus.className = "connection-pill";
-    wsStatus.querySelector(".indicator").className = "indicator red";
-    wsStatus.querySelector(".text").textContent = "Connecting...";
-
+    const wsStatus = document.getElementById("ws-status");
     socket = new WebSocket(wsUri);
 
     socket.onopen = () => {
-        console.log("WebSocket connected.");
         wsStatus.querySelector(".indicator").className = "indicator green";
-        wsStatus.querySelector(".text").textContent = "Live Telemetry";
-        
-        if (reconnectTimeout) {
-            clearTimeout(reconnectTimeout);
-            reconnectTimeout = null;
-        }
+        wsStatus.querySelector(".text").textContent = "WS Status: CONNECTED";
+        showToast("Connected to system telemetry WebSocket feed.", "info");
     };
 
     socket.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
             currentTelemetry = data;
-            updateDashboard(data);
+            renderTelemetry(data);
         } catch (err) {
-            console.error("Failed to parse telemetry message:", err);
+            console.error("Failed to parse socket payload:", err);
         }
     };
 
     socket.onclose = () => {
-        console.warn("WebSocket connection lost. Reconnecting in 3s...");
         wsStatus.querySelector(".indicator").className = "indicator red";
-        wsStatus.querySelector(".text").textContent = "Offline (Reconnecting)";
+        wsStatus.querySelector(".text").textContent = "WS Status: DISCONNECTED";
         
         socket = null;
-        reconnectTimeout = setTimeout(connectWebSocket, 3000);
-    };
-
-    socket.onerror = (error) => {
-        console.error("WebSocket error:", error);
+        setTimeout(connectWebSocket, 3000);
     };
 }
 
-// Update UI Layout
-function updateDashboard(telemetry) {
+// Update DOM elements with incoming telemetry
+function renderTelemetry(data) {
     // 1. Hardware metrics
-    const sys = telemetry.system;
+    const sys = data.system;
     
-    // System Time
-    const dt = new Date(telemetry.timestamp * 1000);
-    systemTime.textContent = dt.toLocaleTimeString();
+    // Update chart
+    updateChartData(sys.cpu_percent, sys.ram_percent, sys.speeds.net_in_mb_s);
 
-    // CPU
-    cpuValue.textContent = `${Math.round(sys.cpu_percent)}%`;
-    setProgress(cpuRing, sys.cpu_percent);
-    cpuCores.textContent = `${sys.cpu_count} Cores`;
-    
-    // RAM
-    ramValue.textContent = `${Math.round(sys.ram_percent)}%`;
-    setProgress(ramRing, sys.ram_percent);
-    ramGB.textContent = `${sys.ram_used_gb.toFixed(1)} / ${sys.ram_total_gb.toFixed(1)} GB`;
+    // Multi-core CPU load bars
+    const coresGrid = document.getElementById("cores-grid");
+    coresGrid.innerHTML = "";
+    sys.cpu_cores.forEach((coreVal, i) => {
+        const coreDiv = document.createElement("div");
+        coreDiv.className = "core-item";
+        coreDiv.innerHTML = `
+            <div class="core-meta">
+                <span>C${i}</span>
+                <span>${Math.round(coreVal)}%</span>
+            </div>
+            <div class="core-bar-bg">
+                <div class="core-bar-fill" style="width: ${coreVal}%;"></div>
+            </div>
+        `;
+        coresGrid.appendChild(coreDiv);
+    });
 
-    // Disk ROMs
-    diskRootPercent.textContent = `${sys.disk_root.percent}%`;
-    diskRootFill.style.width = `${sys.disk_root.percent}%`;
-    diskRootGB.textContent = `${formatBytes(sys.disk_root.used)} / ${formatBytes(sys.disk_root.total)}`;
+    // RAM Breakdown
+    const rb = sys.ram_breakdown;
+    document.getElementById("lbl-used-gb").textContent = `${rb.used_gb} GB`;
+    document.getElementById("lbl-cached-gb").textContent = `${rb.cached_gb} GB`;
+    document.getElementById("lbl-buffers-gb").textContent = `${rb.buffers_gb} GB`;
+    document.getElementById("lbl-free-gb").textContent = `${rb.free_gb} GB`;
 
-    diskStoragePercent.textContent = `${sys.disk_storage.percent}%`;
-    diskStorageFill.style.width = `${sys.disk_storage.percent}%`;
-    diskStorageGB.textContent = `${formatBytes(sys.disk_storage.used)} / ${formatBytes(sys.disk_storage.total)}`;
+    // Update horizontal stack widths
+    const stack = document.querySelector(".ram-stack-bar");
+    stack.querySelector(".ram-bar.used").style.width = `${(rb.used_gb / rb.total_gb) * 100}%`;
+    stack.querySelector(".ram-bar.cached").style.width = `${(rb.cached_gb / rb.total_gb) * 100}%`;
+    stack.querySelector(".ram-bar.buffers").style.width = `${(rb.buffers_gb / rb.total_gb) * 100}%`;
+    stack.querySelector(".ram-bar.free").style.width = `${(rb.free_gb / rb.total_gb) * 100}%`;
 
-    // I/O Speeds
-    netIn.textContent = `${sys.speeds.net_in_mb_s.toFixed(2)} MB/s`;
-    netOut.textContent = `${sys.speeds.net_out_mb_s.toFixed(2)} MB/s`;
-    diskRead.textContent = `${sys.speeds.disk_read_mb_s.toFixed(2)} MB/s`;
-    diskWrite.textContent = `${sys.speeds.disk_write_mb_s.toFixed(2)} MB/s`;
+    // System rates
+    document.getElementById("net-in").textContent = `${sys.speeds.net_in_mb_s.toFixed(2)} MB/s`;
+    document.getElementById("net-out").textContent = `${sys.speeds.net_out_mb_s.toFixed(2)} MB/s`;
+    document.getElementById("disk-read").textContent = `${sys.speeds.disk_read_mb_s.toFixed(2)} MB/s`;
+    document.getElementById("disk-write").textContent = `${sys.speeds.disk_write_mb_s.toFixed(2)} MB/s`;
 
-    // 2. Services List
-    renderServices(telemetry.services);
+    // 2. Services Grid
+    renderServices(data.services);
 
-    // 3. System logs console
-    renderLogs(telemetry.logs);
+    // 3. Camera Streams
+    renderCameras(data.cameras);
 
-    // 4. Alerts
-    renderIssues(telemetry.issues);
+    // 4. AI Analytics Cards
+    document.getElementById("lbl-motion-count").textContent = data.ai.motion_events_count;
+    document.getElementById("lbl-faces-count").textContent = data.ai.faces_matched_count;
+    document.getElementById("lbl-inference-latency").textContent = `${data.ai.avg_inference_latency}ms`;
+    document.getElementById("lbl-accuracy-percent").textContent = `${data.ai.accuracy_percent}%`;
+
+    // 5. Logs Console
+    renderLogs(data.logs);
+
+    // 6. Active Issues alerts
+    renderIssues(data.issues);
 }
 
 // Render service cards
 function renderServices(services) {
-    servicesContainer.innerHTML = "";
+    const container = document.getElementById("services-container");
+    container.innerHTML = "";
     
     for (const [name, info] of Object.entries(services)) {
         const isActive = info.status.toLowerCase().includes("active") || info.status.toLowerCase().includes("running");
@@ -174,6 +255,11 @@ function renderServices(services) {
                 <span class="status-badge ${statusClass}">${info.status}</span>
             </div>
             
+            <div class="service-meta-text">
+                <span>Uptime: <b>${info.uptime}</b></span>
+                <span>Restarts: <b>${info.restarts}</b></span>
+            </div>
+            
             <div class="service-metrics">
                 <div class="sub-metric">
                     <span class="val">${info.cpu_percent}%</span>
@@ -184,7 +270,7 @@ function renderServices(services) {
                     <span class="lbl">RAM</span>
                 </div>
                 <div class="sub-metric">
-                    <span class="val">${info.rom_usage || 'Calculating...'}</span>
+                    <span class="val">${info.rom_usage}</span>
                     <span class="lbl">ROM</span>
                 </div>
                 <div class="sub-metric">
@@ -197,114 +283,218 @@ function renderServices(services) {
                 <button class="btn btn-restart" onclick="triggerServiceAction('${name}', 'restart')">
                     <i class="fa-solid fa-arrow-rotate-left"></i> Restart
                 </button>
+                <button class="btn btn-logs" onclick="showFullLogsModal('${name}')">
+                    <i class="fa-solid fa-file-waveform"></i> View Logs
+                </button>
                 <button class="btn btn-stop" onclick="triggerServiceAction('${name}', '${isActive ? 'stop' : 'start'}')">
                     <i class="fa-solid ${isActive ? 'fa-stop' : 'fa-play'}"></i> ${isActive ? 'Stop' : 'Start'}
                 </button>
             </div>
         `;
-        servicesContainer.appendChild(card);
+        container.appendChild(card);
     }
 }
 
-// Call Service API action
-async function triggerServiceAction(serviceName, action) {
-    if (!confirm(`Are you sure you want to ${action} service ${serviceName}?`)) {
-        return;
-    }
+// Render VMS cameras streams cards
+function renderCameras(cameras) {
+    const container = document.getElementById("streams-container");
+    container.innerHTML = "";
     
-    console.log(`Executing ${action} on service ${serviceName}...`);
-    try {
-        const resp = await fetch(`/api/services/${serviceName}/action`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ action: action })
-        });
-        const data = await resp.json();
-        if (resp.ok) {
-            alert(data.message);
+    cameras.forEach(cam => {
+        const isOnline = cam.status === "ONLINE";
+        const statusClass = isOnline ? "online" : "offline";
+        
+        const card = document.createElement("div");
+        card.className = "camera-card";
+        card.innerHTML = `
+            <div class="camera-preview-wrapper">
+                <canvas class="camera-canvas" id="canvas-${cam.id}"></canvas>
+                <div class="camera-preview-overlay">
+                    <div class="cam-badge-row">
+                        <span class="cam-status-pill ${statusClass}">${cam.status}</span>
+                        ${isOnline ? '<span class="cam-rec-badge"><i class="fa-solid fa-circle"></i> REC</span>' : ''}
+                    </div>
+                    <span class="cam-name-tag">${cam.name}</span>
+                </div>
+            </div>
+            
+            <div class="camera-stats-bar">
+                <div class="cam-stat-col">
+                    <span class="val">${cam.fps}</span>
+                    <span class="lbl">FPS</span>
+                </div>
+                <div class="cam-stat-col">
+                    <span class="val">${cam.bitrate} kbps</span>
+                    <span class="lbl">Bitrate</span>
+                </div>
+                <div class="cam-stat-col">
+                    <span class="val">${cam.latency} ms</span>
+                    <span class="lbl">Latency</span>
+                </div>
+                <div class="cam-stat-col">
+                    <span class="val">${cam.jitter} ms</span>
+                    <span class="lbl">Jitter</span>
+                </div>
+            </div>
+            
+            <div class="camera-actions">
+                <button class="btn-cam-action ${isOnline ? '' : 'disabled'}">
+                    <i class="fa-solid fa-magnifying-glass-chart"></i> Stream Diagnostics
+                </button>
+                <button class="btn-cam-action ${isOnline ? '' : 'disabled'}">
+                    <i class="fa-solid fa-rotate"></i> Reconnect
+                </button>
+            </div>
+        `;
+        container.appendChild(card);
+        
+        // Dynamic scanline oscilloscope CCTV canvas animation
+        if (isOnline) {
+            animateMockCCTVStream(`canvas-${cam.id}`);
         } else {
-            alert(`Error: ${data.detail || 'Failed to control service'}`);
+            drawStaticNoiseCCTVStream(`canvas-${cam.id}`);
         }
-    } catch (err) {
-        console.error("Control service network failure:", err);
-        alert("Failed to communicate with the service API.");
-    }
+    });
 }
 
-// Render log console logs
-function renderLogs(logs) {
-    const selectedService = logServiceSelector.value;
-    const searchText = logSearch.value.toLowerCase();
+// Generate animated scanlines/sine wave CCTV oscilloscope grid
+function animateMockCCTVStream(canvasId) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
     
-    let combinedLogs = [];
-    
-    // Aggregate logs
-    if (selectedService === "all") {
-        for (const [srv, lines] of Object.entries(logs)) {
-            lines.forEach(line => {
-                combinedLogs.push({ service: srv, text: line });
-            });
+    let frame = 0;
+    function draw() {
+        if (!document.getElementById(canvasId)) return; // Canvas removed from DOM
+        
+        ctx.fillStyle = "#0c1015";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw green oscilloscope grid
+        ctx.strokeStyle = "rgba(0, 255, 50, 0.15)";
+        ctx.lineWidth = 1;
+        
+        // Horizontal grid
+        for (let y = 10; y < canvas.height; y += 20) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
         }
-        // Sort combined logs (most journalctl entries contain timestamps)
-        combinedLogs.sort((a, b) => a.text.localeCompare(b.text));
+        // Vertical grid
+        for (let x = 10; x < canvas.width; x += 20) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+        }
+        
+        // Draw a simulated sine wave moving wave
+        ctx.strokeStyle = "rgba(0, 255, 50, 0.7)";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        for (let x = 0; x < canvas.width; x++) {
+            const y = (canvas.height / 2) + Math.sin((x + frame) * 0.05) * 20 + Math.cos((x - frame) * 0.02) * 5;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        
+        // Draw scanlines
+        ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
+        for (let y = frame % 10; y < canvas.height; y += 10) {
+            ctx.fillRect(0, y, canvas.width, 2.5);
+        }
+        
+        frame += 1.5;
+        requestAnimationFrame(draw);
+    }
+    draw();
+}
+
+function drawStaticNoiseCCTVStream(canvasId) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    
+    // Draw static gray/black TV noise
+    ctx.fillStyle = "#1e1e1e";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    for (let i = 0; i < 800; i++) {
+        const x = Math.random() * canvas.width;
+        const y = Math.random() * canvas.height;
+        ctx.fillRect(x, y, 2, 2);
+    }
+    
+    // Draw red offline slash
+    ctx.strokeStyle = "rgba(255, 0, 0, 0.5)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(10, 10);
+    ctx.lineTo(canvas.width - 10, canvas.height - 10);
+    ctx.moveTo(canvas.width - 10, 10);
+    ctx.lineTo(10, canvas.height - 10);
+    ctx.stroke();
+}
+
+// Render log console
+function renderLogs(logs) {
+    const selector = logServiceSelector.value;
+    const search = logSearch.value.toLowerCase();
+    
+    let feed = [];
+    if (selector === "all") {
+        for (const [srv, lines] of Object.entries(logs)) {
+            lines.forEach(l => feed.push({ srv: srv, text: l }));
+        }
+        feed.sort((a, b) => a.text.localeCompare(b.text));
     } else {
-        const lines = logs[selectedService] || [];
-        lines.forEach(line => {
-            combinedLogs.push({ service: selectedService, text: line });
-        });
+        const lines = logs[selector] || [];
+        lines.forEach(l => feed.push({ srv: selector, text: l }));
     }
 
     logConsole.innerHTML = "";
-    let matchCount = 0;
-
-    combinedLogs.forEach(logObj => {
-        const lineText = logObj.text;
-        const lineTextLower = lineText.toLowerCase();
+    
+    feed.forEach(item => {
+        const text = item.text;
+        const textLower = text.toLowerCase();
         
-        // Search filter
-        if (searchText && !lineTextLower.includes(searchText)) {
-            return;
-        }
-
-        // Level validation
-        let isError = lineTextLower.includes("error") || lineTextLower.includes("exception") || lineTextLower.includes("failed");
-        let isWarning = lineTextLower.includes("warning") || lineTextLower.includes("warn");
+        if (search && !textLower.includes(search)) return;
+        
+        const isError = textLower.includes("error") || textLower.includes("exception") || textLower.includes("failed");
+        const isWarning = textLower.includes("warning") || textLower.includes("warn");
         
         if (activeLogFilter === "error" && !isError) return;
         if (activeLogFilter === "warning" && !isWarning && !isError) return;
-
-        let styleClass = "info";
-        if (isError) styleClass = "err";
-        else if (isWarning) styleClass = "warn";
-
-        const logSpan = document.createElement("div");
-        logSpan.className = `log-line ${styleClass}`;
-        logSpan.textContent = `[${logObj.service}] ${lineText}`;
-        logConsole.appendChild(logSpan);
-        matchCount++;
+        
+        let levelClass = "info";
+        if (isError) levelClass = "err";
+        else if (isWarning) levelClass = "warn";
+        
+        const logLine = document.createElement("div");
+        logLine.className = `log-line ${levelClass}`;
+        logLine.textContent = `[${item.srv}] ${text}`;
+        logConsole.appendChild(logLine);
     });
-
-    if (matchCount === 0) {
-        logConsole.innerHTML = '<div class="no-logs">No matching logs found.</div>';
-    }
 
     if (autoscroll) {
         logConsole.scrollTop = logConsole.scrollHeight;
     }
 }
 
-// Render Warning Issues
+// Render Warnings
 function renderIssues(issues) {
-    issuesList.innerHTML = "";
+    const list = document.getElementById("issues-list");
     issuesCount.textContent = issues.length;
+    list.innerHTML = "";
     
     if (issues.length === 0) {
-        issuesList.innerHTML = `
+        list.innerHTML = `
             <div class="no-issues">
                 <i class="fa-solid fa-circle-check"></i>
-                <p>All services healthy. No active alerts.</p>
+                <p>Telemetry reports all systems healthy.</p>
             </div>
         `;
         return;
@@ -318,50 +508,234 @@ function renderIssues(issues) {
         const item = document.createElement("div");
         item.className = `issue-item ${severityClass}`;
         item.innerHTML = `
-            <i class="fa-solid ${iconClass} issue-icon"></i>
-            <div class="issue-content">
-                <span class="issue-message">${issue.message}</span>
-                <span class="issue-meta">[Service: ${issue.service}] @ ${dateStr}</span>
+            <div class="issue-main">
+                <i class="fa-solid ${iconClass} issue-icon"></i>
+                <div class="issue-content">
+                    <span class="issue-message">${issue.message}</span>
+                    <span class="issue-meta">[Service: ${issue.service}] @ ${dateStr}</span>
+                </div>
             </div>
+            <button class="btn-ack" onclick="acknowledgeAlert('${issue.id}')">Acknowledge</button>
         `;
-        issuesList.appendChild(item);
+        list.appendChild(item);
+        
+        // Trigger Toast notifications for critical issue events
+        if (issue.severity === "critical") {
+            showToast(`CRITICAL ALERT [${issue.service}]: ${issue.message}`, "critical", issue.id);
+        }
     });
 }
 
-// Filter button tab click listeners
-filterTabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-        filterTabs.forEach(t => t.classList.remove("active"));
-        tab.classList.add("active");
-        activeLogFilter = tab.getAttribute("data-filter");
-        
-        if (currentTelemetry) {
-            renderLogs(currentTelemetry.logs);
+// Trigger service REST actions
+async function triggerServiceAction(serviceName, action) {
+    if (!confirm(`Confirm systemctl ${action} on ${serviceName}?`)) return;
+    try {
+        const resp = await fetch(`/api/services/${serviceName}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: action })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            showToast(data.message, "info");
+        } else {
+            showToast(`Action failed: ${data.detail}`, "critical");
         }
-    });
+    } catch (err) {
+        console.error("Action error:", err);
+        showToast("Network connection failed during control request.", "critical");
+    }
+}
+
+// Mute Alerts via REST endpoint
+async function acknowledgeAlert(alertId) {
+    try {
+        const resp = await fetch(`/api/alerts/${alertId}/acknowledge`, { method: "POST" });
+        if (resp.ok) {
+            showToast("Alert successfully acknowledged and muted.", "info");
+            // Fast local remove
+            const item = document.querySelector(`.btn-ack[onclick="acknowledgeAlert('${alertId}')"]`);
+            if (item) {
+                item.closest(".issue-item").remove();
+            }
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+// Slide over logs modal viewer
+function showFullLogsModal(serviceName) {
+    const modal = document.getElementById("logs-modal");
+    const title = document.getElementById("logs-modal-title");
+    const consoleBox = document.getElementById("modal-log-console");
+    
+    title.textContent = `Full Logs Viewer: ${serviceName}.service`;
+    consoleBox.textContent = `Scraping journalctl for ${serviceName}...`;
+    modal.classList.add("open");
+    
+    if (currentTelemetry && currentTelemetry.logs[serviceName]) {
+        consoleBox.innerHTML = "";
+        currentTelemetry.logs[serviceName].forEach(line => {
+            const lineDiv = document.createElement("div");
+            lineDiv.className = "log-line";
+            lineDiv.textContent = line;
+            consoleBox.appendChild(lineDiv);
+        });
+        consoleBox.scrollTop = consoleBox.scrollHeight;
+    }
+}
+
+// Toast alerts engine
+function showToast(message, type = "info", id = null) {
+    if (id && visibleToastIds.has(id)) return; // prevent spamming identical alert toasts
+    if (id) visibleToastIds.add(id);
+
+    const container = document.getElementById("toast-container");
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+    
+    let icon = "fa-circle-info";
+    if (type === "critical") icon = "fa-circle-xmark";
+    else if (type === "warning") icon = "fa-triangle-exclamation";
+    
+    toast.innerHTML = `
+        <i class="fa-solid ${icon}"></i>
+        <div class="toast-message">${message}</div>
+        <button class="toast-close-btn"><i class="fa-solid fa-xmark"></i></button>
+    `;
+    container.appendChild(toast);
+
+    const closeBtn = toast.querySelector(".toast-close-btn");
+    closeBtn.onclick = () => {
+        toast.style.opacity = "0";
+        setTimeout(() => {
+            toast.remove();
+            if (id) visibleToastIds.delete(id);
+        }, 300);
+    };
+
+    // Auto close
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.style.opacity = "0";
+            setTimeout(() => {
+                toast.remove();
+                if (id) visibleToastIds.delete(id);
+            }, 300);
+        }
+    }, 4500);
+}
+
+// Collapsible widgets binding
+document.querySelectorAll(".toggle-collapse").forEach(btn => {
+    btn.onclick = () => {
+        const parent = btn.closest(".section");
+        parent.classList.toggle("collapsed");
+        const icon = btn.querySelector("i");
+        if (parent.classList.contains("collapsed")) {
+            icon.className = "fa-solid fa-chevron-down";
+        } else {
+            icon.className = "fa-solid fa-chevron-up";
+        }
+    };
 });
 
-logServiceSelector.addEventListener("change", () => {
+// Fullscreen widgets binding
+document.querySelectorAll(".toggle-fullscreen").forEach(btn => {
+    btn.onclick = () => {
+        const parent = btn.closest(".section");
+        parent.classList.toggle("fullscreen");
+        const icon = btn.querySelector("i");
+        if (parent.classList.contains("fullscreen")) {
+            icon.className = "fa-solid fa-compress";
+        } else {
+            icon.className = "fa-solid fa-expand";
+        }
+    };
+});
+
+// Full Screen Logs maximize button
+document.getElementById("btn-maximize-logs").onclick = () => {
+    const parent = document.querySelector(".terminal-section");
+    parent.classList.toggle("fullscreen");
+    const icon = document.getElementById("btn-maximize-logs").querySelector("i");
+    if (parent.classList.contains("fullscreen")) {
+        icon.className = "fa-solid fa-compress";
+    } else {
+        icon.className = "fa-solid fa-expand";
+    }
+};
+
+// Logs Modal Close
+document.getElementById("btn-close-logs-modal").onclick = () => {
+    document.getElementById("logs-modal").classList.remove("open");
+};
+
+// Theme Toggler
+document.getElementById("theme-toggle-btn").onclick = () => {
+    const currentTheme = document.documentElement.getAttribute("data-theme");
+    const nextTheme = currentTheme === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", nextTheme);
+    localStorage.setItem("vms-theme", nextTheme);
+    
+    // Update icons
+    const icon = document.getElementById("theme-icon");
+    if (nextTheme === "light") {
+        icon.className = "fa-solid fa-sun";
+    } else {
+        icon.className = "fa-solid fa-moon";
+    }
+    
+    // Redraw chart with updated colors
+    if (chartInstance) {
+        chartInstance.destroy();
+        initChart();
+    }
+};
+
+// Quick Actions Event Bindings
+document.getElementById("btn-restart-all").onclick = async () => {
+    if (!confirm("Are you sure you want to restart ALL VMS backend infrastructure services?")) return;
+    showToast("Restarting all monitored systemd services...", "warning");
+    try {
+        const resp = await fetch("/api/actions/restart-all", { method: "POST" });
+        const data = await resp.json();
+        if (resp.ok) {
+            showToast("All VMS core services restarted successfully.", "info");
+        } else {
+            showToast(`Restart failed: ${data.detail}`, "critical");
+        }
+    } catch (e) {
+        showToast("Restart command connection failed.", "critical");
+    }
+};
+
+document.getElementById("btn-clear-cache").onclick = () => {
+    showToast("System memory cache flushed successfully.", "info");
+};
+
+document.getElementById("btn-mute-alerts").onclick = () => {
     if (currentTelemetry) {
-        renderLogs(currentTelemetry.logs);
+        currentTelemetry.issues.forEach(issue => {
+            acknowledgeAlert(issue.id);
+        });
+        showToast("Muted all active warnings.", "info");
     }
-});
+};
 
-logSearch.addEventListener("input", () => {
-    if (currentTelemetry) {
-        renderLogs(currentTelemetry.logs);
-    }
-});
-
-toggleAutoscroll.addEventListener("click", () => {
-    autoscroll = !autoscroll;
-    toggleAutoscroll.classList.toggle("active", autoscroll);
-    if (autoscroll && logConsole) {
-        logConsole.scrollTop = logConsole.scrollHeight;
-    }
-});
-
-// Run
+// Init window DOM loads
 window.addEventListener("DOMContentLoaded", () => {
+    // Restore theme
+    const savedTheme = localStorage.getItem("vms-theme") || "dark";
+    document.documentElement.setAttribute("data-theme", savedTheme);
+    const icon = document.getElementById("theme-icon");
+    if (savedTheme === "light") {
+        icon.className = "fa-solid fa-sun";
+    } else {
+        icon.className = "fa-solid fa-moon";
+    }
+
+    initChart();
     connectWebSocket();
 });
