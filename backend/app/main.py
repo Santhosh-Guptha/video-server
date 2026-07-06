@@ -1687,10 +1687,12 @@ async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
     res = await session.execute(query.order_by(Camera.name.asc()))
     cameras = list(res.scalars().all())
     
-    # Serialize to JSON and cache in Redis for 120 seconds
+    # Serialize to JSON via Pydantic schema to ensure all computed fields (rtsp_url, stream_id, etc.) are included
+    from .schemas import CameraOut
     from fastapi.encoders import jsonable_encoder
     import json
-    serialized = json.dumps(jsonable_encoder(cameras))
+    cameras_out = [CameraOut.model_validate(c) for c in cameras]
+    serialized = json.dumps(jsonable_encoder(cameras_out))
     if redis_client:
         try:
             await redis_client.set(cache_key, serialized, ex=120)
