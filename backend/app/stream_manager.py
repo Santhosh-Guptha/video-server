@@ -41,20 +41,8 @@ def should_record(stream: CameraStream) -> bool:
     return should_record_profile(stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type))
 
 def double_escape_rtsp_url(url: str) -> str:
-    if not url or not url.startswith(("rtsp://", "rtsps://", "rtmp://")):
-        return url
-    if "@" not in url:
-        return url
-    parts = url.split("://", 1)
-    if len(parts) < 2:
-        return url
-    scheme, rest = parts
-    user_host = rest.rsplit("@", 1)
-    if len(user_host) < 2:
-        return url
-    userinfo, host = user_host
-    escaped_userinfo = re.sub(r'%([0-9a-fA-F]{2})', r'%25\1', userinfo)
-    return f"{scheme}://{escaped_userinfo}@{host}"
+    """Returns the RTSP URL directly since database values are already correctly single-escaped."""
+    return url
 
 class StreamManager:
     def __init__(self, api_url: str = settings.mediamtx_api_url):
