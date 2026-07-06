@@ -57,62 +57,116 @@ type HLSPlayerProps = {
 function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: HLSPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const retryCountRef = useRef(0)
+  const retryTimerRef = useRef<number | null>(null)
+  const isMountedRef = useRef(true)
   const [muted, setMuted] = useState(true)
   const [loaded, setLoaded] = useState(false)
+  const [statusText, setStatusText] = useState('Buffering HLS stream…')
 
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video || !src) return
-    setLoaded(false)
+  const maxRetries = 8
+  const retryDelay = 2000
+
+  const startHls = (video: HTMLVideoElement, hlsSrc: string) => {
+    if (!isMountedRef.current) return
 
     if (hlsRef.current) {
       hlsRef.current.destroy()
       hlsRef.current = null
     }
 
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari, iOS)
+      video.src = hlsSrc
+      video.play().catch(() => {})
+      return
+    }
+    
+    if (!Hls.isSupported()) return
+
+    const hls = new Hls({
+      lowLatencyMode: true,
+      backBufferLength: 30,
+      liveDurationInfinity: true,
+      liveSyncDuration: 3.0,
+      liveMaxLatencyDuration: 6.0,
+      maxBufferLength: 10,
+      maxMaxBufferLength: 20,
+      manifestLoadingTimeOut: 8000,
+      manifestLoadingMaxRetry: 1,
+      levelLoadingTimeOut: 8000,
+      levelLoadingMaxRetry: 2,
+    })
+    hlsRef.current = hls
+    hls.loadSource(hlsSrc)
+    hls.attachMedia(video)
+    
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      if (!isMountedRef.current) return
+      retryCountRef.current = 0
+      setStatusText('Buffering HLS stream…')
+      video.play().catch(() => {})
+    })
+
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (!isMountedRef.current) return
+      if (data.fatal) {
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            // Playlist 404 or network failure — retry with full manifest reload
+            if (retryCountRef.current < maxRetries) {
+              retryCountRef.current += 1
+              const attempt = retryCountRef.current
+              console.log(`[HLSPlayer] Network error. Retrying manifest (${attempt}/${maxRetries}) in ${retryDelay}ms...`)
+              setStatusText(`Waiting for stream… (retry ${attempt}/${maxRetries})`)
+              hls.destroy()
+              hlsRef.current = null
+              retryTimerRef.current = window.setTimeout(() => {
+                if (isMountedRef.current && videoRef.current) {
+                  startHls(videoRef.current, hlsSrc)
+                }
+              }, retryDelay)
+            } else {
+              console.error('[HLSPlayer] Max retries reached. Stream unavailable.')
+              setStatusText('Stream unavailable')
+              hls.destroy()
+              hlsRef.current = null
+            }
+            break
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.warn('[HLSPlayer] Fatal media error, trying to recover...', data)
+            hls.recoverMediaError()
+            break
+          default:
+            console.error('[HLSPlayer] Unrecoverable error:', data)
+            hls.destroy()
+            hlsRef.current = null
+            break
+        }
+      }
+    })
+  }
+
+  useEffect(() => {
+    isMountedRef.current = true
+    retryCountRef.current = 0
+    const video = videoRef.current
+    if (!video || !src) return
+    setLoaded(false)
+    setStatusText('Buffering HLS stream…')
+
     const onCanPlay = () => setLoaded(true)
     video.addEventListener('canplay', onCanPlay)
 
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = src
-      video.play().catch(() => {})
-    } else if (Hls.isSupported()) {
-      const hls = new Hls({
-        lowLatencyMode: true,
-        backBufferLength: 30,
-        liveDurationInfinity: true,
-        liveSyncDuration: 3.0,
-        liveMaxLatencyDuration: 6.0,
-        maxBufferLength: 10,
-        maxMaxBufferLength: 20
-      })
-      hlsRef.current = hls
-      hls.loadSource(src)
-      hls.attachMedia(video)
-      hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}))
-      
-      hls.on(Hls.Events.ERROR, (event, data) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              console.warn('[HLSPlayer] Fatal network error, trying to recover...', data);
-              hls.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.warn('[HLSPlayer] Fatal media error, trying to recover...', data);
-              hls.recoverMediaError();
-              break;
-            default:
-              console.error('[HLSPlayer] Unrecoverable error:', data);
-              hls.destroy();
-              break;
-          }
-        }
-      })
-    }
+    startHls(video, src)
 
     return () => {
+      isMountedRef.current = false
       video.removeEventListener('canplay', onCanPlay)
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
@@ -192,7 +246,7 @@ function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: H
         {!loaded && (
           <div className="playerOverlay">
             <Loader2 className="spin" size={18} />
-            <div className="overlayText">Buffering HLS stream…</div>
+            <div className="overlayText">{statusText}</div>
           </div>
         )}
         <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
