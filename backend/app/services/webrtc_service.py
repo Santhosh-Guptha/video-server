@@ -14,7 +14,7 @@ class WebRTCService:
         """Lazily initialize shared async HTTP client for MediaMTX queries."""
         if cls._http_client is None or cls._http_client.is_closed:
             cls._http_client = httpx.AsyncClient(
-                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+                limits=httpx.Limits(max_connections=500, max_keepalive_connections=200),
                 timeout=httpx.Timeout(10.0, connect=3.0)
             )
         return cls._http_client
@@ -89,7 +89,7 @@ class WebRTCService:
             
             if method == "DELETE" and resp.status_code in (200, 204, 404):
                 # Close the session cleanly in the registries
-                await SessionRegistry.close_session(session_id, db_session)
+                await SessionRegistry.close_session(session_id, db_session, stream_id=stream_id)
                 
             return Response(
                 content=resp.content,
