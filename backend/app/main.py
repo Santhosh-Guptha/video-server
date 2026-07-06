@@ -1639,6 +1639,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
         except Exception as e:
             print(f"[sync_cameras] Failed to write cameras to mediamtx.yml: {e}")
 
+    await invalidate_cameras_cache()
     return SyncResponse(total=len(raw_cameras), created_or_updated=updated_count, source=settings.upstream_camera_api_url)
 
 @app.get("/api/cameras/sync", response_model=SyncResponse)
@@ -1647,6 +1648,16 @@ async def sync_cameras_get(session: Annotated[AsyncSession, Depends(get_session)
     Useful for browsers or tools that default to GET.
     """
     return await sync_cameras(session)
+
+async def invalidate_cameras_cache():
+    from .redis_client import redis_client
+    if redis_client:
+        try:
+            await redis_client.delete("vms:cache:cameras_list:True")
+            await redis_client.delete("vms:cache:cameras_list:False")
+            print("[main] Invalidated cameras list cache.")
+        except Exception as e:
+            print(f"[main] Failed to invalidate cache: {e}")
 
 @app.get("/api/cameras", response_model=list[CameraOut])
 async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], sync: bool = Query(default=False)):
@@ -1657,12 +1668,37 @@ async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
         except Exception as e:
             print(f"[main] Failed to sync upstream cameras: {e}")
 
+    # Caching check to prevent slow DB select queries under heavy concurrent writes
+    from .redis_client import redis_client
+    cache_key = f"vms:cache:cameras_list:{use_upstream}"
+    if redis_client:
+        try:
+            cached = await redis_client.get(cache_key)
+            if cached:
+                from fastapi.responses import Response
+                return Response(content=cached, media_type="application/json")
+        except Exception as e:
+            print(f"[main] Failed to fetch cameras cache: {e}")
+
     query = select(Camera).options(selectinload(Camera.streams))
     if not use_upstream:
         query = query.where(Camera.synced_from_api == False)
 
     res = await session.execute(query.order_by(Camera.name.asc()))
-    return list(res.scalars().all())
+    cameras = list(res.scalars().all())
+    
+    # Serialize to JSON and cache in Redis for 120 seconds
+    from fastapi.encoders import jsonable_encoder
+    import json
+    serialized = json.dumps(jsonable_encoder(cameras))
+    if redis_client:
+        try:
+            await redis_client.set(cache_key, serialized, ex=120)
+        except Exception as e:
+            print(f"[main] Failed to set cameras cache: {e}")
+            
+    from fastapi.responses import Response
+    return Response(content=serialized, media_type="application/json")
 
 @app.get("/api/cameras/active", response_model=list[CameraOut])
 async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
@@ -3267,6 +3303,7 @@ async def create_camera(
     if camera.active and camera.streams:
         await stream_manager.add_stream(session, camera.streams[0])
 
+    await invalidate_cameras_cache()
     return camera
 
 
@@ -3322,6 +3359,7 @@ async def update_camera(
         elif camera.active:
             await stream_manager.add_stream(session, target_stream)
 
+    await invalidate_cameras_cache()
     return camera
 
 
@@ -3372,4 +3410,5 @@ async def delete_camera(
     await session.delete(camera)
     await session.commit()
 
+    await invalidate_cameras_cache()
     return {"status": "ok", "message": f"Camera {camera.name} and stream {stream_id} deleted successfully"}
