@@ -181,7 +181,11 @@ function renderServices(services) {
                 </div>
                 <div class="sub-metric">
                     <span class="val">${info.memory_mb} MB</span>
-                    <span class="lbl">Memory</span>
+                    <span class="lbl">RAM</span>
+                </div>
+                <div class="sub-metric">
+                    <span class="val">${info.rom_usage || 'Calculating...'}</span>
+                    <span class="lbl">ROM</span>
                 </div>
                 <div class="sub-metric">
                     <span class="val">${info.threads}</span>

@@ -33,6 +33,24 @@ MONITORED_SERVICES = {
     "postgresql": "postgresql.service"
 }
 
+# Service storage files configuration (ROM)
+SERVICE_STORAGE_PATHS = {
+    "video-backend": ["/opt/video-server/backend", "/opt/video-backend-venv"],
+    "video-frontend": ["/opt/video-server/frontend"],
+    "mediamtx": ["/mnt/storage"],
+    "redis-server": ["/var/lib/redis"],
+    "postgresql": ["/var/lib/postgresql"]
+}
+
+# In-memory storage/ROM usage cache
+service_rom_usage = {
+    "video-backend": "Calculating...",
+    "video-frontend": "Calculating...",
+    "mediamtx": "Calculating...",
+    "redis-server": "Calculating...",
+    "postgresql": "Calculating..."
+}
+
 # Cache for latest telemetry
 latest_telemetry = {}
 ws_connections: List[WebSocket] = []
@@ -90,6 +108,9 @@ def get_io_speeds():
 
 def get_service_status(service_name: str) -> dict:
     """Queries systemd status on Linux or returns mock on non-Linux."""
+    short_name = service_name.replace(".service", "")
+    rom_val = service_rom_usage.get(short_name, "Calculating...")
+    
     if sys.platform != "linux":
         # Mock status for Windows local tests
         return {
@@ -97,7 +118,8 @@ def get_service_status(service_name: str) -> dict:
             "uptime": "2h 45m",
             "cpu_percent": 1.2,
             "memory_mb": 120.5,
-            "threads": 8
+            "threads": 8,
+            "rom_usage": rom_val
         }
         
     try:
@@ -150,10 +172,18 @@ def get_service_status(service_name: str) -> dict:
             "uptime": uptime_str,
             "cpu_percent": cpu_percent,
             "memory_mb": memory_mb,
-            "threads": threads
+            "threads": threads,
+            "rom_usage": rom_val
         }
     except Exception as e:
-        return {"status": f"failed to query: {str(e)}", "uptime": "unknown", "cpu_percent": 0.0, "memory_mb": 0.0, "threads": 0}
+        return {
+            "status": f"failed to query: {str(e)}", 
+            "uptime": "unknown", 
+            "cpu_percent": 0.0, 
+            "memory_mb": 0.0, 
+            "threads": 0,
+            "rom_usage": rom_val
+        }
 
 def get_service_logs(service_name: str, lines_count: int = 40) -> List[str]:
     """Retrieves journalctl log files for service on Linux or returns mock."""
@@ -350,9 +380,48 @@ else:
     def fallback_index():
         return HTMLResponse("<h3>VMS Monitor Static Front-End is not yet created. Check back soon.</h3>")
 
+async def scan_directories_size_loop():
+    global service_rom_usage
+    print("[monitoring-app] Directory size scan loop started.")
+    
+    while True:
+        try:
+            if sys.platform != "linux":
+                # Mock ROM usage for non-Linux
+                service_rom_usage["video-backend"] = "5.5 GB"
+                service_rom_usage["video-frontend"] = "145.0 MB"
+                service_rom_usage["mediamtx"] = "461.0 GB"
+                service_rom_usage["redis-server"] = "27.0 MB"
+                service_rom_usage["postgresql"] = "100.0 MB"
+            else:
+                for service, paths in SERVICE_STORAGE_PATHS.items():
+                    total_kb = 0
+                    for path in paths:
+                        if os.path.exists(path):
+                            try:
+                                # Quick subprocess du
+                                res = subprocess.run(["du", "-sk", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5.0)
+                                if res.returncode == 0:
+                                    total_kb += int(res.stdout.strip().split()[0])
+                            except Exception:
+                                pass
+                    # Format
+                    if total_kb >= 1024 * 1024:
+                        service_rom_usage[service] = f"{round(total_kb / (1024 * 1024), 2)} GB"
+                    elif total_kb >= 1024:
+                        service_rom_usage[service] = f"{round(total_kb / 1024, 1)} MB"
+                    else:
+                        service_rom_usage[service] = f"{total_kb} KB"
+        except Exception as e:
+            print(f"[monitoring-app] Error in directory scanner: {e}", file=sys.stderr)
+            
+        # Run every 120 seconds
+        await asyncio.sleep(120.0)
+
 @app.on_event("startup")
 async def app_startup():
-    # Run the collector loop in the asyncio background tasks
+    # Run the collector loop and directory scanner in background tasks
+    asyncio.create_task(scan_directories_size_loop())
     asyncio.create_task(collect_telemetry_loop())
 
 if __name__ == "__main__":
