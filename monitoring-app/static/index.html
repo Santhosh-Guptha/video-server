@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VMS Host Monitoring & Operations Portal</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Style link -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glow-container">
+        <div class="glow-sphere orange"></div>
+        <div class="glow-sphere blue"></div>
+    </div>
+
+    <div class="app-layout">
+        <!-- Sidebar / Brand -->
+        <header class="header">
+            <div class="brand">
+                <div class="logo-box">
+                    <i class="fa-solid fa-server pulse-icon"></i>
+                </div>
+                <div>
+                    <h1>VMS Telemetry</h1>
+                    <p class="subtitle">Independent Infrastructure Monitor</p>
+                </div>
+            </div>
+            
+            <div class="connection-pill" id="ws-status">
+                <span class="indicator red"></span>
+                <span class="text">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Content -->
+        <main class="dashboard-grid">
+            
+            <!-- SECTION 1: Hardware Metrics Cards -->
+            <section class="section hardware-section">
+                <div class="section-header">
+                    <h2><i class="fa-solid fa-gauge-high"></i> Hardware Metrics</h2>
+                    <span id="system-time" class="time-stamp">Loading...</span>
+                </div>
+                
+                <div class="metrics-row">
+                    <!-- CPU Ring -->
+                    <div class="metric-card ring-card">
+                        <div class="ring-wrapper">
+                            <svg class="progress-ring" width="120" height="120">
+                                <circle class="progress-ring__circle-bg" stroke="rgba(255,255,255,0.05)" stroke-width="8" fill="transparent" r="50" cx="60" cy="60"/>
+                                <circle class="progress-ring__circle" id="cpu-ring" stroke="var(--primary)" stroke-width="8" fill="transparent" r="50" cx="60" cy="60" stroke-dasharray="314.16" stroke-dashoffset="314.16"/>
+                            </svg>
+                            <div class="ring-value" id="cpu-value">0%</div>
+                        </div>
+                        <h3>CPU Load</h3>
+                        <p id="cpu-cores" class="card-meta">0 Cores</p>
+                    </div>
+
+                    <!-- RAM Ring -->
+                    <div class="metric-card ring-card">
+                        <div class="ring-wrapper">
+                            <svg class="progress-ring" width="120" height="120">
+                                <circle class="progress-ring__circle-bg" stroke="rgba(255,255,255,0.05)" stroke-width="8" fill="transparent" r="50" cx="60" cy="60"/>
+                                <circle class="progress-ring__circle" id="ram-ring" stroke="var(--info)" stroke-width="8" fill="transparent" r="50" cx="60" cy="60" stroke-dasharray="314.16" stroke-dashoffset="314.16"/>
+                            </svg>
+                            <div class="ring-value" id="ram-value">0%</div>
+                        </div>
+                        <h3>RAM Memory</h3>
+                        <p id="ram-gb" class="card-meta">0.0 / 0.0 GB</p>
+                    </div>
+
+                    <!-- Disk Space Card -->
+                    <div class="metric-card bar-card">
+                        <h3><i class="fa-solid fa-hard-drive"></i> Disk Space</h3>
+                        <div class="disk-row">
+                            <div class="disk-meta">
+                                <span>Root (/)</span>
+                                <span id="disk-root-percent">0%</span>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill" id="disk-root-fill" style="width: 0%;"></div>
+                            </div>
+                            <p class="card-meta" id="disk-root-gb">0 GB used</p>
+                        </div>
+                        <div class="disk-row">
+                            <div class="disk-meta">
+                                <span>Storage (/mnt/storage)</span>
+                                <span id="disk-storage-percent">0%</span>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill orange-bar" id="disk-storage-fill" style="width: 0%;"></div>
+                            </div>
+                            <p class="card-meta" id="disk-storage-gb">0 GB used</p>
+                        </div>
+                    </div>
+
+                    <!-- Speed Rates Card -->
+                    <div class="metric-card stats-card">
+                        <h3><i class="fa-solid fa-network-wired"></i> System Activity</h3>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <span class="label"><i class="fa-solid fa-arrow-down-long"></i> Net In</span>
+                                <span class="value" id="net-in">0.0 MB/s</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="label"><i class="fa-solid fa-arrow-up-long"></i> Net Out</span>
+                                <span class="value" id="net-out">0.0 MB/s</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="label"><i class="fa-solid fa-arrow-rotate-right"></i> Disk Read</span>
+                                <span class="value" id="disk-read">0.0 MB/s</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="label"><i class="fa-solid fa-pen-nib"></i> Disk Write</span>
+                                <span class="value" id="disk-write">0.0 MB/s</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 2: Active Services Grid -->
+            <section class="section services-section">
+                <div class="section-header">
+                    <h2><i class="fa-solid fa-cubes"></i> Systemd Services Status</h2>
+                </div>
+                
+                <div class="services-list" id="services-container">
+                    <!-- Populated dynamically via JS -->
+                    <div class="loading-state">
+                        <i class="fa-solid fa-circle-notch fa-spin"></i> Waiting for backend connection...
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION 3: Live Logs & Issues -->
+            <div class="bottom-flex">
+                <!-- Log Terminal Card -->
+                <section class="section terminal-section">
+                    <div class="section-header">
+                        <h2><i class="fa-solid fa-terminal"></i> Live Service Logs (journalctl)</h2>
+                        <div class="terminal-controls">
+                            <!-- Service filter dropdown -->
+                            <select id="log-service-selector">
+                                <option value="all">All Services (Combined)</option>
+                                <option value="video-backend">video-backend</option>
+                                <option value="video-frontend">video-frontend</option>
+                                <option value="mediamtx">mediamtx</option>
+                                <option value="redis-server">redis-server</option>
+                                <option value="postgresql">postgresql</option>
+                            </select>
+
+                            <!-- Log level filter tabs -->
+                            <div class="log-filter-tabs">
+                                <button class="filter-tab active" data-filter="all">ALL</button>
+                                <button class="filter-tab" data-filter="error">ERRORS</button>
+                                <button class="filter-tab" data-filter="warning">WARNINGS</button>
+                            </div>
+
+                            <input type="text" id="log-search" placeholder="Filter text...">
+                            
+                            <button id="toggle-autoscroll" title="Toggle Autoscroll" class="active">
+                                <i class="fa-solid fa-arrows-to-dot"></i> Scroll
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="log-console-container">
+                        <pre class="log-console" id="log-console">
+[Console] Telemetry socket disconnected. Waiting for connection...
+                        </pre>
+                    </div>
+                </section>
+
+                <!-- Issues Alerts panel -->
+                <section class="section issues-section">
+                    <div class="section-header">
+                        <h2><i class="fa-solid fa-triangle-exclamation"></i> Active Warnings & Alerts</h2>
+                        <span class="issues-count" id="issues-count">0</span>
+                    </div>
+
+                    <div class="issues-list" id="issues-list">
+                        <div class="no-issues">
+                            <i class="fa-solid fa-circle-check"></i>
+                            <p>All services healthy. No active alerts.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+            
+        </main>
+    </div>
+
+    <!-- Script link -->
+    <script src="app.js"></script>
+</body>
+</html>
