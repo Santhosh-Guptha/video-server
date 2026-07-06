@@ -1806,28 +1806,16 @@ async def hls_segment(
     stream_id: str,
     filename: str,
     request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)]
 ):
     target_stream_id = stream_id
+    
+    # Register HLS viewer activity in Redis (lightweight, no DB needed)
     try:
-        from .webrtc import resolve_stream_by_identifier
-        stream = await resolve_stream_by_identifier(stream_id, session)
-        if stream:
-            stream_id = stream.stream_id
-            target_stream_id = stream_id
-            
-            # Register HLS viewer activity in Redis
-            try:
-                from .services.redis_viewer_tracker import RedisViewerTracker
-                client_ip = request.client.host if request.client else "unknown"
-                await RedisViewerTracker.register_hls_viewer(target_stream_id, client_ip)
-            except Exception as tracker_err:
-                print(f"[main] Failed to register HLS viewer for segment {target_stream_id}: {tracker_err}")
-                
-            if stream.codec and stream.codec.upper() == "H265":
-                target_stream_id = f"{stream_id}_h264"
-    except Exception as e:
-        print(f"[main] Error checking codec for HLS segment {stream_id}: {e}")
+        from .services.redis_viewer_tracker import RedisViewerTracker
+        client_ip = request.client.host if request.client else "unknown"
+        await RedisViewerTracker.register_hls_viewer(stream_id, client_ip)
+    except Exception:
+        pass
 
     async with httpx.AsyncClient() as client:
         try:
