@@ -329,8 +329,8 @@ function renderServices(services) {
                     <span class="val">${info.memory_mb} MB</span>
                     <span class="lbl">RAM</span>
                 </div>
-                <div class="sub-metric">
-                    <span class="val">${info.rom_usage}</span>
+                <div class="sub-metric rom-metric" title="Click to view storage details" onclick="showRomDetailModal('${name}')">
+                    <span class="val">${info.rom_usage} <i class="fa-solid fa-circle-info rom-info-icon"></i></span>
                     <span class="lbl">ROM</span>
                 </div>
                 <div class="sub-metric">
@@ -669,6 +669,59 @@ async function acknowledgeAlert(alertId) {
         }
     } catch (err) {
         console.error(err);
+    }
+}
+
+// Interactive ROM space explanations database
+const ROM_EXPLANATIONS = {
+    "video-backend": {
+        paths: ["/opt/video-server/backend", "/opt/video-backend-venv"],
+        desc: "Hosts python backend server files plus OpenCV, PyTorch, SQLAlchemy packages inside the virtual environment. Python visual processing and ML packages take up the bulk of this space (5.43 GB)."
+    },
+    "video-frontend": {
+        paths: ["/opt/video-server/frontend"],
+        desc: "Contains compilation packages, source assets, and local node_modules needed to execute static dashboard builds (144.7 MB)."
+    },
+    "mediamtx": {
+        paths: ["/mnt/storage"],
+        desc: "Main recordings storage partition. This grows continuously as video logs are grabbed from camera streams and stored as raw chunks (461.02 GB)."
+    },
+    "redis-server": {
+        paths: ["/var/lib/redis"],
+        desc: "Redis persistence database snapshot dumps, holding session queues and dynamic camera state heartbeats (26.3 MB)."
+    },
+    "postgresql": {
+        paths: ["/var/lib/postgresql"],
+        desc: "PostgreSQL database directories maintaining relational camera configurations and system audit databases (99.2 MB)."
+    }
+};
+
+function showRomDetailModal(serviceName) {
+    const modal = document.getElementById("logs-modal");
+    const title = document.getElementById("logs-modal-title");
+    const consoleBox = document.getElementById("modal-log-console");
+    
+    title.textContent = `Storage Details (ROM): ${serviceName}.service`;
+    modal.classList.add("open");
+    
+    const info = ROM_EXPLANATIONS[serviceName];
+    if (info) {
+        consoleBox.innerHTML = `
+<div style="font-family: var(--font-sans); color: var(--text-main); padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; font-size: 0.95rem; line-height: 1.6; white-space: normal;">
+    <div style="background-color: rgba(255,255,255,0.03); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
+        <h4 style="color: var(--info); font-weight: 700; margin-bottom: 0.5rem;"><i class="fa-solid fa-folder-open"></i> Monitored Filesystem Paths:</h4>
+        <ul style="list-style-type: square; margin-left: 1.5rem; font-family: var(--font-mono); font-size: 0.85rem; padding-left: 0.5rem; margin-top: 0.25rem;">
+            ${info.paths.map(p => `<li>${p}</li>`).join('')}
+        </ul>
+    </div>
+    <div style="background-color: rgba(255,255,255,0.03); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
+        <h4 style="color: var(--primary); font-weight: 700; margin-bottom: 0.5rem;"><i class="fa-solid fa-circle-question"></i> Why is it consuming this space?</h4>
+        <p>${info.desc}</p>
+    </div>
+</div>
+        `;
+    } else {
+        consoleBox.textContent = `No storage information registered for ${serviceName}`;
     }
 }
 

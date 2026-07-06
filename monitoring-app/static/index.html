@@ -68,193 +68,139 @@
             </div>
         </div>
 
-        <!-- Dashboard Grid Layout -->
-        <div class="dashboard-grid">
+        <!-- Dashboard Split Two-Column Grid Layout -->
+        <div class="main-split-container">
             
-            <!-- SECTION 1: Hardware telemetry -->
-            <section class="section hardware-section collapsible">
-                <div class="section-header">
-                    <h2><i class="fa-solid fa-microchip"></i> System Resource Telemetry</h2>
-                    <div class="header-controls">
-                        <div class="time-range-selectors">
-                            <button class="range-btn active" data-range="1m">1 Min</button>
-                            <button class="range-btn" data-range="5m">5 Min</button>
-                            <button class="range-btn" data-range="15m">15 Min</button>
-                        </div>
-                        <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
-                        <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
-                    </div>
-                </div>
+            <!-- LEFT COLUMN: Major Dashboard Charts, Camera Streams & Logs -->
+            <div class="split-column left">
                 
-                <div class="widget-content">
-                    <div class="hardware-grid">
-                        <!-- Chart block -->
-                        <div class="chart-container-wrapper">
-                            <canvas id="hardware-trend-chart"></canvas>
-                        </div>
-
-                        <!-- Spark breakdown column -->
-                        <div class="hardware-breakdown">
-                            <!-- System Uptime / Time info header -->
-                            <div class="system-time-header">
-                                <span>Host Time: <b id="system-time">--:--:--</b></span>
+                <!-- HARDWARE TELEMETRY CARD -->
+                <section class="section hardware-section collapsible">
+                    <div class="section-header">
+                        <h2><i class="fa-solid fa-microchip"></i> System Resource Telemetry</h2>
+                        <div class="header-controls">
+                            <div class="time-range-selectors">
+                                <button class="range-btn active" data-range="1m">1 Min</button>
+                                <button class="range-btn" data-range="5m">5 Min</button>
+                                <button class="range-btn" data-range="15m">15 Min</button>
                             </div>
-
-                            <!-- Multi-core CPU bar grid -->
-                            <div class="cores-container">
-                                <h4><i class="fa-solid fa-gauge-high"></i> Per-Core CPU Load</h4>
-                                <div class="cores-grid" id="cores-grid">
-                                    <!-- Core progress items populated by JS -->
-                                </div>
-                            </div>
-
-                            <!-- Memory allocations breakdown -->
-                            <div class="ram-breakdown-card">
-                                <h4><i class="fa-solid fa-memory"></i> RAM Memory Distribution</h4>
-                                <div class="ram-stack-bar">
-                                    <div class="ram-bar used" style="width: 40%;" title="Used RAM"></div>
-                                    <div class="ram-bar cached" style="width: 30%;" title="Cached RAM"></div>
-                                    <div class="ram-bar buffers" style="width: 10%;" title="Buffers RAM"></div>
-                                    <div class="ram-bar free" style="width: 20%;" title="Free RAM"></div>
-                                </div>
-                                <div class="ram-legend-grid">
-                                    <div class="legend-item"><span class="color-dot used"></span> Used: <b id="lbl-used-gb">0.0GB</b></div>
-                                    <div class="legend-item"><span class="color-dot cached"></span> Cache: <b id="lbl-cached-gb">0.0GB</b></div>
-                                    <div class="legend-item"><span class="color-dot buffers"></span> Buffers: <b id="lbl-buffers-gb">0.0GB</b></div>
-                                    <div class="legend-item"><span class="color-dot free"></span> Free: <b id="lbl-free-gb">0.0GB</b></div>
-                                </div>
-                            </div>
-
-                            <!-- Disk Space Card -->
-                            <div class="disk-breakdown-card">
-                                <h4><i class="fa-solid fa-hard-drive"></i> Disk Capacity (ROM)</h4>
-                                <div class="disk-row">
-                                    <div class="disk-meta">
-                                        <span>Root (/)</span>
-                                        <span id="disk-root-percent">0%</span>
-                                    </div>
-                                    <div class="progress-bar-bg">
-                                        <div class="progress-bar-fill" id="disk-root-fill" style="width: 0%;"></div>
-                                    </div>
-                                    <p class="card-meta" id="disk-root-gb">0 GB used</p>
-                                </div>
-                                <div class="disk-row">
-                                    <div class="disk-meta">
-                                        <span>Storage (/mnt/storage)</span>
-                                        <span id="disk-storage-percent">0%</span>
-                                    </div>
-                                    <div class="progress-bar-bg">
-                                        <div class="progress-bar-fill orange-bar" id="disk-storage-fill" style="width: 0%;"></div>
-                                    </div>
-                                    <p class="card-meta" id="disk-storage-gb">0 GB used</p>
-                                </div>
-                            </div>
-
-                            <!-- I/O Operations Rates -->
-                            <div class="io-breakdown-card">
-                                <h4><i class="fa-solid fa-network-wired"></i> Network & Disk Activity</h4>
-                                <div class="stats-grid">
-                                    <div class="stat-item">
-                                        <span class="label"><i class="fa-solid fa-arrow-down-long"></i> Net In</span>
-                                        <span class="value" id="net-in">0.0 MB/s</span>
-                                    </div>
-                                    <div class="stat-item">
-                                        <span class="label"><i class="fa-solid fa-arrow-up-long"></i> Net Out</span>
-                                        <span class="value" id="net-out">0.0 MB/s</span>
-                                    </div>
-                                    <div class="stat-item">
-                                        <span class="label"><i class="fa-solid fa-arrow-rotate-right"></i> Disk Read</span>
-                                        <span class="value" id="disk-read">0.0 MB/s</span>
-                                    </div>
-                                    <div class="stat-item">
-                                        <span class="label"><i class="fa-solid fa-pen-nib"></i> Disk Write</span>
-                                        <span class="value" id="disk-write">0.0 MB/s</span>
-                                    </div>
-                                </div>
-                            </div>
+                            <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
+                            <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
                         </div>
                     </div>
-                </div>
-            </section>
+                    
+                    <div class="widget-content">
+                        <div class="hardware-grid">
+                            <!-- Chart block -->
+                            <div class="chart-container-wrapper">
+                                <canvas id="hardware-trend-chart"></canvas>
+                            </div>
 
-            <!-- SECTION 2: Systemd services status & controls -->
-            <section class="section services-section collapsible">
-                <div class="section-header">
-                    <h2><i class="fa-solid fa-server"></i> Systemd Infrastructure Services</h2>
-                    <div class="header-controls">
-                        <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
-                        <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
-                    </div>
-                </div>
-                <div class="widget-content">
-                    <div class="services-grid" id="services-container">
-                        <!-- Populated by JS -->
-                    </div>
-                </div>
-            </section>
+                            <!-- Spark breakdown column -->
+                            <div class="hardware-breakdown">
+                                <!-- System Uptime / Time info header -->
+                                <div class="system-time-header">
+                                    <span>Host Time: <b id="system-time">--:--:--</b></span>
+                                </div>
 
-            <!-- SECTION 3: Network & RTSP Streams health dashboard -->
-            <section class="section streams-section collapsible">
-                <div class="section-header">
-                    <h2><i class="fa-solid fa-video"></i> VMS RTSP Streams & Camera Health</h2>
-                    <div class="header-controls">
-                        <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
-                        <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
+                                <!-- Multi-core CPU bar grid -->
+                                <div class="cores-container">
+                                    <h4><i class="fa-solid fa-gauge-high"></i> Per-Core CPU Load</h4>
+                                    <div class="cores-grid" id="cores-grid">
+                                        <!-- Core progress items populated by JS -->
+                                    </div>
+                                </div>
+
+                                <!-- Memory allocations breakdown -->
+                                <div class="ram-breakdown-card">
+                                    <h4><i class="fa-solid fa-memory"></i> RAM Memory Distribution</h4>
+                                    <div class="ram-stack-bar">
+                                        <div class="ram-bar used" style="width: 40%;" title="Used RAM"></div>
+                                        <div class="ram-bar cached" style="width: 30%;" title="Cached RAM"></div>
+                                        <div class="ram-bar buffers" style="width: 10%;" title="Buffers RAM"></div>
+                                        <div class="ram-bar free" style="width: 20%;" title="Free RAM"></div>
+                                    </div>
+                                    <div class="ram-legend-grid">
+                                        <div class="legend-item"><span class="color-dot used"></span> Used: <b id="lbl-used-gb">0.0GB</b></div>
+                                        <div class="legend-item"><span class="color-dot cached"></span> Cache: <b id="lbl-cached-gb">0.0GB</b></div>
+                                        <div class="legend-item"><span class="color-dot buffers"></span> Buffers: <b id="lbl-buffers-gb">0.0GB</b></div>
+                                        <div class="legend-item"><span class="color-dot free"></span> Free: <b id="lbl-free-gb">0.0GB</b></div>
+                                    </div>
+                                </div>
+
+                                <!-- Disk Space Card -->
+                                <div class="disk-breakdown-card">
+                                    <h4><i class="fa-solid fa-hard-drive"></i> Disk Capacity (ROM)</h4>
+                                    <div class="disk-row">
+                                        <div class="disk-meta">
+                                            <span>Root (/)</span>
+                                            <span id="disk-root-percent">0%</span>
+                                        </div>
+                                        <div class="progress-bar-bg">
+                                            <div class="progress-bar-fill" id="disk-root-fill" style="width: 0%;"></div>
+                                        </div>
+                                        <p class="card-meta" id="disk-root-gb">0 GB used</p>
+                                    </div>
+                                    <div class="disk-row">
+                                        <div class="disk-meta">
+                                            <span>Storage (/mnt/storage)</span>
+                                            <span id="disk-storage-percent">0%</span>
+                                        </div>
+                                        <div class="progress-bar-bg">
+                                            <div class="progress-bar-fill orange-bar" id="disk-storage-fill" style="width: 0%;"></div>
+                                        </div>
+                                        <p class="card-meta" id="disk-storage-gb">0 GB used</p>
+                                    </div>
+                                </div>
+
+                                <!-- I/O Operations Rates -->
+                                <div class="io-breakdown-card">
+                                    <h4><i class="fa-solid fa-network-wired"></i> Network & Disk Activity</h4>
+                                    <div class="stats-grid">
+                                        <div class="stat-item">
+                                            <span class="label"><i class="fa-solid fa-arrow-down-long"></i> Net In</span>
+                                            <span class="value" id="net-in">0.0 MB/s</span>
+                                        </div>
+                                        <div class="stat-item">
+                                            <span class="label"><i class="fa-solid fa-arrow-up-long"></i> Net Out</span>
+                                            <span class="value" id="net-out">0.0 MB/s</span>
+                                        </div>
+                                        <div class="stat-item">
+                                            <span class="label"><i class="fa-solid fa-arrow-rotate-right"></i> Disk Read</span>
+                                            <span class="value" id="disk-read">0.0 MB/s</span>
+                                        </div>
+                                        <div class="stat-item">
+                                            <span class="label"><i class="fa-solid fa-pen-nib"></i> Disk Write</span>
+                                            <span class="value" id="disk-write">0.0 MB/s</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="widget-content">
-                    <div class="streams-layout">
-                        <!-- Stream cards list -->
+                </section>
+
+                <!-- VMS STREAMS & CAMERAS CARD -->
+                <section class="section streams-section collapsible">
+                    <div class="section-header">
+                        <h2><i class="fa-solid fa-video"></i> VMS RTSP Streams & Camera Health</h2>
+                        <div class="header-controls">
+                            <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
+                            <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
+                        </div>
+                    </div>
+                    <div class="widget-content">
                         <div class="streams-cards-grid" id="streams-container">
                             <!-- Populated by JS -->
                         </div>
                     </div>
-                </div>
-            </section>
+                </section>
 
-            <!-- SECTION 4: AI & Event Analytics -->
-            <section class="section ai-section collapsible">
-                <div class="section-header">
-                    <h2><i class="fa-solid fa-brain"></i> AI Pipeline Alarms & Event Logs</h2>
-                    <div class="header-controls">
-                        <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
-                        <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
-                    </div>
-                </div>
-                <div class="widget-content">
-                    <div class="ai-analytics-deck">
-                        <div class="ai-stat-card">
-                            <span class="title"><i class="fa-solid fa-person-running"></i> Motion Events</span>
-                            <span class="value" id="lbl-motion-count">0</span>
-                            <span class="meta">events/min</span>
-                        </div>
-                        <div class="ai-stat-card">
-                            <span class="title"><i class="fa-solid fa-face-smile"></i> Faces Matched</span>
-                            <span class="value" id="lbl-faces-count">0</span>
-                            <span class="meta">identifications/min</span>
-                        </div>
-                        <div class="ai-stat-card">
-                            <span class="title"><i class="fa-solid fa-gauge"></i> Avg Latency</span>
-                            <span class="value" id="lbl-inference-latency">0.0ms</span>
-                            <span class="meta">inference rate</span>
-                        </div>
-                        <div class="ai-stat-card">
-                            <span class="title"><i class="fa-solid fa-bullseye"></i> Accuracy Rate</span>
-                            <span class="value" id="lbl-accuracy-percent">0.0%</span>
-                            <span class="meta">confidence threshold</span>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- SECTION 5: Double pane for Logs terminal and Alerts console -->
-            <div class="bottom-flex">
-                <!-- Log terminal section -->
+                <!-- REAL-TIME OPERATIONS LOGS -->
                 <section class="section terminal-section collapsible">
                     <div class="section-header">
                         <h2><i class="fa-solid fa-terminal"></i> Real-time Operations Logs</h2>
                         <div class="header-controls">
-                            <!-- Log service selector -->
                             <select id="log-service-selector">
                                 <option value="all">Combined Feed</option>
                                 <option value="video-backend">video-backend</option>
@@ -264,7 +210,6 @@
                                 <option value="postgresql">postgresql</option>
                             </select>
 
-                            <!-- Log level filters -->
                             <div class="log-filter-tabs">
                                 <button class="filter-tab active" data-filter="all">ALL</button>
                                 <button class="filter-tab" data-filter="error">ERRORS</button>
@@ -285,10 +230,66 @@
                     </div>
                 </section>
 
-                <!-- Active Issues Panel -->
+            </div>
+
+            <!-- RIGHT COLUMN: Services Stacks, AI Analytics & Alerts Sidebar -->
+            <div class="split-column right">
+                
+                <!-- SYSTEMD SERVICES MODULE -->
+                <section class="section services-section collapsible">
+                    <div class="section-header">
+                        <h2><i class="fa-solid fa-server"></i> Services Infrastructure</h2>
+                        <div class="header-controls">
+                            <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
+                            <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
+                        </div>
+                    </div>
+                    <div class="widget-content">
+                        <div class="services-grid vertical-layout" id="services-container">
+                            <!-- Populated by JS in vertical sidebar format -->
+                        </div>
+                    </div>
+                </section>
+
+                <!-- AI ANALYTICS MODULE -->
+                <section class="section ai-section collapsible">
+                    <div class="section-header">
+                        <h2><i class="fa-solid fa-brain"></i> AI Pipeline Alarms</h2>
+                        <div class="header-controls">
+                            <button class="widget-action-btn toggle-collapse" title="Collapse/Expand"><i class="fa-solid fa-chevron-up"></i></button>
+                            <button class="widget-action-btn toggle-fullscreen" title="Full Screen"><i class="fa-solid fa-expand"></i></button>
+                        </div>
+                    </div>
+                    <div class="widget-content">
+                        <div class="ai-analytics-deck vertical-stack">
+                            <div class="ai-stat-card">
+                                <span class="title"><i class="fa-solid fa-person-running"></i> Motion Events</span>
+                                <span class="value" id="lbl-motion-count">0</span>
+                                <span class="meta">events/min</span>
+                            </div>
+                            <div class="ai-stat-card">
+                                <span class="title"><i class="fa-solid fa-face-smile"></i> Faces Matched</span>
+                                <span class="value" id="lbl-faces-count">0</span>
+                                <span class="meta">identifications/min</span>
+                            </div>
+                            <div class="ai-stat-card">
+                                <span class="title"><i class="fa-solid fa-gauge"></i> Avg Latency</span>
+                                <span class="value" id="lbl-inference-latency">0.0ms</span>
+                                <span class="meta">inference rate</span>
+                            </div>
+                            <div class="ai-stat-card">
+                                <span class="title"><i class="fa-solid fa-bullseye"></i> Accuracy Rate</span>
+                                <span class="value" id="lbl-accuracy-percent">0.0%</span>
+                                <span class="meta">confidence threshold</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- WARNING ALERTS REGISTRY -->
                 <section class="section issues-section collapsible">
                     <div class="section-header">
-                        <h2><i class="fa-solid fa-triangle-exclamation"></i> Warning Alerts Registry</h2>
+                        <h2><i class="fa-solid fa-triangle-exclamation"></i> Alerts Registry</h2>
                         <div class="header-controls">
                             <span class="issues-count" id="issues-count">0</span>
                         </div>
@@ -300,19 +301,20 @@
                         </div>
                     </div>
                 </section>
+
             </div>
-            
+
         </div>
     </div>
 
-    <!-- Slide-over Full Logs Modal Overlay -->
+    <!-- Storage Info & Log Details Modal Overlay -->
     <div class="modal-overlay" id="logs-modal">
         <div class="modal-card">
             <div class="modal-header">
                 <h3 id="logs-modal-title">journalctl Log Stream</h3>
                 <button class="modal-close-btn" id="btn-close-logs-modal"><i class="fa-solid fa-xmark"></i></button>
             </div>
-            <div class="modal-body log-console-container">
+            <div class="modal-body log-console-container" id="modal-body-container">
                 <pre class="log-console modal-console" id="modal-log-console">Loading lines...</pre>
             </div>
         </div>

@@ -1454,3 +1454,59 @@ body {
     font-family: var(--font-mono);
 }
 
+/* Split Layout Columns */
+.main-split-container {
+    display: grid;
+    grid-template-columns: 2.2fr 1.05fr;
+    gap: 1.5rem;
+}
+
+@media (max-width: 1200px) {
+    .main-split-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+.split-column {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+/* Vertical layout modifiers */
+.vertical-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.ai-analytics-deck.vertical-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    width: 100%;
+}
+
+.rom-metric {
+    cursor: pointer;
+    position: relative;
+    transition: var(--transition);
+}
+
+.rom-metric:hover {
+    color: var(--info) !important;
+}
+
+.rom-info-icon {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-left: 0.15rem;
+    transition: var(--transition);
+}
+
+.rom-metric:hover .rom-info-icon {
+    color: var(--info);
+    transform: scale(1.2);
+}
+
+
