@@ -53,9 +53,18 @@ async def stream_health_worker_loop():
                             await StreamRegistry.update_stream_state(s.stream_id, target_state, None, session)
                     else:
                         # Stream configured but not publishing (connecting or offline)
-                        target_state = "CONNECTING" if s.status == "ONLINE" else "OFFLINE"
-                        if s.status != target_state:
-                            await StreamRegistry.update_stream_state(s.stream_id, target_state, "Source disconnected", session)
+                        viewer_count = await RedisManager.get_viewer_count(s.stream_id)
+                        is_expected_active = s.always_on or (viewer_count > 0)
+                        
+                        if is_expected_active:
+                            target_state = "CONNECTING" if s.status == "ONLINE" else "OFFLINE"
+                            if s.status != target_state:
+                                await StreamRegistry.update_stream_state(s.stream_id, target_state, "Source disconnected", session)
+                        else:
+                            # Stream is idle (no active viewers and not always_on).
+                            # If it was left in WARM or CONNECTING, reset it to ONLINE so the camera stays healthy.
+                            if s.status in ("WARM", "CONNECTING"):
+                                await StreamRegistry.update_stream_state(s.stream_id, "ONLINE", None, session)
 
         except Exception as e:
             print(f"[worker] Stream health worker error: {e}")
