@@ -965,21 +965,25 @@ body {
     border: 1px solid var(--border-color);
     border-radius: 10px;
     padding: 0.85rem;
-    flex-grow: 1;
-    display: flex;
+    height: 360px; /* Constrain container height to trigger inner scroll */
     overflow: hidden;
 }
 
 .log-console {
     width: 100%;
     height: 100%;
-    overflow-y: auto;
+    overflow-y: auto; /* Enable scrollbars */
     font-family: var(--font-mono);
     font-size: 0.75rem;
     line-height: 1.45;
     color: hsl(120, 100% ,75%);
     white-space: pre-wrap;
     word-break: break-all;
+}
+
+/* Constrained height for logs modal container */
+.modal-body .log-console-container {
+    height: 58vh;
 }
 
 .log-line {
