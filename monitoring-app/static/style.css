@@ -428,13 +428,20 @@ body {
     }
 }
 
-.chart-container-wrapper {
+.charts-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    height: 100%;
+}
+
+.chart-box {
     background-color: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    padding: 1rem;
+    padding: 0.65rem 0.85rem;
     position: relative;
-    height: 260px;
+    height: 196px; /* Align vertically with the 640px height right-side columns! */
 }
 
 .hardware-breakdown {

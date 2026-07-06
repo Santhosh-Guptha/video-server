@@ -91,9 +91,17 @@
                     
                     <div class="widget-content">
                         <div class="hardware-grid">
-                            <!-- Chart block -->
-                            <div class="chart-container-wrapper">
-                                <canvas id="hardware-trend-chart"></canvas>
+                            <!-- Charts Stack -->
+                            <div class="charts-stack">
+                                <div class="chart-box">
+                                    <canvas id="chart-cpu-ram"></canvas>
+                                </div>
+                                <div class="chart-box">
+                                    <canvas id="chart-network"></canvas>
+                                </div>
+                                <div class="chart-box">
+                                    <canvas id="chart-disk-io"></canvas>
+                                </div>
                             </div>
 
                             <!-- Spark breakdown column -->

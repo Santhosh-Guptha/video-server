@@ -18,32 +18,97 @@ const seenLogLines = new Set();
 
 // Chart history buffers
 const CHART_MAX_SAMPLES = 30; // 60 seconds history
+const labelHistory = [];
+
+// Buffers for CPU & RAM chart
 const cpuHistory = [];
 const ramHistory = [];
-const netHistory = [];
-const labelHistory = [];
+let chartCpuRam = null;
+
+// Buffers for Network chart
+const netInHistory = [];
+const netOutHistory = [];
+let chartNetwork = null;
+
+// Buffers for Disk I/O chart
+const diskReadHistory = [];
+const diskWriteHistory = [];
+let chartDiskIO = null;
 
 // Track active toast alert IDs to prevent duplicates
 const visibleToastIds = new Set();
 
 // Setup ChartJS
 function initChart() {
-    const ctx = document.getElementById("hardware-trend-chart").getContext("2d");
-    
-    // Check theme grid colors
     const isLight = document.documentElement.getAttribute("data-theme") === "light";
     const gridColor = isLight ? "rgba(0, 0, 0, 0.05)" : "rgba(255, 255, 255, 0.05)";
     const textColor = isLight ? "#2d3748" : "#a0aec0";
 
     // Fill buffers with empty data
+    labelHistory.length = 0;
+    cpuHistory.length = 0;
+    ramHistory.length = 0;
+    netInHistory.length = 0;
+    netOutHistory.length = 0;
+    diskReadHistory.length = 0;
+    diskWriteHistory.length = 0;
+
     for (let i = 0; i < CHART_MAX_SAMPLES; i++) {
         cpuHistory.push(0);
         ramHistory.push(0);
-        netHistory.push(0);
+        netInHistory.push(0);
+        netOutHistory.push(0);
+        diskReadHistory.push(0);
+        diskWriteHistory.push(0);
         labelHistory.push("");
     }
 
-    chartInstance = new Chart(ctx, {
+    const defaultChartOptions = (yLabel, yMax = null) => ({
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+            legend: {
+                position: 'top',
+                labels: {
+                    color: textColor,
+                    boxWidth: 12,
+                    font: { family: 'Outfit', size: 10, weight: 600 }
+                }
+            },
+            tooltip: {
+                mode: 'index',
+                intersect: false,
+                titleFont: { family: 'Outfit' },
+                bodyFont: { family: 'JetBrains Mono', size: 10 }
+            }
+        },
+        scales: {
+            x: {
+                grid: { color: gridColor },
+                ticks: { display: false }
+            },
+            y: {
+                min: 0,
+                max: yMax,
+                grid: { color: gridColor },
+                ticks: {
+                    color: textColor,
+                    font: { family: 'JetBrains Mono', size: 9 }
+                },
+                title: {
+                    display: true,
+                    text: yLabel,
+                    color: textColor,
+                    font: { family: 'Outfit', size: 9, weight: 700 }
+                }
+            }
+        }
+    });
+
+    // Chart 1: CPU & RAM (%)
+    const ctx1 = document.getElementById("chart-cpu-ram").getContext("2d");
+    chartCpuRam = new Chart(ctx1, {
         type: 'line',
         data: {
             labels: labelHistory,
@@ -52,90 +117,123 @@ function initChart() {
                     label: 'CPU Load %',
                     data: cpuHistory,
                     borderColor: 'rgb(255, 99, 132)',
-                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                    borderWidth: 2,
+                    backgroundColor: 'rgba(255, 99, 132, 0.05)',
+                    borderWidth: 1.5,
                     fill: true,
-                    tension: 0.3,
+                    tension: 0.25,
                     pointRadius: 0
                 },
                 {
                     label: 'RAM Load %',
                     data: ramHistory,
                     borderColor: 'rgb(54, 162, 235)',
-                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
-                    borderWidth: 2,
+                    backgroundColor: 'rgba(54, 162, 235, 0.05)',
+                    borderWidth: 1.5,
                     fill: true,
-                    tension: 0.3,
-                    pointRadius: 0
-                },
-                {
-                    label: 'Net In (MB/s * 10)', // Scale by 10 to fit nicely
-                    data: netHistory,
-                    borderColor: 'rgb(255, 205, 86)',
-                    backgroundColor: 'rgba(255, 205, 86, 0.05)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.3,
+                    tension: 0.25,
                     pointRadius: 0
                 }
             ]
         },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: false,
-            plugins: {
-                legend: {
-                    position: 'top',
-                    labels: {
-                        color: textColor,
-                        font: { family: 'Outfit', size: 11 }
-                    }
+        options: defaultChartOptions('Load %', 100)
+    });
+
+    // Chart 2: Network Traffic (MB/s)
+    const ctx2 = document.getElementById("chart-network").getContext("2d");
+    chartNetwork = new Chart(ctx2, {
+        type: 'line',
+        data: {
+            labels: labelHistory,
+            datasets: [
+                {
+                    label: 'Net In (MB/s)',
+                    data: netInHistory,
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.05)',
+                    borderWidth: 1.5,
+                    fill: true,
+                    tension: 0.25,
+                    pointRadius: 0
                 },
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
-                    titleFont: { family: 'Outfit' },
-                    bodyFont: { family: 'JetBrains Mono' }
+                {
+                    label: 'Net Out (MB/s)',
+                    data: netOutHistory,
+                    borderColor: 'rgb(245, 158, 11)',
+                    backgroundColor: 'rgba(245, 158, 11, 0.05)',
+                    borderWidth: 1.5,
+                    fill: true,
+                    tension: 0.25,
+                    pointRadius: 0
                 }
-            },
-            scales: {
-                x: {
-                    grid: { color: gridColor },
-                    ticks: { display: false }
+            ]
+        },
+        options: defaultChartOptions('Bandwidth (MB/s)', null)
+    });
+
+    // Chart 3: Disk I/O (MB/s)
+    const ctx3 = document.getElementById("chart-disk-io").getContext("2d");
+    chartDiskIO = new Chart(ctx3, {
+        type: 'line',
+        data: {
+            labels: labelHistory,
+            datasets: [
+                {
+                    label: 'Disk Read (MB/s)',
+                    data: diskReadHistory,
+                    borderColor: 'rgb(168, 85, 247)',
+                    backgroundColor: 'rgba(168, 85, 247, 0.05)',
+                    borderWidth: 1.5,
+                    fill: true,
+                    tension: 0.25,
+                    pointRadius: 0
                 },
-                y: {
-                    min: 0,
-                    max: 100,
-                    grid: { color: gridColor },
-                    ticks: {
-                        color: textColor,
-                        font: { family: 'JetBrains Mono', size: 10 }
-                    }
+                {
+                    label: 'Disk Write (MB/s)',
+                    data: diskWriteHistory,
+                    borderColor: 'rgb(6, 182, 212)',
+                    backgroundColor: 'rgba(6, 182, 212, 0.05)',
+                    borderWidth: 1.5,
+                    fill: true,
+                    tension: 0.25,
+                    pointRadius: 0
                 }
-            }
-        }
+            ]
+        },
+        options: defaultChartOptions('Disk I/O (MB/s)', null)
     });
 }
 
-function updateChartData(cpu, ram, netInMb) {
-    if (!chartInstance) return;
-    
-    // Shift data
-    cpuHistory.shift();
-    cpuHistory.push(cpu);
-    
-    ramHistory.shift();
-    ramHistory.push(ram);
-    
-    netHistory.shift();
-    // Clamp network scale representation to max 100
-    netHistory.push(Math.min(100, netInMb * 10));
-    
+function updateChartData(cpu, ram, netIn, netOut, diskRead, diskWrite) {
+    // Shift label
     labelHistory.shift();
     labelHistory.push(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    
-    chartInstance.update();
+
+    // Update CPU / RAM Chart
+    if (chartCpuRam) {
+        cpuHistory.shift();
+        cpuHistory.push(cpu);
+        ramHistory.shift();
+        ramHistory.push(ram);
+        chartCpuRam.update();
+    }
+
+    // Update Network Chart
+    if (chartNetwork) {
+        netInHistory.shift();
+        netInHistory.push(netIn);
+        netOutHistory.shift();
+        netOutHistory.push(netOut);
+        chartNetwork.update();
+    }
+
+    // Update Disk I/O Chart
+    if (chartDiskIO) {
+        diskReadHistory.shift();
+        diskReadHistory.push(diskRead);
+        diskWriteHistory.shift();
+        diskWriteHistory.push(diskWrite);
+        chartDiskIO.update();
+    }
 }
 
 // Connect WebSocket
@@ -206,7 +304,14 @@ function renderTelemetry(data) {
     safeSetText("system-time", dt.toLocaleTimeString());
     
     // Update chart
-    updateChartData(sys.cpu_percent, sys.ram_percent, sys.speeds.net_in_mb_s);
+    updateChartData(
+        sys.cpu_percent, 
+        sys.ram_percent, 
+        sys.speeds.net_in_mb_s, 
+        sys.speeds.net_out_mb_s, 
+        sys.speeds.disk_read_mb_s, 
+        sys.speeds.disk_write_mb_s
+    );
 
     // Multi-core CPU load bars
     const coresGrid = document.getElementById("cores-grid");
@@ -848,11 +953,11 @@ document.getElementById("theme-toggle-btn").onclick = () => {
         icon.className = "fa-solid fa-moon";
     }
     
-    // Redraw chart with updated colors
-    if (chartInstance) {
-        chartInstance.destroy();
-        initChart();
-    }
+    // Redraw all charts with updated theme colors
+    if (chartCpuRam) chartCpuRam.destroy();
+    if (chartNetwork) chartNetwork.destroy();
+    if (chartDiskIO) chartDiskIO.destroy();
+    initChart();
 };
 
 // Quick Actions Event Bindings
