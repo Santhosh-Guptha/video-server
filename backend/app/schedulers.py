@@ -577,7 +577,7 @@ async def camera_gap_recovery_loop():
 
             print(f"[recovery] Found {len(gaps_to_recover)} missing segments to recover across all active cameras.")
 
-            async def download_task(task):
+            async def _download_task_impl(task):
                 stream_id = task["stream_id"]
                 temp_start = task["start_ts"]
                 temp_end = task["end_ts"]
@@ -661,7 +661,7 @@ async def camera_gap_recovery_loop():
 
                 codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-an"] if is_hevc else ["-c:v", "copy", "-an"]
 
-                async with semaphore:
+                if True:
                     print(f"[recovery] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {is_hevc})...")
                     cmd = [
                         settings.ffmpeg_path,
@@ -750,6 +750,10 @@ async def camera_gap_recovery_loop():
                         print(f"[recovery] [{stream_id}] Error running FFmpeg for recovery: {e}")
                         if output_path.exists():
                             output_path.unlink()
+
+            async def download_task(task):
+                async with semaphore:
+                    await _download_task_impl(task)
 
             # Group tasks by stream_id to process them sequentially per camera (to prevent overloading the camera RTSP playback sessions)
             tasks_by_stream = {}
