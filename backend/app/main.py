@@ -1783,7 +1783,10 @@ async def hls_playlist(
 
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/index.m3u8")
+            response = await client.get(
+                f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/index.m3u8",
+                follow_redirects=True
+            )
             if response.status_code == 200:
                 return Response(
                     content=response.content,
@@ -1830,7 +1833,7 @@ async def hls_segment(
         try:
             # Match endpoints and format params
             url = f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/{filename}"
-            response = await client.get(url)
+            response = await client.get(url, follow_redirects=True)
             if response.status_code == 200:
                 media_type = "video/MP2T" if filename.endswith(".ts") else "video/mp4"
                 return Response(
