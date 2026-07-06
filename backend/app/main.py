@@ -1781,21 +1781,27 @@ async def hls_playlist(
     except Exception as e:
         print(f"[main] Error ensuring transcoder for H.265 HLS stream {stream_id}: {e}")
 
+    # Forward query parameters from the incoming request (e.g. ?cookieCheck=1)
+    query_string = str(request.query_params)
+    base_url = f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/index.m3u8"
+    full_url = f"{base_url}?{query_string}" if query_string else base_url
+
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(
-                f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/index.m3u8",
-                follow_redirects=True
-            )
+            response = await client.get(full_url, follow_redirects=True)
             if response.status_code == 200:
+                resp_headers = {
+                    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+                # Forward Set-Cookie headers from MediaMTX
+                for cookie_name, cookie_value in response.cookies.items():
+                    resp_headers["Set-Cookie"] = f"{cookie_name}={cookie_value}; Path=/"
                 return Response(
                     content=response.content,
                     media_type="application/vnd.apple.mpegurl",
-                    headers={
-                        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-                        "Pragma": "no-cache",
-                        "Expires": "0"
-                    }
+                    headers=resp_headers
                 )
         except Exception as e:
             print(f"[main] Error proxying index.m3u8 for {stream_id}: {e}")
@@ -1817,13 +1823,25 @@ async def hls_segment(
     except Exception:
         pass
 
+    # Forward query parameters (critical: MediaMTX uses ?session= for HLS session tracking)
+    query_string = str(request.query_params)
+    base_url = f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/{filename}"
+    full_url = f"{base_url}?{query_string}" if query_string else base_url
+
+    # Forward cookies from the browser to MediaMTX
+    cookies = dict(request.cookies)
+
     async with httpx.AsyncClient() as client:
         try:
-            # Match endpoints and format params
-            url = f"{settings.mediamtx_api_url.replace(':9997', ':8080')}/{target_stream_id}/{filename}"
-            response = await client.get(url, follow_redirects=True)
+            response = await client.get(full_url, follow_redirects=True, cookies=cookies)
             if response.status_code == 200:
-                media_type = "video/MP2T" if filename.endswith(".ts") else "video/mp4"
+                # Determine correct media type
+                if filename.endswith(".m3u8"):
+                    media_type = "application/vnd.apple.mpegurl"
+                elif filename.endswith(".ts"):
+                    media_type = "video/MP2T"
+                else:
+                    media_type = "video/mp4"
                 return Response(
                     content=response.content,
                     media_type=media_type,
