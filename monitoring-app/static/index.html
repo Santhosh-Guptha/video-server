@@ -95,6 +95,11 @@
 
                         <!-- Spark breakdown column -->
                         <div class="hardware-breakdown">
+                            <!-- System Uptime / Time info header -->
+                            <div class="system-time-header">
+                                <span>Host Time: <b id="system-time">--:--:--</b></span>
+                            </div>
+
                             <!-- Multi-core CPU bar grid -->
                             <div class="cores-container">
                                 <h4><i class="fa-solid fa-gauge-high"></i> Per-Core CPU Load</h4>
@@ -117,6 +122,54 @@
                                     <div class="legend-item"><span class="color-dot cached"></span> Cache: <b id="lbl-cached-gb">0.0GB</b></div>
                                     <div class="legend-item"><span class="color-dot buffers"></span> Buffers: <b id="lbl-buffers-gb">0.0GB</b></div>
                                     <div class="legend-item"><span class="color-dot free"></span> Free: <b id="lbl-free-gb">0.0GB</b></div>
+                                </div>
+                            </div>
+
+                            <!-- Disk Space Card -->
+                            <div class="disk-breakdown-card">
+                                <h4><i class="fa-solid fa-hard-drive"></i> Disk Capacity (ROM)</h4>
+                                <div class="disk-row">
+                                    <div class="disk-meta">
+                                        <span>Root (/)</span>
+                                        <span id="disk-root-percent">0%</span>
+                                    </div>
+                                    <div class="progress-bar-bg">
+                                        <div class="progress-bar-fill" id="disk-root-fill" style="width: 0%;"></div>
+                                    </div>
+                                    <p class="card-meta" id="disk-root-gb">0 GB used</p>
+                                </div>
+                                <div class="disk-row">
+                                    <div class="disk-meta">
+                                        <span>Storage (/mnt/storage)</span>
+                                        <span id="disk-storage-percent">0%</span>
+                                    </div>
+                                    <div class="progress-bar-bg">
+                                        <div class="progress-bar-fill orange-bar" id="disk-storage-fill" style="width: 0%;"></div>
+                                    </div>
+                                    <p class="card-meta" id="disk-storage-gb">0 GB used</p>
+                                </div>
+                            </div>
+
+                            <!-- I/O Operations Rates -->
+                            <div class="io-breakdown-card">
+                                <h4><i class="fa-solid fa-network-wired"></i> Network & Disk Activity</h4>
+                                <div class="stats-grid">
+                                    <div class="stat-item">
+                                        <span class="label"><i class="fa-solid fa-arrow-down-long"></i> Net In</span>
+                                        <span class="value" id="net-in">0.0 MB/s</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="label"><i class="fa-solid fa-arrow-up-long"></i> Net Out</span>
+                                        <span class="value" id="net-out">0.0 MB/s</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="label"><i class="fa-solid fa-arrow-rotate-right"></i> Disk Read</span>
+                                        <span class="value" id="disk-read">0.0 MB/s</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="label"><i class="fa-solid fa-pen-nib"></i> Disk Write</span>
+                                        <span class="value" id="disk-write">0.0 MB/s</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>

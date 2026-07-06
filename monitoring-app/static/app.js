@@ -170,69 +170,119 @@ function connectWebSocket() {
     };
 }
 
+// Helper for safely setting text content
+function safeSetText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+}
+
+// Helper to format bytes to human readable string
+function formatBytes(bytes, decimals = 1) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
 // Update DOM elements with incoming telemetry
 function renderTelemetry(data) {
-    // 1. Hardware metrics
+    if (!data || !data.system) return;
     const sys = data.system;
+    
+    // System Time
+    const dt = new Date(data.timestamp * 1000);
+    safeSetText("system-time", dt.toLocaleTimeString());
     
     // Update chart
     updateChartData(sys.cpu_percent, sys.ram_percent, sys.speeds.net_in_mb_s);
 
     // Multi-core CPU load bars
     const coresGrid = document.getElementById("cores-grid");
-    coresGrid.innerHTML = "";
-    sys.cpu_cores.forEach((coreVal, i) => {
-        const coreDiv = document.createElement("div");
-        coreDiv.className = "core-item";
-        coreDiv.innerHTML = `
-            <div class="core-meta">
-                <span>C${i}</span>
-                <span>${Math.round(coreVal)}%</span>
-            </div>
-            <div class="core-bar-bg">
-                <div class="core-bar-fill" style="width: ${coreVal}%;"></div>
-            </div>
-        `;
-        coresGrid.appendChild(coreDiv);
-    });
+    if (coresGrid && sys.cpu_cores) {
+        coresGrid.innerHTML = "";
+        sys.cpu_cores.forEach((coreVal, i) => {
+            const coreDiv = document.createElement("div");
+            coreDiv.className = "core-item";
+            coreDiv.innerHTML = `
+                <div class="core-meta">
+                    <span>C${i}</span>
+                    <span>${Math.round(coreVal)}%</span>
+                </div>
+                <div class="core-bar-bg">
+                    <div class="core-bar-fill" style="width: ${coreVal}%;"></div>
+                </div>
+            `;
+            coresGrid.appendChild(coreDiv);
+        });
+    }
 
     // RAM Breakdown
     const rb = sys.ram_breakdown;
-    document.getElementById("lbl-used-gb").textContent = `${rb.used_gb} GB`;
-    document.getElementById("lbl-cached-gb").textContent = `${rb.cached_gb} GB`;
-    document.getElementById("lbl-buffers-gb").textContent = `${rb.buffers_gb} GB`;
-    document.getElementById("lbl-free-gb").textContent = `${rb.free_gb} GB`;
+    if (rb) {
+        safeSetText("lbl-used-gb", `${rb.used_gb} GB`);
+        safeSetText("lbl-cached-gb", `${rb.cached_gb} GB`);
+        safeSetText("lbl-buffers-gb", `${rb.buffers_gb} GB`);
+        safeSetText("lbl-free-gb", `${rb.free_gb} GB`);
 
-    // Update horizontal stack widths
-    const stack = document.querySelector(".ram-stack-bar");
-    stack.querySelector(".ram-bar.used").style.width = `${(rb.used_gb / rb.total_gb) * 100}%`;
-    stack.querySelector(".ram-bar.cached").style.width = `${(rb.cached_gb / rb.total_gb) * 100}%`;
-    stack.querySelector(".ram-bar.buffers").style.width = `${(rb.buffers_gb / rb.total_gb) * 100}%`;
-    stack.querySelector(".ram-bar.free").style.width = `${(rb.free_gb / rb.total_gb) * 100}%`;
+        // Update horizontal stack widths
+        const stack = document.querySelector(".ram-stack-bar");
+        if (stack) {
+            const usedBar = stack.querySelector(".ram-bar.used");
+            const cachedBar = stack.querySelector(".ram-bar.cached");
+            const buffersBar = stack.querySelector(".ram-bar.buffers");
+            const freeBar = stack.querySelector(".ram-bar.free");
+            
+            if (usedBar) usedBar.style.width = `${(rb.used_gb / rb.total_gb) * 100}%`;
+            if (cachedBar) cachedBar.style.width = `${(rb.cached_gb / rb.total_gb) * 100}%`;
+            if (buffersBar) buffersBar.style.width = `${(rb.buffers_gb / rb.total_gb) * 100}%`;
+            if (freeBar) freeBar.style.width = `${(rb.free_gb / rb.total_gb) * 100}%`;
+        }
+    }
+
+    // Disk ROM stats
+    if (sys.disk_root) {
+        safeSetText("disk-root-percent", `${sys.disk_root.percent}%`);
+        const rootFill = document.getElementById("disk-root-fill");
+        if (rootFill) rootFill.style.width = `${sys.disk_root.percent}%`;
+        safeSetText("disk-root-gb", `${formatBytes(sys.disk_root.used)} / ${formatBytes(sys.disk_root.total)}`);
+    }
+    
+    if (sys.disk_storage) {
+        safeSetText("disk-storage-percent", `${sys.disk_storage.percent}%`);
+        const storageFill = document.getElementById("disk-storage-fill");
+        if (storageFill) storageFill.style.width = `${sys.disk_storage.percent}%`;
+        safeSetText("disk-storage-gb", `${formatBytes(sys.disk_storage.used)} / ${formatBytes(sys.disk_storage.total)}`);
+    }
 
     // System rates
-    document.getElementById("net-in").textContent = `${sys.speeds.net_in_mb_s.toFixed(2)} MB/s`;
-    document.getElementById("net-out").textContent = `${sys.speeds.net_out_mb_s.toFixed(2)} MB/s`;
-    document.getElementById("disk-read").textContent = `${sys.speeds.disk_read_mb_s.toFixed(2)} MB/s`;
-    document.getElementById("disk-write").textContent = `${sys.speeds.disk_write_mb_s.toFixed(2)} MB/s`;
+    if (sys.speeds) {
+        safeSetText("net-in", `${sys.speeds.net_in_mb_s.toFixed(2)} MB/s`);
+        safeSetText("net-out", `${sys.speeds.net_out_mb_s.toFixed(2)} MB/s`);
+        safeSetText("disk-read", `${sys.speeds.disk_read_mb_s.toFixed(2)} MB/s`);
+        safeSetText("disk-write", `${sys.speeds.disk_write_mb_s.toFixed(2)} MB/s`);
+    }
 
     // 2. Services Grid
-    renderServices(data.services);
+    if (data.services) renderServices(data.services);
 
     // 3. Camera Streams
-    renderCameras(data.cameras);
+    if (data.cameras) renderCameras(data.cameras);
 
     // 4. AI Analytics Cards
-    document.getElementById("lbl-motion-count").textContent = data.ai.motion_events_count;
-    document.getElementById("lbl-faces-count").textContent = data.ai.faces_matched_count;
-    document.getElementById("lbl-inference-latency").textContent = `${data.ai.avg_inference_latency}ms`;
-    document.getElementById("lbl-accuracy-percent").textContent = `${data.ai.accuracy_percent}%`;
+    if (data.ai) {
+        safeSetText("lbl-motion-count", data.ai.motion_events_count);
+        safeSetText("lbl-faces-count", data.ai.faces_matched_count);
+        safeSetText("lbl-inference-latency", `${data.ai.avg_inference_latency}ms`);
+        safeSetText("lbl-accuracy-percent", `${data.ai.accuracy_percent}%`);
+    }
 
     // 5. Logs Console
-    renderLogs(data.logs);
+    if (data.logs) renderLogs(data.logs);
 
     // 6. Active Issues alerts
-    renderIssues(data.issues);
+    if (data.issues) renderIssues(data.issues);
 }
 
 // Render service cards
@@ -298,9 +348,19 @@ function renderServices(services) {
 // Render VMS cameras streams cards
 function renderCameras(cameras) {
     const container = document.getElementById("streams-container");
+    if (!container) return;
     container.innerHTML = "";
     
-    cameras.forEach(cam => {
+    // Update panel title with total cameras count
+    const sectionHeader = container.closest(".section").querySelector(".section-header h2");
+    if (sectionHeader) {
+        sectionHeader.innerHTML = `<i class="fa-solid fa-video"></i> VMS RTSP Streams & Camera Health (Showing 6 of ${cameras.length})`;
+    }
+    
+    // Slice to first 6 cameras to prevent browser lockup with 495 parallel canvas render loops
+    const visibleCameras = cameras.slice(0, 6);
+    
+    visibleCameras.forEach(cam => {
         const isOnline = cam.status === "ONLINE";
         const statusClass = isOnline ? "online" : "offline";
         
@@ -349,10 +409,14 @@ function renderCameras(cameras) {
         container.appendChild(card);
         
         // Dynamic scanline oscilloscope CCTV canvas animation
-        if (isOnline) {
-            animateMockCCTVStream(`canvas-${cam.id}`);
-        } else {
-            drawStaticNoiseCCTVStream(`canvas-${cam.id}`);
+        try {
+            if (isOnline) {
+                animateMockCCTVStream(`canvas-${cam.id}`);
+            } else {
+                drawStaticNoiseCCTVStream(`canvas-${cam.id}`);
+            }
+        } catch (canvasErr) {
+            console.error("Canvas draw failure:", canvasErr);
         }
     });
 }
