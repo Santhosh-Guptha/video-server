@@ -313,22 +313,24 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
     tasks = [get_segment_duration(seg) for seg in segments_to_check]
     results = await asyncio.gather(*tasks)
     
-    # Map to segment boundaries (adjusting durations of consecutive files to eliminate fake GOP-alignment gaps)
+    # Merge overlapping or contiguous intervals to find the true timeline coverage
     results.sort(key=lambda x: x[0])
-    segments = []
-    seg_time = settings.segment_time_seconds
-    for i in range(len(results)):
-        f_start, dur = results[i]
-        if i < len(results) - 1:
-            next_start = results[i + 1][0]
-            time_diff = next_start - f_start
-            if time_diff > 0 and time_diff <= seg_time + 5.0:
-                dur = time_diff
-        segments.append((f_start, f_start + dur))
+    merged_segments = []
+    for f_start, dur in results:
+        f_end = f_start + dur
+        if not merged_segments:
+            merged_segments.append([f_start, f_end])
+        else:
+            last_start, last_end = merged_segments[-1]
+            # Merge if segments overlap or are contiguous within a 2-second buffer
+            if f_start <= last_end + 2.0:
+                merged_segments[-1][1] = max(last_end, f_end)
+            else:
+                merged_segments.append([f_start, f_end])
 
     # Filter segments to the requested time window and clip them
     active_segs = []
-    for s_start, s_end in segments:
+    for s_start, s_end in merged_segments:
         if s_end > start_ts and s_start < end_ts:
             active_segs.append((max(s_start, start_ts), min(s_end, end_ts)))
 
@@ -387,23 +389,33 @@ async def camera_gap_recovery_loop():
                     twenty_four_hours_ago = now - (24 * 3600)
                     gaps = await scan_filesystem_gaps(stream_id, twenty_four_hours_ago, now)
 
-                    # Schedule recovery tasks for exact gap start and end times
+                    # Schedule recovery tasks for exact gap start and end times, chunked to max settings.segment_time_seconds
                     for gap_start, gap_end in gaps:
-                        gap_key = (stream_id, int(gap_start))
-                        if gap_key not in attempted_gaps:
-                            attempted_gaps.add(gap_key)
-                            
-                            # Build recovery URL using vendor framework
-                            make_val = stream.camera.make if stream.camera else None
-                            provider = get_playback_recovery_provider(make_val)
-                            recovery_url = provider.build_playback_url(stream, gap_start, gap_end)
+                        curr = gap_start
+                        seg_time = float(settings.segment_time_seconds)
+                        while curr < gap_end:
+                            chunk_end = min(curr + seg_time, gap_end)
+                            # If remaining gap chunk is <= 5 seconds, merge it to prevent tiny fragmented files
+                            if gap_end - chunk_end <= 5.0:
+                                chunk_end = gap_end
 
-                            gaps_to_recover.append({
-                                "stream_id": stream_id,
-                                "recovery_url": recovery_url,
-                                "start_ts": gap_start,
-                                "end_ts": gap_end
-                            })
+                            gap_key = (stream_id, int(curr))
+                            if gap_key not in attempted_gaps:
+                                attempted_gaps.add(gap_key)
+                                
+                                # Build recovery URL using vendor framework
+                                make_val = stream.camera.make if stream.camera else None
+                                provider = get_playback_recovery_provider(make_val)
+                                recovery_url = provider.build_playback_url(stream, curr, chunk_end)
+
+                                gaps_to_recover.append({
+                                    "stream_id": stream_id,
+                                    "recovery_url": recovery_url,
+                                    "start_ts": curr,
+                                    "end_ts": chunk_end
+                                })
+                            
+                            curr = chunk_end
 
             if not gaps_to_recover:
                 await asyncio.sleep(60.0)
@@ -474,6 +486,7 @@ async def camera_gap_recovery_loop():
                         "-hide_banner",
                         "-loglevel", "warning",
                         "-rtsp_transport", "tcp",
+                        "-stimeout", "15000000",
                         "-i", recovery_url,
                         "-t", str(temp_end - temp_start),
                         "-c:v", "copy",

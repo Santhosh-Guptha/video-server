@@ -2440,7 +2440,24 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                     if output_path.exists():
                         output_path.unlink()
 
+        # Split any large gap chunks into max segment_time_seconds pieces
+        split_chunks = []
         for chunk in gap_chunks:
+            start_ts = chunk["start_ts"]
+            end_ts = chunk["end_ts"]
+            curr = start_ts
+            seg_time = float(settings.segment_time_seconds)
+            while curr < end_ts:
+                chunk_end = min(curr + seg_time, end_ts)
+                if end_ts - chunk_end <= 5.0:
+                    chunk_end = end_ts
+                split_chunks.append({
+                    "start_ts": curr,
+                    "end_ts": chunk_end
+                })
+                curr = chunk_end
+
+        for chunk in split_chunks:
             await download_chunk(chunk)
 
 @app.post("/api/recordings/{stream_id}/recover")
