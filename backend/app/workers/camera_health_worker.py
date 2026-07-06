@@ -14,36 +14,46 @@ async def camera_health_worker_loop():
             async for session in get_session():
                 active_cameras = await CameraRegistry.get_active_cameras(session)
                 
-                # Concurrency throttle to avoid network/socket exhaustion
-                sem = asyncio.Semaphore(40)
+                # Concurrency throttle for TCP socket probes
+                sem = asyncio.Semaphore(50)
                 
-                async def check_camera_stream(stream_id, stream_url, current_status):
+                async def check_camera_stream(stream_id, stream_url):
                     async with sem:
                         try:
-                            # Lightweight TCP socket connection check
-                            online = await _ffprobe_rtsp(stream_url, timeout_seconds=5)
-                            status = "ONLINE" if online else "OFFLINE"
-                            
-                            if current_status != status:
-                                # Open a separate DB session for the update to prevent task-sharing session errors
-                                async for update_session in get_session():
-                                    await StreamRegistry.update_stream_state(stream_id, status, None, update_session)
-                                    break
-                        except Exception as task_err:
-                            print(f"[worker] Error checking stream {stream_id}: {task_err}")
+                            # Use a 4-second timeout to handle high-latency routes safely
+                            online = await _ffprobe_rtsp(stream_url, timeout_seconds=4)
+                            return stream_id, "ONLINE" if online else "OFFLINE"
+                        except Exception:
+                            return stream_id, "OFFLINE"
 
                 tasks = []
+                stream_status_map = {}
                 for cam in active_cameras:
                     if cam.streams:
                         for stream in cam.streams:
-                            tasks.append(check_camera_stream(stream.stream_id, stream.stream_url, stream.status))
+                            tasks.append(check_camera_stream(stream.stream_id, stream.stream_url))
+                            stream_status_map[stream.stream_id] = stream.status
                 
                 if tasks:
-                    print(f"[worker] Camera health watchdog starting concurrent checks on {len(tasks)} streams...")
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    print(f"[worker] Camera health watchdog finished concurrent checks.")
+                    print(f"[worker] Camera health watchdog starting concurrent probes on {len(tasks)} streams...")
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    print(f"[worker] Camera health watchdog completed concurrent probes.")
+                    
+                    # Process and commit updates sequentially using the active session to avoid pool exhaustion
+                    updates_count = 0
+                    for res in results:
+                        if isinstance(res, tuple):
+                            stream_id, status = res
+                            old_status = stream_status_map.get(stream_id)
+                            if old_status != status:
+                                await StreamRegistry.update_stream_state(stream_id, status, None, session)
+                                updates_count += 1
+                                
+                    if updates_count > 0:
+                        await session.commit()
+                        print(f"[worker] Camera health watchdog updated status for {updates_count} streams.")
                 
-                # break out of session generator
+                # Break out of the session generator loop
                 break
                 
         except Exception as e:
