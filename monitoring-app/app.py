@@ -158,13 +158,26 @@ def get_service_status(service_name: str) -> dict:
         if len(pid_lines) == 2 and pid_lines[1].isdigit():
             pid = int(pid_lines[1])
             if pid > 0:
-                try:
-                    proc = psutil.Process(pid)
-                    cpu_percent = round(proc.cpu_percent(interval=None), 1)
-                    memory_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
-                    threads = proc.num_threads()
-                except Exception:
-                    pass
+                global _process_cache
+                if "_process_cache" not in globals():
+                    _process_cache = {}
+                
+                proc = _process_cache.get(service_name)
+                if not proc or proc.pid != pid:
+                    try:
+                        proc = psutil.Process(pid)
+                        proc.cpu_percent(interval=None) # prime the cpu tracker
+                        _process_cache[service_name] = proc
+                    except Exception:
+                        proc = None
+                        
+                if proc:
+                    try:
+                        cpu_percent = round(proc.cpu_percent(interval=None), 1)
+                        memory_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
+                        threads = proc.num_threads()
+                    except Exception:
+                        _process_cache.pop(service_name, None)
                     
         return {
             "status": f"{status} ({substate})" if substate else status,

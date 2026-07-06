@@ -6,6 +6,16 @@ let currentTelemetry = null;
 let autoscroll = true;
 let chartInstance = null;
 
+// Global explicit selectors
+let logServiceSelector = null;
+let logSearch = null;
+let logConsole = null;
+let activeLogFilter = "all";
+
+// Log streaming cache structure (stores up to 300 entries chronologically)
+const cachedLogs = [];
+const seenLogLines = new Set();
+
 // Chart history buffers
 const CHART_MAX_SAMPLES = 30; // 60 seconds history
 const cpuHistory = [];
@@ -503,30 +513,64 @@ function drawStaticNoiseCCTVStream(canvasId) {
     ctx.stroke();
 }
 
-// Render log console
-function renderLogs(logs) {
-    const selector = logServiceSelector.value;
-    const search = logSearch.value.toLowerCase();
-    
-    let feed = [];
-    if (selector === "all") {
-        for (const [srv, lines] of Object.entries(logs)) {
-            lines.forEach(l => feed.push({ srv: srv, text: l }));
-        }
-        feed.sort((a, b) => a.text.localeCompare(b.text));
-    } else {
-        const lines = logs[selector] || [];
-        lines.forEach(l => feed.push({ srv: selector, text: l }));
-    }
+// Parse date prefix from journalctl output line
+function parseJournalDate(line) {
+    if (!line) return Date.now();
+    const datePart = line.slice(0, 15);
+    const parsed = Date.parse(`${datePart} ${new Date().getFullYear()}`);
+    return isNaN(parsed) ? Date.now() : parsed;
+}
 
+// Render log console (integrating continuous live logs cache)
+function renderLogs(logs) {
+    if (!logConsole) return;
+    
+    const selector = logServiceSelector ? logServiceSelector.value : "all";
+    const search = logSearch ? logSearch.value.toLowerCase() : "";
+    
+    // 1. Ingest newly arrived lines into our continuous cache
+    let cacheChanged = false;
+    
+    for (const [srv, lines] of Object.entries(logs)) {
+        lines.forEach(line => {
+            const uniqueKey = `${srv}::${line}`;
+            if (!seenLogLines.has(uniqueKey)) {
+                seenLogLines.add(uniqueKey);
+                cachedLogs.push({
+                    srv: srv,
+                    text: line,
+                    timestamp: parseJournalDate(line)
+                });
+                cacheChanged = true;
+            }
+        });
+    }
+    
+    // Sort chronologically and limit cache to 300 logs max to save memory
+    if (cacheChanged) {
+        cachedLogs.sort((a, b) => a.timestamp - b.timestamp);
+        
+        while (cachedLogs.length > 300) {
+            const removed = cachedLogs.shift();
+            const removedKey = `${removed.srv}::${removed.text}`;
+            seenLogLines.delete(removedKey);
+        }
+    }
+    
+    // 2. Clear console and render filtered subset
     logConsole.innerHTML = "";
     
-    feed.forEach(item => {
+    cachedLogs.forEach(item => {
+        // Filter by selected service dropdown
+        if (selector !== "all" && item.srv !== selector) return;
+        
         const text = item.text;
         const textLower = text.toLowerCase();
         
+        // Search filter matching
         if (search && !textLower.includes(search)) return;
         
+        // Level severity matches
         const isError = textLower.includes("error") || textLower.includes("exception") || textLower.includes("failed");
         const isWarning = textLower.includes("warning") || textLower.includes("warn");
         
@@ -799,6 +843,33 @@ window.addEventListener("DOMContentLoaded", () => {
     } else {
         icon.className = "fa-solid fa-moon";
     }
+
+    // Initialize DOM variables explicitly
+    logServiceSelector = document.getElementById("log-service-selector");
+    logSearch = document.getElementById("log-search");
+    logConsole = document.getElementById("log-console");
+
+    // Bind event listeners for real-time logs search and filtering
+    if (logServiceSelector) {
+        logServiceSelector.onchange = () => {
+            if (currentTelemetry) renderLogs(currentTelemetry.logs);
+        };
+    }
+    if (logSearch) {
+        logSearch.oninput = () => {
+            if (currentTelemetry) renderLogs(currentTelemetry.logs);
+        };
+    }
+
+    // Filter level tabs binding
+    document.querySelectorAll(".filter-tab").forEach(tab => {
+        tab.onclick = () => {
+            document.querySelectorAll(".filter-tab").forEach(t => t.classList.remove("active"));
+            tab.classList.add("active");
+            activeLogFilter = tab.getAttribute("data-filter") || "all";
+            if (currentTelemetry) renderLogs(currentTelemetry.logs);
+        };
+    });
 
     initChart();
     connectWebSocket();
