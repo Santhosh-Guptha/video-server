@@ -96,13 +96,30 @@ class RedisViewerTracker:
         return cls._memory_counts.get(count_key, 0)
 
     @classmethod
+    async def register_hls_viewer(cls, stream_id: str, client_ip: str) -> None:
+        """Register/refresh an HLS viewer session in Redis with 15-second expiration."""
+        sess_key = f"vms:hls_session:{stream_id}:{client_ip}"
+        if redis_client:
+            try:
+                await redis_client.set(sess_key, "active", ex=15)
+            except Exception as e:
+                print(f"[viewer_tracker] Redis error during HLS register: {e}")
+
+    @classmethod
     async def get_viewer_count(cls, stream_id: str) -> int:
-        """Fetch the atomic viewer count for a stream."""
+        """Fetch the atomic viewer count for a stream (combining WebRTC sessions and active HLS sessions)."""
         count_key = f"vms:viewer_count:{stream_id}"
+        webrtc_count = 0
+        hls_count = 0
         if redis_client:
             try:
                 val = await redis_client.get(count_key)
-                return int(val) if val else 0
-            except Exception:
-                pass
-        return cls._memory_counts.get(count_key, 0)
+                webrtc_count = int(val) if val else 0
+                
+                # Scan for active HLS sessions (keys matching vms:hls_session:stream_id:*)
+                hls_keys = await redis_client.keys(f"vms:hls_session:{stream_id}:*")
+                hls_count = len(hls_keys)
+            except Exception as e:
+                print(f"[viewer_tracker] Redis error getting viewer counts: {e}")
+                
+        return (webrtc_count + hls_count) or cls._memory_counts.get(count_key, 0)

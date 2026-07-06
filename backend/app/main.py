@@ -1754,6 +1754,7 @@ async def restart_live(stream_id: str, session: Annotated[AsyncSession, Depends(
 @app.get("/api/streams/{stream_id}/live/index.m3u8")
 async def hls_playlist(
     stream_id: str,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
     target_stream_id = stream_id
@@ -1763,6 +1764,15 @@ async def hls_playlist(
         if stream:
             stream_id = stream.stream_id
             target_stream_id = stream_id
+            
+            # Register HLS viewer activity in Redis
+            try:
+                from .services.redis_viewer_tracker import RedisViewerTracker
+                client_ip = request.client.host if request.client else "unknown"
+                await RedisViewerTracker.register_hls_viewer(stream_id, client_ip)
+            except Exception as tracker_err:
+                print(f"[main] Failed to register HLS viewer for {stream_id}: {tracker_err}")
+                
             if stream.codec and stream.codec.upper() == "H265":
                 from .transcoder import transcoder_manager
                 target_stream_id = await transcoder_manager.ensure_transcoder(
@@ -1792,6 +1802,7 @@ async def hls_playlist(
 async def hls_segment(
     stream_id: str,
     filename: str,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
     target_stream_id = stream_id
@@ -1801,6 +1812,15 @@ async def hls_segment(
         if stream:
             stream_id = stream.stream_id
             target_stream_id = stream_id
+            
+            # Register HLS viewer activity in Redis
+            try:
+                from .services.redis_viewer_tracker import RedisViewerTracker
+                client_ip = request.client.host if request.client else "unknown"
+                await RedisViewerTracker.register_hls_viewer(target_stream_id, client_ip)
+            except Exception as tracker_err:
+                print(f"[main] Failed to register HLS viewer for segment {target_stream_id}: {tracker_err}")
+                
             if stream.codec and stream.codec.upper() == "H265":
                 target_stream_id = f"{stream_id}_h264"
     except Exception as e:
