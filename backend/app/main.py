@@ -2456,6 +2456,12 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                             if overlapping_segs:
                                 await insert_session.commit()
                                 print(f"[recovery] [manual] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
+                            
+                            # Try to merge any multiple files in this minute block
+                            from .schedulers import merge_minute_segments
+                            minute_start = float(int(temp_start // 60) * 60)
+                            await merge_minute_segments(insert_session, stream_id, minute_start)
+
                     else:
                         print(f"[recovery] [manual] [{stream_id}] FFmpeg exit code {proc.returncode} for: {filename}")
                         if output_path.exists():

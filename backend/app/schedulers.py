@@ -17,8 +17,8 @@ from .redis_client import RedisManager
 from .stream_manager import stream_manager
 
 # In-memory tracking of attempted gap recovery timestamps to prevent infinite retries for failed/offline gaps
-# Key format: (stream_id, int(start_ts))
-attempted_gaps = set()
+# Key format: (stream_id, int(start_ts)) -> attempts_count
+attempted_gaps = {}
 
 async def camera_scheduler_loop():
     """
@@ -352,19 +352,171 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
 
     return gaps
 
+async def merge_minute_segments(session, stream_id: str, minute_start: float):
+    """
+    Consolidates and merges multiple video files for the same stream that fall within 
+    the same 1-minute block [minute_start, minute_start + 60.0].
+    """
+    import tempfile
+    import os
+    from .models import RecordingSegment
+    from .config import settings
+    
+    # Query segments in this minute block
+    stmt = (
+        select(RecordingSegment)
+        .where(RecordingSegment.stream_id == stream_id)
+        .where(RecordingSegment.start_ts >= minute_start)
+        .where(RecordingSegment.start_ts < minute_start + 60.0)
+        .order_by(RecordingSegment.start_ts.asc())
+    )
+    res = await session.execute(stmt)
+    segs = list(res.scalars().all())
+    
+    if len(segs) < 2:
+        return
+        
+    # Verify physical files
+    recording_dir = Path(settings.recording_dir)
+    valid_segs = []
+    for seg in segs:
+        p = Path(seg.file_path)
+        abs_p = p if p.is_absolute() else recording_dir / p
+        if abs_p.exists() and abs_p.stat().st_size > 0:
+            valid_segs.append((seg, abs_p))
+            
+    if len(valid_segs) < 2:
+        return
+
+    # Sort segments by start_ts (asc), and duration (desc) in case of same start_ts
+    valid_segs.sort(key=lambda x: (x[0].start_ts, -(x[0].end_ts - x[0].start_ts)))
+    
+    # Prune redundant segments (completely contained inside other segments)
+    non_redundant = []
+    for seg, path in valid_segs:
+        is_contained = False
+        for other_seg, other_path in valid_segs:
+            if seg.id == other_seg.id:
+                continue
+            if other_seg.start_ts <= seg.start_ts and other_seg.end_ts >= seg.end_ts:
+                is_contained = True
+                break
+        if is_contained:
+            print(f"[recovery] [merge] Deleting redundant contained segment {seg.file_path} (inside {other_seg.file_path})")
+            await session.delete(seg)
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception as e:
+                print(f"[recovery] [merge] Failed to delete redundant file: {e}")
+        else:
+            non_redundant.append((seg, path))
+            
+    await session.commit()
+    
+    if len(non_redundant) < 2:
+        return
+        
+    # Prepare merge parameters
+    first_seg, first_path = non_redundant[0]
+    last_seg, last_path = non_redundant[-1]
+    
+    dt_start = datetime.fromtimestamp(first_seg.start_ts)
+    day_str = dt_start.strftime("%Y-%m-%d")
+    dest_dir = recording_dir / stream_id / day_str
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Standardized recovered filename format
+    filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{datetime.fromtimestamp(last_seg.end_ts).strftime('%H%M%S')}_recovered.mp4"
+    output_path = dest_dir / filename
+    
+    # Create temp concat list file
+    fd, temp_list_path = tempfile.mkstemp(suffix=".txt", text=True)
+    try:
+        with open(fd, 'w') as f:
+            for seg, abs_p in non_redundant:
+                escaped_path = str(abs_p).replace("'", "'\\''")
+                f.write(f"file '{escaped_path}'\n")
+                
+        # Run FFmpeg concat demuxer (-c copy)
+        cmd = [
+            settings.ffmpeg_path,
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", temp_list_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+        
+        if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            print(f"[recovery] [merge] Successfully merged {len(non_redundant)} segments into {filename}")
+            
+            # Remove old database records
+            for seg, _ in non_redundant:
+                await session.delete(seg)
+            await session.commit()
+            
+            # Add new merged segment
+            parts = Path(output_path).parts
+            relative_path = "/".join(parts[-3:])
+            
+            new_seg = RecordingSegment(
+                stream_id=stream_id,
+                file_path=relative_path,
+                start_ts=first_seg.start_ts,
+                end_ts=last_seg.end_ts
+            )
+            session.add(new_seg)
+            await session.commit()
+            
+            # Delete old files from disk
+            for _, abs_p in non_redundant:
+                try:
+                    if abs_p.exists() and abs_p != output_path:
+                        abs_p.unlink()
+                except Exception as e:
+                    print(f"[recovery] [merge] Failed to delete file {abs_p}: {e}")
+        else:
+            err_msg = stderr.decode(errors='replace')
+            print(f"[recovery] [merge] FFmpeg concat failed with exit code {proc.returncode}. Stderr: {err_msg}")
+            if output_path.exists():
+                output_path.unlink()
+    except Exception as e:
+        print(f"[recovery] [merge] Exception during merge: {e}")
+    finally:
+        try:
+            os.unlink(temp_list_path)
+        except Exception:
+            pass
+
 async def camera_gap_recovery_loop():
     """
     Scans the filesystem for recording gaps in the last 24 hours.
     Downloads the missing chunks from the camera's playback RTSP URL concurrently.
     """
     print("[recovery] Starting recording gap recovery loop...")
-    semaphore = asyncio.Semaphore(3) # Limit to 3 concurrent downloads
+    semaphore = asyncio.Semaphore(15) # Increased to 15 concurrent downloads
 
     # Short delay on startup to allow backend initialization
     await asyncio.sleep(5.0)
 
     while True:
         try:
+            # Prune attempted_gaps older than 24 hours to prevent memory growth
+            now_ts = time.time()
+            for key in list(attempted_gaps.keys()):
+                if now_ts - key[1] > 24 * 3600:
+                    del attempted_gaps[key]
+
             gaps_to_recover = []
             async for session in get_session():
                 # Get all active streams that are currently ONLINE
@@ -400,8 +552,9 @@ async def camera_gap_recovery_loop():
                                 chunk_end = gap_end
 
                             gap_key = (stream_id, int(curr))
-                            if gap_key not in attempted_gaps:
-                                attempted_gaps.add(gap_key)
+                            attempts = attempted_gaps.get(gap_key, 0)
+                            if attempts < 3:
+                                attempted_gaps[gap_key] = attempts + 1
                                 
                                 # Build recovery URL using vendor framework
                                 make_val = stream.camera.make if stream.camera else None
@@ -412,7 +565,8 @@ async def camera_gap_recovery_loop():
                                     "stream_id": stream_id,
                                     "recovery_url": recovery_url,
                                     "start_ts": curr,
-                                    "end_ts": chunk_end
+                                    "end_ts": chunk_end,
+                                    "codec": stream.codec
                                 })
                             
                             curr = chunk_end
@@ -428,6 +582,7 @@ async def camera_gap_recovery_loop():
                 temp_start = task["start_ts"]
                 temp_end = task["end_ts"]
                 recovery_url = task["recovery_url"]
+                stream_codec = task.get("codec")
 
                 dt_start = datetime.fromtimestamp(temp_start)
                 day_str = dt_start.strftime("%Y-%m-%d")
@@ -478,9 +633,36 @@ async def camera_gap_recovery_loop():
                             output_path.unlink()
                         except Exception:
                             pass
+                is_hevc = stream_codec and stream_codec.lower() in ("hevc", "h265")
+
+                if not is_hevc:
+                    try:
+                        cmd_probe = [
+                            "ffprobe", "-v", "error",
+                            "-rtsp_transport", "tcp",
+                            "-select_streams", "v:0",
+                            "-show_entries", "stream=codec_name",
+                            "-of", "default=noprint_wrappers=1:nokey=1",
+                            recovery_url
+                        ]
+                        proc_probe = await asyncio.create_subprocess_exec(
+                            *cmd_probe,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                        if proc_probe.returncode == 0:
+                            codec_name = stdout_probe.decode().strip()
+                            if codec_name.lower() in ("hevc", "h265"):
+                                is_hevc = True
+                                print(f"[recovery] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
+                    except Exception as probe_err:
+                        print(f"[recovery] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
+
+                codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-an"] if is_hevc else ["-c:v", "copy", "-an"]
 
                 async with semaphore:
-                    print(f"[recovery] [{stream_id}] Downloading gap segment: {filename}...")
+                    print(f"[recovery] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {is_hevc})...")
                     cmd = [
                         settings.ffmpeg_path,
                         "-hide_banner",
@@ -489,10 +671,7 @@ async def camera_gap_recovery_loop():
                         "-stimeout", "15000000",
                         "-i", recovery_url,
                         "-t", str(temp_end - temp_start),
-                        "-c:v", "copy",
-                        "-an",
-                        str(output_path)
-                    ]
+                    ] + codec_args + ["-movflags", "+faststart", str(output_path)]
 
                     try:
                         proc = await asyncio.create_subprocess_exec(
@@ -549,16 +728,18 @@ async def camera_gap_recovery_loop():
                                     if overlapping_segs:
                                         await insert_session.commit()
                                         print(f"[recovery] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
+
+                                    # Try to merge any multiple files in this minute block
+                                    minute_start = float(int(temp_start // 60) * 60)
+                                    await merge_minute_segments(insert_session, stream_id, minute_start)
                             except Exception as index_err:
                                 print(f"[recovery] [{stream_id}] Failed to index recovered segment: {index_err}")
                         else:
                             print(f"[recovery] [{stream_id}] FFmpeg failed with exit code {proc.returncode} for clip: {filename}")
-                            attempted_gaps.discard((stream_id, temp_start))
                             if output_path.exists():
                                 output_path.unlink()
                     except asyncio.TimeoutError:
                         print(f"[recovery] [{stream_id}] Timeout downloading gap clip: {filename}")
-                        attempted_gaps.discard((stream_id, temp_start))
                         try:
                             proc.kill()
                         except Exception:
@@ -567,7 +748,6 @@ async def camera_gap_recovery_loop():
                             output_path.unlink()
                     except Exception as e:
                         print(f"[recovery] [{stream_id}] Error running FFmpeg for recovery: {e}")
-                        attempted_gaps.discard((stream_id, temp_start))
                         if output_path.exists():
                             output_path.unlink()
 
