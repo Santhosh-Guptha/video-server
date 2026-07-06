@@ -41,17 +41,22 @@ async def camera_health_worker_loop():
                     
                     # Process and commit updates sequentially using the active session to avoid pool exhaustion
                     updates_count = 0
+                    print(f"[worker] Sample results from watchdog: {results[:5]}")
                     for res in results:
                         if isinstance(res, tuple):
                             stream_id, status = res
                             old_status = stream_status_map.get(stream_id)
-                            if old_status != status:
+                            # Convert old_status to string for comparison if it is an enum
+                            old_status_str = old_status.value if hasattr(old_status, "value") else str(old_status)
+                            if old_status_str != status:
                                 await StreamRegistry.update_stream_state(stream_id, status, None, session)
                                 updates_count += 1
                                 
                     if updates_count > 0:
                         await session.commit()
                         print(f"[worker] Camera health watchdog updated status for {updates_count} streams.")
+                    else:
+                        print("[worker] Camera health watchdog completed with 0 updates.")
                 
                 # Break out of the session generator loop
                 break
