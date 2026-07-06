@@ -146,46 +146,44 @@ async def get_ice_servers(request: Request):
             "urls": settings.stun_servers
         })
         
-    # Add TURN server if configured and active
+    # Add TURN server if configured
     if settings.turn_server_url:
-        from .health_monitor import check_coturn_health
-        if await check_coturn_health():
-            turn_url = settings.turn_server_url
-            if "localhost" in turn_url or "127.0.0.1" in turn_url:
-                host = None
-                referer = request.headers.get("referer")
-                if referer:
+        turn_url = settings.turn_server_url
+        if "localhost" in turn_url or "127.0.0.1" in turn_url:
+            host = None
+            referer = request.headers.get("referer")
+            if referer:
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(referer).hostname
+                except Exception:
+                    pass
+            if not host:
+                origin = request.headers.get("origin")
+                if origin:
                     try:
                         from urllib.parse import urlparse
-                        host = urlparse(referer).hostname
+                        host = urlparse(origin).hostname
                     except Exception:
                         pass
-                if not host:
-                    origin = request.headers.get("origin")
-                    if origin:
-                        try:
-                            from urllib.parse import urlparse
-                            host = urlparse(origin).hostname
-                        except Exception:
-                            pass
-                if not host:
-                    host = request.headers.get("x-forwarded-host")
-                    if host and ":" in host:
-                        host = host.split(":")[0]
-                if not host:
-                    host = request.url.hostname
-                    
-                host = host or "localhost"
-                turn_url = turn_url.replace("localhost", host).replace("127.0.0.1", host)
+            if not host:
+                host = request.headers.get("x-forwarded-host")
+                if host and ":" in host:
+                    host = host.split(":")[0]
+            if not host:
+                host = request.url.hostname
                 
-            turn_config = {
-                "urls": [turn_url]
-            }
-            if settings.turn_server_username:
-                turn_config["username"] = settings.turn_server_username
-            if settings.turn_server_credential:
-                turn_config["credential"] = settings.turn_server_credential
-            ice_servers.append(turn_config)
+            host = host or "localhost"
+            turn_url = turn_url.replace("localhost", host).replace("127.0.0.1", host)
+            
+        turn_config = {
+            "urls": [turn_url]
+        }
+        if settings.turn_server_username:
+            turn_config["username"] = settings.turn_server_username
+        if settings.turn_server_credential:
+            turn_config["credential"] = settings.turn_server_credential
+        ice_servers.append(turn_config)
         
     return {"iceServers": ice_servers}
 
