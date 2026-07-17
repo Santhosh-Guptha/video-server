@@ -3414,3 +3414,222 @@ async def delete_camera(
 
     await invalidate_cameras_cache()
     return {"status": "ok", "message": f"Camera {camera.name} and stream {stream_id} deleted successfully"}
+
+
+# Playback integration for client portal
+class ManifestDataPayload(BaseModel):
+    cameraId: str
+    start_date: str
+
+class ReaderFilePayload(BaseModel):
+    cameraId: str
+    date: str
+    filename: str
+
+class PlaybackDownloadPayload(BaseModel):
+    cameraId: str
+    start_date: str
+    end_date: str
+
+async def get_stream_by_camera_id(camera_id_str: str, db: AsyncSession):
+    try:
+        cam_id_int = int(camera_id_str)
+        stmt = select(CameraStream).join(Camera).where(Camera.source_camera_id == cam_id_int)
+        res = await db.execute(stmt)
+        stream = res.scalar_one_or_none()
+        if stream:
+            return stream
+    except ValueError:
+        pass
+
+    stmt = select(CameraStream).where(CameraStream.stream_id == camera_id_str)
+    res = await db.execute(stmt)
+    stream = res.scalar_one_or_none()
+    if stream:
+        return stream
+
+    stmt = select(CameraStream).where(CameraStream.stream_id == f"cam_{camera_id_str}_main")
+    res = await db.execute(stmt)
+    stream = res.scalar_one_or_none()
+    if stream:
+        return stream
+
+    try:
+        cam_uuid = uuid.UUID(camera_id_str)
+        stmt = select(CameraStream).where(CameraStream.camera_id == cam_uuid)
+        res = await db.execute(stmt)
+        stream = res.scalar_one_or_none()
+        if stream:
+            return stream
+    except ValueError:
+        pass
+
+    return None
+
+@app.post("/api/playback/manifestdata")
+async def playback_manifestdata(
+    payload: ManifestDataPayload,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    stream = await get_stream_by_camera_id(payload.cameraId, session)
+    if not stream:
+        return {
+            "status_code": 404,
+            "errorMessage": f"Camera or stream not found for ID: {payload.cameraId}",
+            "streams": []
+        }
+
+    await sync_disk_recordings_to_db(stream.stream_id, session)
+
+    try:
+        dt = datetime.strptime(payload.start_date.strip(), "%Y-%m-%d %H-%M")
+    except Exception:
+        try:
+            dt = datetime.strptime(payload.start_date.strip().replace("-", ":"), "%Y:%m:%d %H:%M")
+        except Exception:
+            return {
+                "status_code": 400,
+                "errorMessage": f"Invalid start_date format. Expected YYYY-MM-DD HH-mm, got: {payload.start_date}",
+                "streams": []
+            }
+
+    hour_start = dt.replace(minute=0, second=0, microsecond=0)
+    hour_end = dt.replace(minute=59, second=59, microsecond=999999)
+    
+    stmt = (
+        select(RecordingSegment)
+        .where(RecordingSegment.stream_id == stream.stream_id)
+        .where(RecordingSegment.end_ts >= hour_start.timestamp())
+        .where(RecordingSegment.start_ts <= hour_end.timestamp())
+        .order_by(RecordingSegment.start_ts.asc())
+    )
+    res = await session.execute(stmt)
+    segments = list(res.scalars().all())
+
+    streams_list = []
+    for seg in segments:
+        seg_dt = datetime.fromtimestamp(seg.start_ts)
+        filename = f"{seg_dt.strftime('%Y-%m-%d-%H-%M')}_{seg.id}.mp4"
+        streams_list.append(filename)
+
+    return {
+        "status_code": 200,
+        "streams": streams_list
+    }
+
+@app.post("/api/playback/readerFile")
+async def playback_reader_file(
+    payload: ReaderFilePayload,
+    videoType: str = "mp4",
+    range: Optional[str] = Header(None),
+    session: Annotated[AsyncSession, Depends(get_session)] = None
+):
+    try:
+        parts = payload.filename.rsplit("_", 1)
+        if len(parts) < 2:
+             raise HTTPException(status_code=400, detail="Invalid filename format")
+        seg_id_str = parts[1].split(".")[0]
+        seg_id = int(seg_id_str)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse segment ID from filename: {payload.filename}")
+
+    stmt = select(RecordingSegment).where(RecordingSegment.id == seg_id)
+    res = await session.execute(stmt)
+    segment = res.scalar_one_or_none()
+    if not segment:
+        raise HTTPException(status_code=404, detail=f"Recording segment not found: {seg_id}")
+
+    file_path = segment.file_path
+    p = Path(file_path)
+    if not p.is_absolute() or not p.exists():
+        parts = Path(file_path).parts
+        rel_path = "/".join(parts[-3:])
+        from .config import settings
+        p = Path(settings.recording_dir) / rel_path
+
+    if not p.exists():
+        raise HTTPException(404, f"File not found: {file_path}")
+
+    file_path = str(p)
+    file_size = os.path.getsize(file_path)
+
+    if not range:
+        return FileResponse(file_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
+
+    try:
+        range_val = range.strip().split("=")[-1]
+        start_str, end_str = range_val.split("-")
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else file_size - 1
+    except Exception:
+        return FileResponse(file_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
+
+    if start >= file_size or end >= file_size or start > end:
+        return Response(
+            status_code=416,
+            headers={"Content-Range": f"bytes */{file_size}"}
+        )
+
+    chunk_size = end - start + 1
+
+    def file_generator():
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            bytes_left = chunk_size
+            while bytes_left > 0:
+                to_read = min(65536, bytes_left)
+                data = f.read(to_read)
+                if not data:
+                    break
+                bytes_left -= len(data)
+                yield data
+
+    return StreamingResponse(
+        file_generator(),
+        status_code=206,
+        media_type="video/mp4",
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(chunk_size),
+        }
+    )
+
+@app.post("/api/playback/download")
+async def playback_download(
+    payload: PlaybackDownloadPayload,
+    session: Annotated[AsyncSession, Depends(get_session)]
+):
+    stream = await get_stream_by_camera_id(payload.cameraId, session)
+    if not stream:
+        raise HTTPException(404, f"Camera or stream not found for ID: {payload.cameraId}")
+
+    try:
+        start_dt = datetime.strptime(payload.start_date.strip(), "%Y-%m-%d %H-%M")
+    except Exception:
+        try:
+            start_dt = datetime.strptime(payload.start_date.strip(), "%Y-%m-%d %H-%M-%S")
+        except Exception:
+            try:
+                start_dt = datetime.strptime(payload.start_date.strip(), "%Y-%m-%d %H:%M:%S")
+            except Exception as e:
+                raise HTTPException(400, f"Invalid start_date format: {payload.start_date}")
+
+    try:
+        end_dt = datetime.strptime(payload.end_date.strip(), "%Y-%m-%d %H-%M")
+    except Exception:
+        try:
+            end_dt = datetime.strptime(payload.end_date.strip(), "%Y-%m-%d %H-%M-%S")
+        except Exception:
+            try:
+                end_dt = datetime.strptime(payload.end_date.strip(), "%Y-%m-%d %H:%M:%S")
+            except Exception as e:
+                raise HTTPException(400, f"Invalid end_date format: {payload.end_date}")
+
+    return await download_recording(
+        stream_id=stream.stream_id,
+        start_time=str(start_dt.timestamp()),
+        end_time=str(end_dt.timestamp()),
+        session=session
+    )
+
