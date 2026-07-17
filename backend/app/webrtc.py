@@ -86,13 +86,22 @@ async def resolve_stream_by_identifier(
 ) -> Optional[CameraStream]:
     """
     Resolves a camera stream from a flexible identifier (exact stream_id,
-    case-insensitive stream_id, stream_id prefix, or camera name).
-    Always returns the exact matching stream config, without any sibling fallback
-    or switching to other stream profiles.
+    case-insensitive stream_id, server_camera_id, source_camera_id,
+    stream_id prefix, or camera name).
+    Always returns the best matching stream config, prioritizing MAIN/HD streams.
     """
     if not identifier:
         return None
         
+    def get_best_stream(streams_list):
+        if not streams_list:
+            return None
+        def sort_key(s: CameraStream):
+            is_main = getattr(s, "profile_type", "").upper() == "MAIN"
+            ends_hd = s.stream_id.lower().endswith(("_hd", "_main"))
+            return (not is_main, not ends_hd, s.stream_id)
+        return sorted(streams_list, key=sort_key)[0]
+
     # 1. Exact match on stream_id
     stmt = select(CameraStream).where(CameraStream.stream_id == identifier)
     res = await db_session.execute(stmt)
@@ -106,17 +115,29 @@ async def resolve_stream_by_identifier(
     stream = res.scalar_one_or_none()
     if stream:
         return stream
+
+    # 3. Match on integer source_camera_id
+    try:
+        cam_id_int = int(identifier)
+        stmt = select(CameraStream).join(Camera).where(Camera.source_camera_id == cam_id_int)
+        res = await db_session.execute(stmt)
+        streams = res.scalars().all()
+        if streams:
+            return get_best_stream(streams)
+    except ValueError:
+        pass
         
-    # 3. Check if the identifier matches a camera name (case-insensitive) or stream_id prefix
+    # 4. Check if the identifier matches a camera server_camera_id, name, or stream_id prefix
     stmt = select(CameraStream).join(Camera).where(
         (func.lower(CameraStream.stream_id).like(f"{identifier.lower()}%")) |
+        (func.lower(Camera.server_camera_id) == identifier.lower()) |
         (func.lower(Camera.name) == identifier.lower())
     )
     res = await db_session.execute(stmt)
     streams = res.scalars().all()
     
     if streams:
-        return streams[0]
+        return get_best_stream(streams)
         
     return None
 
