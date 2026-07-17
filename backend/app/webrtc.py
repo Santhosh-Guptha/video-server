@@ -329,6 +329,11 @@ async def proxy_signaling_session(
     if request.method == "OPTIONS":
         return Response(status_code=204)
 
+    # Resolve stream_id dynamically to prioritize MAIN/HD
+    stream = await resolve_stream_by_identifier(stream_id, db_session)
+    if stream:
+        stream_id = stream.stream_id
+
     # 1. Enforce stream viewer limits
     from .config import MAX_WEBRTC_SESSIONS_PER_CAMERA
     viewer_count = await RedisViewerTracker.get_viewer_count(stream_id)
@@ -384,6 +389,11 @@ async def proxy_signaling_action(
 
     if request.method == "OPTIONS":
         return Response(status_code=204)
+
+    # Resolve stream_id dynamically to prioritize MAIN/HD
+    stream = await resolve_stream_by_identifier(stream_id, db_session)
+    if stream:
+        stream_id = stream.stream_id
 
     body_bytes = await request.body()
     content_type = request.headers.get("Content-Type", "application/sdp")
