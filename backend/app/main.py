@@ -678,7 +678,11 @@ async def record_segment_complete(
         raise HTTPException(status_code=400, detail=f"Unregistered stream or camera: {payload.stream_id}")
 
     if settings.strict_camera_validation:
-        camera = stream.camera
+        from .models import Camera
+        res_cam = await session.execute(
+            select(Camera).where(Camera.id == stream.camera_id)
+        )
+        camera = res_cam.scalar_one_or_none()
         if not camera or not camera.active:
             print(f"[webhook] Rejected indexing segment for stream: stream_id={payload.stream_id} reason=inactive")
             return {"status": "ignored", "reason": "strict_validation_failed"}
