@@ -1523,6 +1523,9 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             session.add(camera)
             await session.flush()
         else:
+            # Never overwrite a camera that was manually set to LOCAL
+            if camera.camera_source == "LOCAL":
+                continue
             camera.name = name
             camera.active = active
             camera.make = make
