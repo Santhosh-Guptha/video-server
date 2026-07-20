@@ -1506,7 +1506,10 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
         # 1. Sync Camera Parent Row
         make = raw.get("make")
         res = await session.execute(
-            select(Camera).where(Camera.source_camera_id == source_id)
+            select(Camera).where(
+                (Camera.source_camera_id == source_id) |
+                (Camera.server_camera_id == server_cam_id)
+            )
         )
         camera = res.scalar_one_or_none()
         if not camera:
