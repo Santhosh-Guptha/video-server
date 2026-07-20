@@ -40,7 +40,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
         const allCams = await res.json() as Camera[]
         // Filter standard cameras that are active
         const activeCams = allCams.filter(
-          c => c.active && c.streams && c.streams.length > 0 && c.streams[0].stream_url.startsWith("rtsp://")
+          c => c.active && c.streams && c.streams.length > 0
         )
         setActiveCameras(activeCams)
         
