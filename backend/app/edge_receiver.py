@@ -287,8 +287,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                                 pass
 
                         # Dynamically patch MediaMTX path config to publisher to accept edge push relayer
-                        from .stream_manager import should_record
-                        record_for_push = should_record(stream) if stream else True
+                        from .stream_manager import should_record_stream
+                        record_for_push = await should_record_stream(db_session, stream) if stream else True
 
                         async with httpx.AsyncClient() as client:
                             url = f"{settings.mediamtx_api_url}/v3/config/paths/patch/{path_name}"
