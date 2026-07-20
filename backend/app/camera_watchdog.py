@@ -143,12 +143,11 @@ def _is_valid_rtsp(url: str) -> bool:
 async def camera_health_watchdog_loop():
     """
     Background loop that checks camera health every CAMERA_PING_INTERVAL_SECONDS.
-
-    Priority chain per stream:
-      1. Active Edge Push  → keep as EDGE_PUSH, skip RTSP checks
-      2. MediaMTX ready    → ONLINE (RTSP_PULL)
-      3. ffprobe RTSP      → CONNECTING if reachable, OFFLINE if not
+    Runs camera health check by grouping streams per active Camera and validating
+    reachability of preferred or fallback RTSP profiles.
     """
+    from sqlalchemy.orm import selectinload
+    from .webrtc import resolve_stream_by_identifier
     print(f"[watchdog] Camera health watchdog starting (interval={CAMERA_PING_INTERVAL_SECONDS}s)...")
 
     # Initial delay so system boots fully before first check
@@ -159,21 +158,21 @@ async def camera_health_watchdog_loop():
     while True:
         try:
             from .stream_manager import _mtx_request
-            # ── 1. Fetch active streams from DB ──────────────────────────
-            active_streams: list[CameraStream] = []
+            # ── 1. Fetch active cameras from DB ──────────────────────────
+            active_cameras: list[Camera] = []
             async for session in get_session():
                 res = await session.execute(
-                    select(CameraStream)
-                    .join(Camera)
+                    select(Camera)
+                    .options(selectinload(Camera.streams))
                     .where(Camera.active == True)
                 )
-                active_streams = list(res.scalars().all())
+                active_cameras = list(res.scalars().all())
 
-            if not active_streams:
+            if not active_cameras:
                 await asyncio.sleep(CAMERA_PING_INTERVAL_SECONDS)
                 continue
 
-            print(f"[watchdog] Health check cycle: {len(active_streams)} active streams")
+            print(f"[watchdog] Health check cycle: {len(active_cameras)} active cameras")
 
             # ── 2. Fetch MediaMTX runtime path status ────────────────────
             mediamtx_ready: dict[str, bool] = {}
@@ -194,71 +193,92 @@ async def camera_health_watchdog_loop():
             except Exception as e:
                 print(f"[watchdog] Failed to query MediaMTX path status: {e}")
 
-            # ── 3. Process each stream ────────────────────────────────────
-            async def check_stream(stream: CameraStream):
-                stream_id = stream.stream_id
-                rtsp_url = stream.stream_url.strip() if stream.stream_url else ""
+            # ── 3. Process each camera ────────────────────────────────────
+            async def check_camera_health(camera: Camera):
+                if not camera.streams:
+                    return
 
+                path_name = camera.server_camera_id or camera.name or camera.streams[0].stream_id
+                
                 async with semaphore:
                     # ── P1: Check for active Edge Push ──────────────────
-                    last_push_ts = await RedisManager.get_last_push_seen(stream_id)
-                    if last_push_ts is None and stream.last_push_seen:
-                        last_push_ts = stream.last_push_seen.timestamp()
+                    last_push_ts = await RedisManager.get_last_push_seen(path_name)
+                    
+                    recent_db_ts = None
+                    for s in camera.streams:
+                        if s.last_push_seen:
+                            ts_val = s.last_push_seen.timestamp()
+                            if recent_db_ts is None or ts_val > recent_db_ts:
+                                recent_db_ts = ts_val
+                                
+                    if last_push_ts is None and recent_db_ts is not None:
+                        last_push_ts = recent_db_ts
 
                     if _has_recent_push(last_push_ts):
-                        # Camera is actively being pushed from an edge device
-                        # Ensure MediaMTX path is set to publisher (idempotent PATCH)
-                        if stream.stream_source != "EDGE_PUSH":
-                            print(f"[watchdog] {stream_id}: Active edge push detected → switching to EDGE_PUSH")
-                            ok = await _patch_mediamtx(stream_id, {
-                                "source": "publisher",
-                                "sourceOnDemand": False,
-                            })
-                            if ok:
-                                async for session in get_session():
-                                    stream_db = await session.get(CameraStream, stream.id)
+                        async for session in get_session():
+                            best_stream = await resolve_stream_by_identifier(path_name, session)
+                            if not best_stream:
+                                best_stream = camera.streams[0]
+                                
+                            if best_stream.stream_source != "EDGE_PUSH":
+                                print(f"[watchdog] {path_name}: Active edge push detected → switching to EDGE_PUSH")
+                                from .stream_manager import should_record_stream
+                                rec_val = await should_record_stream(session, best_stream)
+                                ok = await _patch_mediamtx(path_name, {
+                                    "source": "publisher",
+                                    "sourceOnDemand": False,
+                                    "record": rec_val,
+                                })
+                                if ok:
+                                    stream_db = await session.get(CameraStream, best_stream.id)
                                     if stream_db:
                                         stream_db.stream_source = "EDGE_PUSH"
                                         await session.commit()
                                         await stream_manager.set_stream_state(
                                             session, stream_db, StreamState.ONLINE
                                         )
-                        return  # Skip all RTSP checks
+                        return
 
-                    # ── P2: MediaMTX reports stream as ready ─────────────
-                    if mediamtx_ready.get(stream_id, False):
-                        # Stream is actively delivering packets — all good
-                        if stream.status != StreamState.ONLINE:
-                            async for session in get_session():
-                                stream_db = await session.get(CameraStream, stream.id)
+                    # ── P2: MediaMTX reports path is ready ──────────────
+                    if mediamtx_ready.get(path_name, False):
+                        async for session in get_session():
+                            best_stream = await resolve_stream_by_identifier(path_name, session)
+                            if not best_stream:
+                                best_stream = camera.streams[0]
+                            if best_stream.status != StreamState.ONLINE:
+                                stream_db = await session.get(CameraStream, best_stream.id)
                                 if stream_db:
                                     stream_db.stream_source = "RTSP_PULL"
                                     await session.commit()
                                     await stream_manager.set_stream_state(
                                         session, stream_db, StreamState.ONLINE
                                     )
-                        return  # Healthy — nothing to do
-
-                    # ── P3: MediaMTX reports not ready — run ffprobe ─────
-                    if not _is_valid_rtsp(rtsp_url):
-                        # No valid RTSP source and not ready → OFFLINE
-                        if stream.status not in (StreamState.OFFLINE, StreamState.DISABLED):
-                            async for session in get_session():
-                                stream_db = await session.get(CameraStream, stream.id)
-                                if stream_db:
-                                    await stream_manager.set_stream_state(
-                                        session, stream_db, StreamState.OFFLINE,
-                                        "No valid RTSP source and not active"
-                                    )
                         return
 
-                    print(f"[watchdog] {stream_id}: not ready in MediaMTX — running ffprobe...")
-                    reachable = await _ffprobe_rtsp(rtsp_url, CAMERA_PING_TIMEOUT_SECONDS)
-
-                    if reachable:
-                        print(f"[watchdog] {stream_id}: RTSP reachable → CONNECTING")
-                        async for session in get_session():
-                            stream_db = await session.get(CameraStream, stream.id)
+                    # ── P3: MediaMTX path not ready — ping primary RTSP url, fallback to secondary
+                    async for session in get_session():
+                        best_stream = await resolve_stream_by_identifier(path_name, session)
+                        if not best_stream:
+                            best_stream = camera.streams[0]
+                            
+                        rtsp_url = best_stream.stream_url.strip() if best_stream.stream_url else ""
+                        
+                        reachable = False
+                        if _is_valid_rtsp(rtsp_url):
+                            print(f"[watchdog] {path_name}: checking primary stream...")
+                            reachable = await _ffprobe_rtsp(rtsp_url, CAMERA_PING_TIMEOUT_SECONDS)
+                            
+                        if reachable:
+                            print(f"[watchdog] {path_name}: primary RTSP reachable → CONNECTING")
+                            from .stream_manager import should_record_stream
+                            rec_val = await should_record_stream(session, best_stream)
+                            await _patch_mediamtx(path_name, {
+                                "source": double_escape_rtsp_url(rtsp_url),
+                                "sourceProtocol": "tcp",
+                                "sourceOnDemand": True,
+                                "record": rec_val,
+                            })
+                            stream_db = await session.get(CameraStream, best_stream.id)
                             if stream_db:
                                 stream_db.stream_source = "RTSP_PULL"
                                 await session.commit()
@@ -266,18 +286,54 @@ async def camera_health_watchdog_loop():
                                     await stream_manager.set_stream_state(
                                         session, stream_db, StreamState.CONNECTING
                                     )
-                    else:
-                        print(f"[watchdog] {stream_id}: RTSP unreachable → OFFLINE")
-                        async for session in get_session():
-                            stream_db = await session.get(CameraStream, stream.id)
-                            if stream_db and stream_db.status != StreamState.OFFLINE:
+                            return
+
+                        # Primary not reachable. Try fallback (the other profile)
+                        fallback_stream = next((s for s in camera.streams if s.id != best_stream.id), None)
+                        fallback_reachable = False
+                        fallback_rtsp = fallback_stream.stream_url.strip() if (fallback_stream and fallback_stream.stream_url) else ""
+                        
+                        if fallback_stream and _is_valid_rtsp(fallback_rtsp):
+                            print(f"[watchdog] {path_name}: primary unreachable, trying fallback profile...")
+                            fallback_reachable = await _ffprobe_rtsp(fallback_rtsp, CAMERA_PING_TIMEOUT_SECONDS)
+                            
+                        if fallback_reachable:
+                            print(f"[watchdog] {path_name}: fallback RTSP reachable → CONNECTING fallback")
+                            from .stream_manager import should_record_stream
+                            rec_val = await should_record_stream(session, fallback_stream)
+                            await _patch_mediamtx(path_name, {
+                                "source": double_escape_rtsp_url(fallback_rtsp),
+                                "sourceProtocol": "tcp",
+                                "sourceOnDemand": True,
+                                "record": rec_val,
+                            })
+                            
+                            fallback_db = await session.get(CameraStream, fallback_stream.id)
+                            if fallback_db:
+                                fallback_db.stream_source = "RTSP_PULL"
+                                await session.commit()
                                 await stream_manager.set_stream_state(
-                                    session, stream_db, StreamState.OFFLINE,
-                                    "RTSP unreachable (ffprobe timeout)"
+                                    session, fallback_db, StreamState.CONNECTING
+                                )
+                                
+                            pref_db = await session.get(CameraStream, best_stream.id)
+                            if pref_db:
+                                await stream_manager.set_stream_state(
+                                    session, pref_db, StreamState.OFFLINE, "Primary offline, fallback active"
+                                )
+                            return
+
+                        # Both unreachable → OFFLINE
+                        print(f"[watchdog] {path_name}: both primary and fallback unreachable")
+                        for s in camera.streams:
+                            s_db = await session.get(CameraStream, s.id)
+                            if s_db and s_db.status != StreamState.OFFLINE:
+                                await stream_manager.set_stream_state(
+                                    session, s_db, StreamState.OFFLINE,
+                                    "Primary and fallback RTSP unreachable"
                                 )
 
-            # Run checks concurrently (bounded by semaphore)
-            await asyncio.gather(*[check_stream(s) for s in active_streams])
+            await asyncio.gather(*[check_camera_health(c) for c in active_cameras])
 
         except Exception as e:
             print(f"[watchdog] Error in camera health watchdog: {e}")
@@ -297,6 +353,8 @@ async def edge_push_watchdog_loop():
 
     Runs every EDGE_PUSH_CHECK_INTERVAL_SECONDS (default: 30s).
     """
+    from sqlalchemy.orm import selectinload
+    from .webrtc import resolve_stream_by_identifier
     print(f"[watchdog] Edge push watchdog starting (interval={EDGE_PUSH_CHECK_INTERVAL_SECONDS}s)...")
 
     # Small delay so health watchdog starts first
@@ -305,50 +363,57 @@ async def edge_push_watchdog_loop():
     while True:
         try:
             async for session in get_session():
-                # Find all streams currently marked as EDGE_PUSH
+                # Find all active cameras
                 res = await session.execute(
-                    select(CameraStream)
-                    .join(Camera)
+                    select(Camera)
+                    .options(selectinload(Camera.streams))
                     .where(Camera.active == True)
-                    .where(CameraStream.stream_source == "EDGE_PUSH")
                 )
-                push_streams = list(res.scalars().all())
+                active_cameras = list(res.scalars().all())
 
-                for stream in push_streams:
-                    stream_id = stream.stream_id
-
+                for camera in active_cameras:
+                    if not camera.streams:
+                        continue
+                    path_name = camera.server_camera_id or camera.name or camera.streams[0].stream_id
+                    
+                    # Check if any stream of this camera is currently marked as EDGE_PUSH
+                    push_stream = next((s for s in camera.streams if s.stream_source == "EDGE_PUSH"), None)
+                    if not push_stream:
+                        continue
+                        
                     # Check last push heartbeat
-                    last_push_ts = await RedisManager.get_last_push_seen(stream_id)
-                    if last_push_ts is None and stream.last_push_seen:
-                        last_push_ts = stream.last_push_seen.timestamp()
+                    last_push_ts = await RedisManager.get_last_push_seen(path_name)
+                    if last_push_ts is None and push_stream.last_push_seen:
+                        last_push_ts = push_stream.last_push_seen.timestamp()
 
                     if _has_recent_push(last_push_ts):
-                        # Still active — nothing to do
                         continue
 
                     # Heartbeat timed out → revert to RTSP_PULL
-                    rtsp_url = stream.stream_url.strip() if stream.stream_url else ""
+                    best_stream = await resolve_stream_by_identifier(path_name, session)
+                    if not best_stream:
+                        best_stream = push_stream
+                        
+                    rtsp_url = best_stream.stream_url.strip() if best_stream.stream_url else ""
                     print(
-                        f"[watchdog] {stream_id}: Edge push heartbeat expired "
+                        f"[watchdog] {path_name}: Edge push heartbeat expired "
                         f"({EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS}s) → reverting to RTSP_PULL"
                     )
 
                     if _is_valid_rtsp(rtsp_url):
-                        # Patch MediaMTX source back to RTSP URL
-                        patched = await _patch_mediamtx(stream_id, {
+                        patched = await _patch_mediamtx(path_name, {
                             "source": double_escape_rtsp_url(rtsp_url),
                             "sourceProtocol": "tcp",
-                            "sourceOnDemand": not stream.always_on,
+                            "sourceOnDemand": not best_stream.always_on,
                         })
                         if patched:
-                            print(f"[watchdog] {stream_id}: Patched MediaMTX source → {rtsp_url}")
+                            print(f"[watchdog] {path_name}: Patched MediaMTX source → {rtsp_url}")
                         else:
-                            print(f"[watchdog] {stream_id}: Failed to patch MediaMTX source to RTSP URL")
+                            print(f"[watchdog] {path_name}: Failed to patch MediaMTX source to RTSP URL")
                     else:
-                        print(f"[watchdog] {stream_id}: No valid RTSP URL for revert — marking OFFLINE")
+                        print(f"[watchdog] {path_name}: No valid RTSP URL for revert — marking OFFLINE")
 
-                    # Update stream state
-                    stream_db = await session.get(CameraStream, stream.id)
+                    stream_db = await session.get(CameraStream, best_stream.id)
                     if stream_db:
                         stream_db.stream_source = "RTSP_PULL"
                         await session.commit()
@@ -358,8 +423,7 @@ async def edge_push_watchdog_loop():
                             None if _is_valid_rtsp(rtsp_url) else "Edge push disconnected, no RTSP fallback"
                         )
 
-                    # Clear the stale push heartbeat from Redis
-                    await RedisManager.clear_last_push_seen(stream_id)
+                    await RedisManager.clear_last_push_seen(path_name)
 
         except Exception as e:
             print(f"[watchdog] Error in edge push watchdog: {e}")

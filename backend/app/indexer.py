@@ -58,17 +58,53 @@ async def index_recordings(session, recording_dir):
             )
         await session.commit()
 
-    # 4. Fetch registered camera stream_ids to satisfy Foreign Key constraints
-    if settings.strict_camera_validation:
-        from .models import Camera
-        stream_res = await session.execute(
-            select(CameraStream.stream_id)
-            .join(Camera)
-            .where(Camera.active == True)
-        )
-    else:
-        stream_res = await session.execute(select(CameraStream.stream_id))
-    registered_streams = set(stream_res.scalars().all())
+    # 4. Fetch active cameras and their streams to build camera ID -> stream ID mapping
+    from .models import Camera
+    from sqlalchemy.orm import selectinload
+    from sqlalchemy import func
+    
+    stmt = (
+        select(Camera)
+        .options(selectinload(Camera.streams))
+        .where(Camera.active == True)
+    )
+    res = await session.execute(stmt)
+    active_cameras = res.scalars().all()
+    
+    camera_id_to_stream_id = {}
+    for cam in active_cameras:
+        cam_id = cam.server_camera_id or cam.name
+        if not cam_id:
+            continue
+        
+        best_stream = None
+        if cam.streams:
+            pref = settings.preferred_profile.upper() if hasattr(settings, "preferred_profile") else "HD"
+            if pref in ("NORMAL", "SUB"):
+                target = "SUB"
+                fallback = "MAIN"
+            else:
+                target = "MAIN"
+                fallback = "SUB"
+            
+            def sort_key(s):
+                profile_upper = (s.profile_type.value if hasattr(s.profile_type, 'value') else str(s.profile_type)).upper()
+                is_preferred = (profile_upper == target or 
+                                (target == "SUB" and profile_upper == "NORMAL") or
+                                (target == "MAIN" and profile_upper == "HD"))
+                is_fallback = (profile_upper == fallback or 
+                               (fallback == "SUB" and profile_upper == "NORMAL") or
+                               (fallback == "MAIN" and profile_upper == "HD"))
+                if is_preferred:
+                    return 0
+                elif is_fallback:
+                    return 1
+                return 2
+            sorted_streams = sorted(cam.streams, key=sort_key)
+            best_stream = sorted_streams[0]
+            
+        if best_stream:
+            camera_id_to_stream_id[cam_id.lower()] = best_stream.stream_id
 
     # 5. Insert new recording segments
     added_count = 0
@@ -77,10 +113,23 @@ async def index_recordings(session, recording_dir):
         if path_str in indexed_paths:
             continue
 
-        stream_id = item["stream_id"]
-        # Skip files that belong to unregistered streams to prevent FK errors
-        if stream_id not in registered_streams:
+        folder_cam_id = item["stream_id"]
+        matched_stream_id = camera_id_to_stream_id.get(folder_cam_id.lower())
+        
+        # Support fallback to legacy stream_id folder names
+        if not matched_stream_id:
+            stream_res = await session.execute(
+                select(CameraStream).where(func.lower(CameraStream.stream_id) == folder_cam_id.lower())
+            )
+            found_stream = stream_res.scalar_one_or_none()
+            if found_stream:
+                matched_stream_id = found_stream.stream_id
+                
+        if not matched_stream_id:
             continue
+            
+        # Re-assign the matched database stream_id to be stored in the database segment row
+        stream_id = matched_stream_id
         
         # Try dual-timestamp format first: YYYYMMDD_HHMMSS_HHMMSS
         match_dual = re.search(r"(\d{8})_(\d{6})_(\d{6})", item["name"])

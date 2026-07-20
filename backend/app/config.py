@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     edge_push_heartbeat_timeout_seconds: int = defaults.get("edge_push_heartbeat_timeout_seconds", 120)
     edge_push_check_interval_seconds: int = defaults.get("edge_push_check_interval_seconds", 30)
     enable_edge_push: bool = defaults.get("enable_edge_push", True)
+    preferred_profile: str = defaults.get("preferred_profile", "HD")
+    record_fallback_to_normal: bool = defaults.get("record_fallback_to_normal", True)
+    live_stream_fallback: bool = defaults.get("live_stream_fallback", True)
     edge_push_priority: bool = defaults.get("edge_push_priority", True)
 
     enable_retention: bool = defaults.get("enable_retention", True)
@@ -107,6 +110,32 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+
+    def __init__(self, **values):
+        super().__init__(**values)
+        pref = self.preferred_profile.upper()
+        
+        # Respect user overrides explicitly set via .env or arguments
+        explicit = getattr(self, "model_fields_set", getattr(self, "__fields_set__", set()))
+        
+        if pref in ("NORMAL", "SUB"):
+            if "live_stream_profile" not in explicit:
+                self.live_stream_profile = "NORMAL"
+            if "playback_profile" not in explicit:
+                self.playback_profile = "NORMAL"
+            if "record_hd_only" not in explicit:
+                self.record_hd_only = False
+            if "record_normal" not in explicit:
+                self.record_normal = True
+        else:
+            if "live_stream_profile" not in explicit:
+                self.live_stream_profile = "HD"
+            if "playback_profile" not in explicit:
+                self.playback_profile = "HD"
+            if "record_hd_only" not in explicit:
+                self.record_hd_only = True
+            if "record_normal" not in explicit:
+                self.record_normal = False
 
 settings = Settings()
 
@@ -173,6 +202,9 @@ TIMELINE_CACHE_SECONDS = settings.timeline_cache_seconds
 TIMELINE_MERGE_THRESHOLD_SECONDS = settings.timeline_merge_threshold_seconds
 TIMELINE_DEFAULT_ZOOM = settings.timeline_default_zoom
 ENABLE_EDGE_PUSH = settings.enable_edge_push
+PREFERRED_PROFILE = settings.preferred_profile
+RECORD_FALLBACK_TO_NORMAL = settings.record_fallback_to_normal
+LIVE_STREAM_FALLBACK = settings.live_stream_fallback
 EDGE_PUSH_PRIORITY = settings.edge_push_priority
 EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS = settings.edge_push_heartbeat_timeout_seconds
 EDGE_PUSH_CHECK_INTERVAL_SECONDS = settings.edge_push_check_interval_seconds

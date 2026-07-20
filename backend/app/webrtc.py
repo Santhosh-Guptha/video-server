@@ -96,10 +96,44 @@ async def resolve_stream_by_identifier(
     def get_best_stream(streams_list):
         if not streams_list:
             return None
+        
+        pref = settings.preferred_profile.upper() if hasattr(settings, "preferred_profile") else "HD"
+        fallback_enabled = settings.live_stream_fallback if hasattr(settings, "live_stream_fallback") else True
+        if pref in ("NORMAL", "SUB"):
+            target_profile = "SUB"
+            fallback_profile = "MAIN"
+        else:
+            target_profile = "MAIN"
+            fallback_profile = "SUB"
+            
         def sort_key(s: CameraStream):
-            is_main = getattr(s, "profile_type", "").upper() == "MAIN"
-            ends_hd = s.stream_id.lower().endswith(("_hd", "_main"))
-            return (not is_main, not ends_hd, s.stream_id)
+            is_active = s.status in (StreamState.ONLINE, StreamState.WARM)
+            
+            profile_str = getattr(s, "profile_type", "")
+            profile_str = profile_str.value if hasattr(profile_str, 'value') else str(profile_str)
+            profile_upper = profile_str.upper()
+            
+            is_preferred = (profile_upper == target_profile or 
+                            (target_profile == "SUB" and profile_upper == "NORMAL") or
+                            (target_profile == "MAIN" and profile_upper == "HD"))
+                            
+            is_fallback = (profile_upper == fallback_profile or 
+                           (fallback_profile == "SUB" and profile_upper == "NORMAL") or
+                           (fallback_profile == "MAIN" and profile_upper == "HD"))
+            
+            if is_active and is_preferred:
+                score = 0
+            elif is_active and is_fallback and fallback_enabled:
+                score = 1
+            elif is_preferred:
+                score = 2
+            elif is_fallback and fallback_enabled:
+                score = 3
+            else:
+                score = 4
+                
+            return (score, s.stream_id)
+            
         return sorted(streams_list, key=sort_key)[0]
 
     # 1. Exact match on stream_id

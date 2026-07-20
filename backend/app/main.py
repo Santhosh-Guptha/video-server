@@ -671,15 +671,11 @@ async def record_segment_complete(
     if not payload.stream_id or not payload.file_path:
         raise HTTPException(status_code=400, detail="stream_id and file_path are required")
         
-    # 2. Verify stream is registered
-    res = await session.execute(
-        select(CameraStream)
-        .options(selectinload(CameraStream.camera))
-        .where(CameraStream.stream_id == payload.stream_id)
-    )
-    stream = res.scalar_one_or_none()
+    # 2. Verify camera / stream is registered
+    from .webrtc import resolve_stream_by_identifier
+    stream = await resolve_stream_by_identifier(payload.stream_id, session)
     if not stream:
-        raise HTTPException(status_code=400, detail=f"Unregistered stream_id: {payload.stream_id}")
+        raise HTTPException(status_code=400, detail=f"Unregistered stream or camera: {payload.stream_id}")
 
     if settings.strict_camera_validation:
         camera = stream.camera
@@ -735,7 +731,7 @@ async def record_segment_complete(
 
     # 6. Insert RecordingSegment idempotent using relative path
     seg = RecordingSegment(
-        stream_id=payload.stream_id,
+        stream_id=stream.stream_id,
         file_path=relative_path,
         start_ts=start_ts,
         end_ts=end_ts
@@ -744,7 +740,7 @@ async def record_segment_complete(
     try:
         await session.commit()
         print(f"[webhook] Indexed segment: {relative_path} (Duration: {duration}s)")
-        await PlaybackTimelineService.invalidate_cache_for_timestamp(payload.stream_id, start_ts)
+        await PlaybackTimelineService.invalidate_cache_for_timestamp(stream.stream_id, start_ts)
         
         # Auto-recovery trigger for incomplete live recording segments
         seg_time = settings.segment_time_seconds

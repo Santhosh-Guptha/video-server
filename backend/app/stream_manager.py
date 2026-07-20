@@ -36,9 +36,29 @@ async def _mtx_request(method: str, url: str, **kwargs):
     except Exception as e:
         raise e
 
-def should_record(stream: CameraStream) -> bool:
+async def should_record_stream(session: AsyncSession, stream: CameraStream) -> bool:
     from .config import should_record_profile
-    return should_record_profile(stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type))
+    profile_val = stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type)
+    
+    # Check standard policy
+    if should_record_profile(profile_val):
+        return True
+        
+    # Check fallback recording policy
+    if settings.record_fallback_to_normal and profile_val.upper() in ("SUB", "NORMAL"):
+        # Check if the HD stream of this camera is offline
+        res = await session.execute(
+            select(CameraStream)
+            .where(CameraStream.camera_id == stream.camera_id)
+        )
+        all_streams = res.scalars().all()
+        hd_stream = next((s for s in all_streams if (s.profile_type.value if hasattr(s.profile_type, 'value') else str(s.profile_type)).upper() in ("MAIN", "HD")), None)
+        
+        if not hd_stream or hd_stream.status == StreamState.OFFLINE:
+            print(f"[recording] HD stream is offline/missing. Falling back to record NORMAL profile for stream {stream.stream_id}")
+            return True
+            
+    return False
 
 def double_escape_rtsp_url(url: str) -> str:
     """Returns the RTSP URL directly since database values are already correctly single-escaped."""
@@ -62,7 +82,27 @@ class StreamManager:
 
     async def add_stream(self, session: AsyncSession, stream: CameraStream) -> None:
         """Registers a camera stream path permanently in MediaMTX with sourceOnDemand = True."""
-        path_name = stream.stream_id
+        from .webrtc import resolve_stream_by_identifier
+        from .models import Camera
+        
+        # Load camera safely
+        camera = stream.camera if getattr(stream, "camera", None) else None
+        if not camera:
+            res_cam = await session.execute(
+                select(Camera).where(Camera.id == stream.camera_id)
+            )
+            camera = res_cam.scalar_one_or_none()
+            
+        if camera:
+            path_name = camera.server_camera_id or camera.name
+        else:
+            path_name = stream.stream_id
+            
+        # Resolve the best stream URL to publish/pull (applying preferred profile & fallback)
+        best_stream = await resolve_stream_by_identifier(path_name, session)
+        if not best_stream:
+            best_stream = stream
+            
         lock_name = f"stream:{path_name}"
         
         # Acquire Lock
@@ -72,8 +112,8 @@ class StreamManager:
             return
 
         try:
-            url_strip = stream.stream_url.strip()
-            is_push = stream.stream_mode == "PUSH" or (stream.stream_mode == "AUTO" and "publisher" in url_strip.lower())
+            url_strip = best_stream.stream_url.strip() if best_stream.stream_url else ""
+            is_push = best_stream.stream_mode == "PUSH" or (best_stream.stream_mode == "AUTO" and "publisher" in url_strip.lower())
             
             # 1. Ensure path exists in DB Registry
             res = await session.execute(
@@ -94,10 +134,10 @@ class StreamManager:
 
             # 2. Add configuration to MediaMTX
             payload = {
-                "source": "publisher" if is_push else double_escape_rtsp_url(stream.stream_url),
+                "source": "publisher" if is_push else double_escape_rtsp_url(best_stream.stream_url),
                 "sourceProtocol": "tcp",
                 "sourceOnDemand": True,  # Keep permanent, connect RTSP on-demand
-                "record": should_record(stream),
+                "record": await should_record_stream(session, best_stream),
                 "runOnInit": "",
                 "runOnDemand": "",
                 "runOnUnDemand": ""
@@ -106,18 +146,26 @@ class StreamManager:
             resp = await self._post(f"/v3/config/paths/add/{path_name}", json=payload)
             if resp.status_code in (200, 201):
                 print(f"[stream_manager] Permanently registered path {path_name} in MediaMTX with sourceOnDemand = True")
-                await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                await self.set_stream_state(session, best_stream, StreamState.CONNECTING)
                 await EventBus.publish("stream_started", {"stream_id": path_name})
             elif resp.status_code == 400 or "already exists" in resp.text:
                 # Patch configuration to ensure it matches
                 await self._patch(f"/v3/config/paths/patch/{path_name}", json=payload)
-                await self.set_stream_state(session, stream, StreamState.CONNECTING)
+                await self.set_stream_state(session, best_stream, StreamState.CONNECTING)
         finally:
             await RedisManager.release_lock(lock_name)
 
     async def remove_stream(self, session: AsyncSession, stream: CameraStream) -> None:
         """Removes a path configuration from MediaMTX (only if camera is deleted/disabled)."""
-        path_name = stream.stream_id
+        from .models import Camera
+        camera = stream.camera if getattr(stream, "camera", None) else None
+        if not camera:
+            res_cam = await session.execute(
+                select(Camera).where(Camera.id == stream.camera_id)
+            )
+            camera = res_cam.scalar_one_or_none()
+            
+        path_name = (camera.server_camera_id or camera.name) if camera else stream.stream_id
         lock_name = f"stream:{path_name}"
         
         acquired = await RedisManager.acquire_lock(lock_name, expire_seconds=30)
@@ -153,6 +201,21 @@ class StreamManager:
         stream.status = state
         stream.error_message = error_message
         await session.commit()
+        
         await RedisManager.set_stream_state(stream.stream_id, state.value, error_message)
+        
+        # Also set state for camera ID if camera is available
+        from .models import Camera
+        camera = stream.camera if getattr(stream, "camera", None) else None
+        if not camera:
+            try:
+                res_cam = await session.execute(
+                    select(Camera).where(Camera.id == stream.camera_id)
+                )
+                camera = res_cam.scalar_one_or_none()
+            except Exception:
+                pass
+        if camera and camera.server_camera_id:
+            await RedisManager.set_stream_state(camera.server_camera_id, state.value, error_message)
 
 stream_manager = StreamManager()
