@@ -2186,8 +2186,13 @@ async def get_recording_gaps(
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
 
-    resolved_stream_id = stream.stream_id
-    stream_dir = Path(settings.recording_dir) / resolved_stream_id
+    from .models import Camera
+    res_cam = await session.execute(
+        select(Camera).where(Camera.id == stream.camera_id)
+    )
+    camera = res_cam.scalar_one_or_none()
+    camera_id = (camera.server_camera_id or camera.name) if camera else stream.stream_id
+    stream_dir = Path(settings.recording_dir) / camera_id
     segments_to_check = []
     
     if stream_dir.exists():
@@ -2355,7 +2360,8 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
             
             dt_start = datetime.fromtimestamp(temp_start)
             day_str = dt_start.strftime("%Y-%m-%d")
-            stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
+            camera_id = (stream.camera.server_camera_id or stream.camera.name) if stream.camera else stream_id
+            stream_record_dir = Path(settings.recording_dir) / camera_id / day_str
             stream_record_dir.mkdir(parents=True, exist_ok=True)
             filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{datetime.fromtimestamp(temp_end).strftime('%H%M%S')}_recovered.mp4"
             output_path = stream_record_dir / filename

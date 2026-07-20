@@ -539,7 +539,8 @@ async def camera_gap_recovery_loop():
                     # Query gaps in the last 24 hours directly from the filesystem
                     now = time.time()
                     twenty_four_hours_ago = now - (24 * 3600)
-                    gaps = await scan_filesystem_gaps(stream_id, twenty_four_hours_ago, now)
+                    camera_id = (stream.camera.server_camera_id or stream.camera.name) if stream.camera else stream.stream_id
+                    gaps = await scan_filesystem_gaps(camera_id, twenty_four_hours_ago, now)
 
                     # Schedule recovery tasks for exact gap start and end times, chunked to max settings.segment_time_seconds
                     for gap_start, gap_end in gaps:
@@ -563,6 +564,7 @@ async def camera_gap_recovery_loop():
 
                                 gaps_to_recover.append({
                                     "stream_id": stream_id,
+                                    "camera_id": camera_id,
                                     "recovery_url": recovery_url,
                                     "start_ts": curr,
                                     "end_ts": chunk_end,
@@ -586,7 +588,8 @@ async def camera_gap_recovery_loop():
 
                 dt_start = datetime.fromtimestamp(temp_start)
                 day_str = dt_start.strftime("%Y-%m-%d")
-                stream_record_dir = Path(settings.recording_dir) / stream_id / day_str
+                camera_id_task = task.get("camera_id", stream_id)
+                stream_record_dir = Path(settings.recording_dir) / camera_id_task / day_str
                 stream_record_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{datetime.fromtimestamp(temp_end).strftime('%H%M%S')}_recovered.mp4"
                 output_path = stream_record_dir / filename
