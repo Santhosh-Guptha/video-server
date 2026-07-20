@@ -24,7 +24,7 @@ export default function App() {
   const isEdgeCamera = (cam: Camera) => !cam.rtsp_url || cam.rtsp_url.trim() === "" || !cam.rtsp_url.trim().toLowerCase().startsWith("rtsp://");
 
   const standardCameras = useMemo(() => {
-    return cameras.filter(cam => !isEdgeCamera(cam))
+    return cameras
   }, [cameras])
 
   const edgeCameras = useMemo(() => {
@@ -142,14 +142,12 @@ export default function App() {
       const storedFocusedId = localStorage.getItem('vms_focused_stream_id')
       const restoredFocused = restoredStreams.find((c) => c.stream_id === storedFocusedId)
 
-      const standardData = data.filter(c => !isEdgeCamera(c))
-      const restoredStandardStreams = restoredStreams.filter(c => !isEdgeCamera(c))
-      if (restoredStandardStreams.length > 0) {
-        setSelectedStreams(restoredStandardStreams)
-        setSelected(restoredFocused && !isEdgeCamera(restoredFocused) ? restoredFocused : restoredStandardStreams[0])
-      } else if (standardData.length > 0) {
-        setSelected(standardData[0])
-        setSelectedStreams([standardData[0]])
+      if (restoredStreams.length > 0) {
+        setSelectedStreams(restoredStreams)
+        setSelected(restoredFocused ? restoredFocused : restoredStreams[0])
+      } else if (data.length > 0) {
+        setSelected(data[0])
+        setSelectedStreams([data[0]])
       }
     } catch (e) {
       setStatusText(e instanceof Error ? e.message : 'Failed to load cameras')
