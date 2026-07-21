@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ShieldAlert, UserCheck, Smile, Car, Bell, Sliders,
   Eye, Cpu, Radio, Plus, Trash2, Zap, Search, Grid, LayoutGrid,
-  Video
+  Video, Users, Maximize2, Minimize2, RotateCw, ChevronLeft, ChevronRight, X
 } from 'lucide-react';
 
 const getAiServiceHost = () => {
@@ -26,23 +26,24 @@ export default function App() {
   const [aiServiceHost] = useState(getAiServiceHost());
   const [aiWsHost] = useState(getAiWsHost());
 
-  const [activeTab, setActiveTab] = useState('live'); // 'live', 'zones', 'events', 'models'
+  const [activeTab, setActiveTab] = useState('livewall'); // 'livewall', 'single', 'zones', 'events', 'models'
   const [events, setEvents] = useState([]);
   const [zones, setZones] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [selectedCamera, setSelectedCamera] = useState('VMSTEST1002C5_HD');
-  const [gridMode, setGridMode] = useState('1x1'); // '1x1' or '2x2'
+  const [selectedModalCamera, setSelectedModalCamera] = useState(null);
 
-  // Stream rendering mode fallback state
-  const [streamFallbackMode, setStreamFallbackMode] = useState(false);
-  const [currentFrameUrl, setCurrentFrameUrl] = useState('');
+  // Live Wall Grid & Pagination state
+  const [gridSize, setGridSize] = useState(12); // default 12 (4x3 layout)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isFullWall, setIsFullWall] = useState(false);
 
-  // Camera List & Search/Filter state
+  // Camera Catalog & Search state
   const [cameraList, setCameraList] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [profileFilter, setProfileFilter] = useState('ALL'); // 'ALL', 'HD', 'NORMAL'
+  const [profileFilter, setProfileFilter] = useState('ALL');
 
-  // Model toggles per camera
+  // Model toggles
   const [activeModels, setActiveModels] = useState({
     person: true,
     face: true,
@@ -69,21 +70,7 @@ export default function App() {
   useEffect(() => {
     fetchEvents();
     fetchZones();
-    setStreamFallbackMode(false);
   }, [selectedCamera, aiServiceHost]);
-
-  // Fallback 10 FPS JPEG Frame polling loop if MJPEG stream triggers error
-  useEffect(() => {
-    let intervalId;
-    if (streamFallbackMode) {
-      intervalId = setInterval(() => {
-        setCurrentFrameUrl(`${aiServiceHost}/api/ai/streams/${selectedCamera}/frame?t=${Date.now()}`);
-      }, 100);
-    }
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [streamFallbackMode, selectedCamera, aiServiceHost]);
 
   // Setup WebSocket connection to AI microservice
   useEffect(() => {
@@ -229,23 +216,114 @@ export default function App() {
     }
   };
 
-  const filteredCameras = cameraList.filter((cam) => {
-    const matchesSearch = cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          cam.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesProfile = profileFilter === 'ALL' ||
-                           (profileFilter === 'HD' && cam.id.includes('HD')) ||
-                           (profileFilter === 'NORMAL' && (cam.id.includes('NORMAL') || cam.id.includes('SUB')));
-    return matchesSearch && matchesProfile;
-  });
+  // Filter camera catalog
+  const filteredCameras = useMemo(() => {
+    return cameraList.filter((cam) => {
+      const matchesSearch = cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            cam.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesProfile = profileFilter === 'ALL' ||
+                             (profileFilter === 'HD' && cam.id.includes('HD')) ||
+                             (profileFilter === 'NORMAL' && (cam.id.includes('NORMAL') || cam.id.includes('SUB')));
+      return matchesSearch && matchesProfile;
+    });
+  }, [cameraList, searchQuery, profileFilter]);
+
+  const totalPages = Math.ceil(filteredCameras.length / gridSize) || 1;
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
+  const paginatedCameras = useMemo(() => {
+    const start = (currentPage - 1) * gridSize;
+    return filteredCameras.slice(start, start + gridSize);
+  }, [filteredCameras, currentPage, gridSize]);
 
   const filteredEvents = events.filter((evt) => {
     if (eventFilter === 'all') return true;
     return evt.event_type.includes(eventFilter);
   });
 
+  const getGridColumns = () => {
+    if (gridSize === 4) return 2;
+    if (gridSize === 9) return 3;
+    if (gridSize === 12) return 4;
+    if (gridSize === 16) return 4;
+    if (gridSize === 24) return 6;
+    if (gridSize === 36) return 6;
+    return 4;
+  };
+
+  const renderCameraWallGrid = () => (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${getGridColumns()}, 1fr)`,
+        gap: '10px',
+        width: '100%'
+      }}
+    >
+      {paginatedCameras.map((cam) => (
+        <div
+          key={cam.id}
+          className="glass-card"
+          onDoubleClick={() => setSelectedModalCamera(cam)}
+          style={{
+            position: 'relative',
+            width: '100%',
+            aspectRatio: '16/9',
+            borderRadius: '6px',
+            overflow: 'hidden',
+            background: '#020617',
+            border: selectedCamera === cam.id ? '2px solid #06b6d4' : '1px solid #1e293b',
+            cursor: 'pointer'
+          }}
+          title="Double-click to focus camera details"
+        >
+          <img
+            src={`${aiServiceHost}/api/ai/streams/${cam.id}/live`}
+            alt={cam.name}
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+            onError={(e) => {
+              e.target.src = `${aiServiceHost}/api/ai/streams/${cam.id}/frame?t=${Date.now()}`;
+            }}
+          />
+
+          {/* Cell Overlay Header */}
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              padding: '4px 8px',
+              background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)',
+              display: 'flex',
+              justify: 'space-between',
+              alignItems: 'center',
+              pointerEvents: 'none'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} className="pulse-badge" />
+              <span style={{ fontSize: '10px', fontWeight: '700', color: '#f8fafc', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+                {cam.name}
+              </span>
+            </div>
+            <span style={{ fontSize: '9px', background: 'rgba(6,182,212,0.3)', color: '#38bdf8', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
+              AI LIVE
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#060913', color: '#f8fafc', padding: '16px' }}>
-      {/* Header Bar */}
+      {/* Top Bar */}
       <header className="glass-panel" style={{ padding: '14px 24px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 20px rgba(6,182,212,0.4)' }}>
@@ -253,25 +331,35 @@ export default function App() {
           </div>
           <div>
             <h1 style={{ fontSize: '18px', fontWeight: '700', letterSpacing: '-0.5px', background: 'linear-gradient(to right, #ffffff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              Production AI Vision Analytics Center
+              AI Live Camera Wall Center
             </h1>
             <p style={{ fontSize: '11px', color: '#64748b' }}>
-              Real-World CCTV Computer Vision | {cameraList.length} Active Platform Cameras
+              Real-Time Computer Vision Detection | {filteredCameras.length} Active Platform Cameras
             </p>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
+        {/* Tab Navigation */}
         <div style={{ display: 'flex', gap: '6px', background: 'rgba(15,23,42,0.8)', padding: '4px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
           <button
-            onClick={() => setActiveTab('live')}
+            onClick={() => setActiveTab('livewall')}
             style={{
               padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
-              background: activeTab === 'live' ? 'linear-gradient(135deg, #06b6d4, #0284c7)' : 'transparent',
-              color: activeTab === 'live' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
+              background: activeTab === 'livewall' ? 'linear-gradient(135deg, #06b6d4, #0284c7)' : 'transparent',
+              color: activeTab === 'livewall' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
             }}
           >
-            <Eye size={15} /> Live AI View
+            <LayoutGrid size={15} /> Live Camera Wall
+          </button>
+          <button
+            onClick={() => setActiveTab('single')}
+            style={{
+              padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
+              background: activeTab === 'single' ? 'linear-gradient(135deg, #06b6d4, #0284c7)' : 'transparent',
+              color: activeTab === 'single' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
+            }}
+          >
+            <Eye size={15} /> Focus Stream
           </button>
           <button
             onClick={() => setActiveTab('zones')}
@@ -316,89 +404,113 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Dashboard Layout */}
+      {/* Main Content Layout */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '16px' }}>
         
-        {/* Main Content Area */}
+        {/* Left Panel */}
         <main>
-          {activeTab === 'live' && (
+          {activeTab === 'livewall' && (
             <div className="glass-panel" style={{ padding: '16px' }}>
               
-              {/* Production Camera Search Bar & Layout Controls */}
+              {/* Live Wall Control Header Bar */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', background: 'rgba(15,23,42,0.6)', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
                 
-                {/* Search Input Box */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, maxWidth: '380px', background: '#090d16', border: '1px solid #334155', borderRadius: '6px', padding: '6px 12px' }}>
-                  <Search size={15} color="#64748b" />
-                  <input
-                    type="text"
-                    placeholder={`Search ${cameraList.length} cameras by ID or name...`}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    style={{ background: 'transparent', border: 'none', color: '#f8fafc', outline: 'none', fontSize: '13px', width: '100%' }}
-                  />
-                  {searchQuery && (
-                    <button onClick={() => setSearchQuery('')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '12px' }}>✕</button>
-                  )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} className="pulse-badge" />
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#f8fafc' }}>
+                    Live Wall — {filteredCameras.length} active cameras online
+                  </span>
                 </div>
 
-                {/* Profile Filter & Camera Dropdown */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <select
-                    value={profileFilter}
-                    onChange={(e) => setProfileFilter(e.target.value)}
-                    style={{ background: '#090d16', color: '#94a3b8', border: '1px solid #334155', padding: '6px 10px', borderRadius: '6px', fontSize: '12px', outline: 'none' }}
-                  >
-                    <option value="ALL">All Streams ({cameraList.length})</option>
-                    <option value="HD">HD Streams Only</option>
-                    <option value="NORMAL">Sub-Streams Only</option>
-                  </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  {/* Search Input */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#090d16', border: '1px solid #334155', borderRadius: '6px', padding: '4px 10px', width: '220px' }}>
+                    <Search size={14} color="#64748b" />
+                    <input
+                      type="text"
+                      placeholder="Search cameras..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      style={{ background: 'transparent', border: 'none', color: '#f8fafc', outline: 'none', fontSize: '12px', width: '100%' }}
+                    />
+                  </div>
 
-                  <select
-                    value={selectedCamera}
-                    onChange={(e) => {
-                      setSelectedCamera(e.target.value);
-                      setStreamFallbackMode(false);
-                    }}
-                    style={{ background: '#090d16', color: '#38bdf8', border: '1px solid #06b6d4', padding: '6px 12px', borderRadius: '6px', fontSize: '13px', fontWeight: '600', outline: 'none', maxWidth: '240px' }}
-                  >
-                    {filteredCameras.length === 0 ? (
-                      <option value="">No cameras match search</option>
-                    ) : (
-                      filteredCameras.map((cam) => (
-                        <option key={cam.id} value={cam.id}>{cam.name}</option>
-                      ))
-                    )}
-                  </select>
-                </div>
-
-                {/* Grid Mode View Toggles */}
-                <div style={{ display: 'flex', gap: '4px', background: '#090d16', padding: '2px', borderRadius: '6px', border: '1px solid #334155' }}>
-                  <button
-                    onClick={() => setGridMode('1x1')}
-                    style={{ padding: '6px 10px', background: gridMode === '1x1' ? '#06b6d4' : 'transparent', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}
-                    title="1x1 Single Focus Stream View"
-                  >
-                    <Grid size={15} />
+                  {/* Refresh Button */}
+                  <button onClick={fetchCameras} style={{ padding: '5px 10px', background: '#1e293b', border: '1px solid #334155', color: '#fff', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <RotateCw size={12} /> Refresh
                   </button>
+
+                  {/* Grid Size Picker */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>Grid size:</span>
+                    <select
+                      value={gridSize}
+                      onChange={(e) => {
+                        setGridSize(Number(e.target.value));
+                        setCurrentPage(1);
+                      }}
+                      style={{ background: '#090d16', color: '#38bdf8', border: '1px solid #06b6d4', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600', outline: 'none' }}
+                    >
+                      <option value={4}>4 (2x2)</option>
+                      <option value={9}>9 (3x3)</option>
+                      <option value={12}>12 (4x3)</option>
+                      <option value={16}>16 (4x4)</option>
+                      <option value={24}>24 (6x4)</option>
+                      <option value={36}>36 (6x6)</option>
+                    </select>
+                  </div>
+
+                  {/* Pagination Controls */}
+                  {totalPages > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        style={{ padding: '4px 8px', background: '#1e293b', border: '1px solid #334155', color: '#fff', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', opacity: currentPage === 1 ? 0.4 : 1 }}
+                      >
+                        <ChevronLeft size={12} />
+                      </button>
+                      <span style={{ fontSize: '11px', color: '#cbd5e1', minWidth: '60px', textAlign: 'center' }}>
+                        {currentPage} / {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        style={{ padding: '4px 8px', background: '#1e293b', border: '1px solid #334155', color: '#fff', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', opacity: currentPage === totalPages ? 0.4 : 1 }}
+                      >
+                        <ChevronRight size={12} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Full Wall Toggle */}
                   <button
-                    onClick={() => setGridMode('2x2')}
-                    style={{ padding: '6px 10px', background: gridMode === '2x2' ? '#06b6d4' : 'transparent', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}
-                    title="2x2 Multi-Camera Matrix View"
+                    onClick={() => setIsFullWall(true)}
+                    style={{ padding: '5px 10px', background: 'rgba(6,182,212,0.2)', border: '1px solid #06b6d4', color: '#38bdf8', borderRadius: '6px', fontSize: '11px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                   >
-                    <LayoutGrid size={15} />
+                    <Maximize2 size={12} /> Full Wall
                   </button>
                 </div>
               </div>
 
-              {/* Active AI Model Indicators */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Video size={16} color="#06b6d4" />
-                  <span style={{ fontSize: '13px', fontWeight: '600', color: '#cbd5e1' }}>
-                    Active Feed: {selectedCamera}
-                  </span>
-                </div>
+              {/* Render Camera Wall Grid */}
+              {renderCameraWallGrid()}
+            </div>
+          )}
+
+          {activeTab === 'single' && (
+            <div className="glass-panel" style={{ padding: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <select
+                  value={selectedCamera}
+                  onChange={(e) => setSelectedCamera(e.target.value)}
+                  style={{ background: '#090d16', color: '#38bdf8', border: '1px solid #06b6d4', padding: '8px 14px', borderRadius: '6px', fontSize: '14px', fontWeight: '600', outline: 'none' }}
+                >
+                  {filteredCameras.map((cam) => (
+                    <option key={cam.id} value={cam.id}>{cam.name}</option>
+                  ))}
+                </select>
+
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <span style={{ fontSize: '11px', background: activeModels.person ? 'rgba(16,185,129,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.person ? '#34d399' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Person</span>
                   <span style={{ fontSize: '11px', background: activeModels.face ? 'rgba(6,182,212,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.face ? '#38bdf8' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Face</span>
@@ -407,48 +519,17 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Real Video Stream Viewport */}
-              {gridMode === '1x1' ? (
-                <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b', aspectRatio: '16/9' }}>
-                  <img
-                    key={selectedCamera}
-                    src={streamFallbackMode ? currentFrameUrl : `${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
-                    alt="Real AI Camera Feed"
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                    onError={() => {
-                      if (!streamFallbackMode) {
-                        console.warn('MJPEG stream failed, switching to high-speed frame polling mode');
-                        setStreamFallbackMode(true);
-                      }
-                    }}
-                  />
-                  <div style={{ position: 'absolute', top: '12px', left: '12px', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                    <Radio size={13} color="#10b981" />
-                    <span style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.5px' }}>
-                      {streamFallbackMode ? 'REAL LIVE CCTV FEED (POLLING MODE)' : 'REAL LIVE CCTV FEED (MJPEG)'}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                /* 2x2 Multi-Camera Grid View */
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  {filteredCameras.slice(0, 4).map((cam) => (
-                    <div key={cam.id} style={{ position: 'relative', width: '100%', aspectRatio: '16/9', borderRadius: '6px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b' }}>
-                      <img
-                        src={`${aiServiceHost}/api/ai/streams/${cam.id}/live`}
-                        alt={cam.name}
-                        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                        onError={(e) => {
-                          e.target.src = `${aiServiceHost}/api/ai/streams/${cam.id}/frame?t=${Date.now()}`;
-                        }}
-                      />
-                      <div style={{ position: 'absolute', bottom: '8px', left: '8px', background: 'rgba(0,0,0,0.7)', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: '600', color: '#38bdf8' }}>
-                        {cam.id}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b', aspectRatio: '16/9' }}>
+                <img
+                  key={selectedCamera}
+                  src={`${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
+                  alt="Focus Stream"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  onError={(e) => {
+                    e.target.src = `${aiServiceHost}/api/ai/streams/${selectedCamera}/frame?t=${Date.now()}`;
+                  }}
+                />
+              </div>
             </div>
           )}
 
@@ -722,6 +803,40 @@ export default function App() {
           </div>
         </aside>
       </div>
+
+      {/* Full Wall Modal */}
+      {isFullWall && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, background: '#060913', padding: '16px', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#06b6d4' }}>Full Live Camera Wall</h2>
+            <button onClick={() => setIsFullWall(false)} style={{ padding: '6px 14px', background: '#f43f5e', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+              Exit Full Wall
+            </button>
+          </div>
+          {renderCameraWallGrid()}
+        </div>
+      )}
+
+      {/* Selected Camera Details Modal */}
+      {selectedModalCamera && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div className="glass-panel" style={{ width: '90%', maxWidth: '900px', padding: '20px', position: 'relative' }}>
+            <button onClick={() => setSelectedModalCamera(null)} style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
+              <X size={20} />
+            </button>
+            <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '12px', color: '#38bdf8' }}>
+              {selectedModalCamera.name} ({selectedModalCamera.id})
+            </h3>
+            <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', borderRadius: '8px', overflow: 'hidden', background: '#020617' }}>
+              <img
+                src={`${aiServiceHost}/api/ai/streams/${selectedModalCamera.id}/live`}
+                alt={selectedModalCamera.name}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
