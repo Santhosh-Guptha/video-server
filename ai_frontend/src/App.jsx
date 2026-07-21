@@ -32,20 +32,7 @@ const getAiWsHost = () => {
   return 'ws://localhost:8001/ws/ai-events';
 };
 
-// Safe helper for bbox coordinate parsing
-const getBboxCoords = (bbox) => {
-  if (Array.isArray(bbox) && bbox.length >= 4) {
-    return [Number(bbox[0]) || 0, Number(bbox[1]) || 0, Number(bbox[2]) || 0, Number(bbox[3]) || 0];
-  }
-  if (bbox && typeof bbox === 'object') {
-    const x1 = Number(bbox.xmin ?? bbox.x1 ?? bbox.x ?? 0);
-    const y1 = Number(bbox.ymin ?? bbox.y1 ?? bbox.y ?? 0);
-    const x2 = Number(bbox.xmax ?? bbox.x2 ?? (x1 + (bbox.width ?? 0.2)));
-    const y2 = Number(bbox.ymax ?? bbox.y2 ?? (y1 + (bbox.height ?? 0.2)));
-    return [x1, y1, x2, y2];
-  }
-  return [0, 0, 0, 0];
-};
+
 
 const getPolygonPointsStr = (polygon) => {
   if (!Array.isArray(polygon)) return '';
@@ -482,7 +469,6 @@ export default function App() {
 
   // ─── On-Demand AI State ──────────────────────────────────────
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [aiDetections, setAiDetections] = useState([]);
   const [aiZones, setAiZones] = useState([]);
   const [aiModels, setAiModels] = useState({
     person: true, face: false, vehicle: false, intrusion: false
@@ -608,34 +594,9 @@ export default function App() {
       await fetch(`${aiServiceHost}/api/ai/cameras/${camId}/stop`, { method: 'POST' });
     } catch (e) {}
     setAiEnabled(false);
-    setAiDetections([]);
     setAiZones([]);
     setAiStatus('idle');
   }, [aiServiceHost]);
-
-  // Poll detections when AI is active
-  useEffect(() => {
-    if (!aiEnabled || !selectedCamera) return;
-    let active = true;
-
-    const poll = async () => {
-      while (active && aiEnabled) {
-        try {
-          const res = await fetch(`${aiServiceHost}/api/ai/streams/${selectedCamera.id}/detections`);
-          if (res.ok) {
-            const data = await res.json();
-            if (active) {
-              setAiDetections(Array.isArray(data.detections) ? data.detections : []);
-              setAiZones(Array.isArray(data.zones) ? data.zones : []);
-            }
-          }
-        } catch (e) {}
-        await new Promise(r => setTimeout(r, 500));
-      }
-    };
-    poll();
-    return () => { active = false; };
-  }, [aiEnabled, selectedCamera, aiServiceHost]);
 
   // Update models on the backend when toggled
   const toggleModel = useCallback(async (key) => {
@@ -730,7 +691,6 @@ export default function App() {
   };
 
   const safeEvents = Array.isArray(events) ? events : [];
-  const safeDetections = Array.isArray(aiDetections) ? aiDetections : [];
   const safeZones = Array.isArray(aiZones) ? aiZones : [];
 
   // ─── Model Toggle UI Helper ────────────────────────────────────
@@ -1039,30 +999,6 @@ export default function App() {
                   <div style={{ textAlign: 'center', color: '#64748b' }}>
                     <Eye size={32} style={{ marginBottom: '8px', opacity: 0.5 }} />
                     <p style={{ fontSize: '14px' }}>Select a camera from the dropdown or click one on the Live Wall</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Detection Results Table (when AI active) */}
-              {aiEnabled && safeDetections.length > 0 && (
-                <div style={{ marginTop: '12px', background: 'rgba(15,23,42,0.6)', borderRadius: '8px', padding: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
-                  <h4 style={{ fontSize: '12px', fontWeight: '700', color: '#38bdf8', marginBottom: '8px' }}>
-                    Live Detections ({safeDetections.length})
-                  </h4>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                    {safeDetections.map((det, idx) => {
-                      const cn = String(det.class_name || 'object').toLowerCase();
-                      const color = cn === 'person' ? '#10b981' : cn === 'face' ? '#38bdf8' : cn === 'vehicle' ? '#fbbf24' : '#f43f5e';
-                      return (
-                        <span key={idx} style={{
-                          padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: '600',
-                          background: `${color}20`, color: color, border: `1px solid ${color}40`
-                        }}>
-                          {cn.toUpperCase()} {((Number(det.confidence) || 0.85) * 100).toFixed(0)}%
-                          {det.attributes?.mode && <span style={{ opacity: 0.6, marginLeft: '4px' }}>({det.attributes.mode})</span>}
-                        </span>
-                      );
-                    })}
                   </div>
                 </div>
               )}
