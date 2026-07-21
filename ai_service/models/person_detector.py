@@ -14,7 +14,7 @@ for p in ["/usr/local/lib/python3.10/dist-packages", "/usr/lib/python3/dist-pack
 from ..schemas import DetectionResult, BoundingBox
 
 class PersonDetector:
-    def __init__(self, confidence_threshold: float = 0.50):
+    def __init__(self, confidence_threshold: float = 0.20):
         self.confidence_threshold = confidence_threshold
         self.yolo_model = None
 
