@@ -5,6 +5,7 @@ import urllib.request
 import json
 import os
 import glob
+import numpy as np
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -169,11 +170,16 @@ def stream_annotated_feed(camera_id: str):
     def generate_frames():
         while True:
             frame = pipeline_engine.get_latest_annotated_frame(camera_id)
-            if frame is not None:
-                ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                if ret:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            if frame is None:
+                # Guaranteed frame placeholder while stream initializes
+                frame = np.full((480, 640, 3), (20, 25, 35), dtype=np.uint8)
+                cv2.putText(frame, f"CAM: {camera_id} | INITIALIZING STREAM", (15, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1, cv2.LINE_AA)
+
+            ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ret:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             time.sleep(0.08)
 
     return StreamingResponse(

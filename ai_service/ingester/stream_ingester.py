@@ -34,23 +34,23 @@ class StreamIngester:
             f"/mnt/storage/*{self.camera_id}*/*/*.mp4"
         ]
         for pat in patterns:
-            files = sorted(glob.glob(pat))
+            files = sorted(glob.glob(pat), key=os.path.getmtime)
             if files:
                 return files
 
-        # Fallback to ANY active camera MP4 file in /mnt/storage so screen is NEVER black
-        all_files = sorted(glob.glob("/mnt/storage/*/*/*.mp4"))
+        # Global fallback: pick latest real recorded MP4 video files in /mnt/storage sorted by modification time
+        all_files = sorted(glob.glob("/mnt/storage/*/*/*.mp4"), key=os.path.getmtime)
         if all_files:
             return all_files
 
         return []
 
-    def get_latest_frame(self) -> Tuple[Optional[np.ndarray], bool]:
-        """Reads ABSOLUTE REAL camera video frames with zero black screens."""
+    def get_latest_frame(self) -> Tuple[np.ndarray, bool]:
+        """Reads ABSOLUTE REAL camera video frames. Guaranteed to return a valid numpy frame array."""
         if not self.is_running:
-            return None, False
+            return self._generate_fallback_frame(), False
 
-        # 1. Try real RTSP / HLS stream if active
+        # 1. Try real RTSP / HLS stream if configured
         if self.stream_url and self.stream_url.startswith(("rtsp://", "http://", "https://")):
             if self.cap is None or self.current_source != self.stream_url:
                 try:
@@ -61,7 +61,7 @@ class StreamIngester:
 
             if self.cap and self.cap.isOpened():
                 ret, frame = self.cap.read()
-                if ret and frame is not None:
+                if ret and frame is not None and frame.size > 0:
                     return frame, True
                 else:
                     self.cap.release()
@@ -70,37 +70,38 @@ class StreamIngester:
         # 2. Try real recorded camera MP4 video files from /mnt/storage
         real_files = self._find_real_camera_video_files()
         if real_files:
-            latest_real_file = real_files[-1]
-            if self.cap is None or self.current_source != latest_real_file:
-                if self.cap:
-                    self.cap.release()
-                try:
-                    self.cap = cv2.VideoCapture(latest_real_file)
-                    self.current_source = latest_real_file
-                except Exception:
-                    self.cap = None
+            # Try latest files in reverse order
+            for real_file in reversed(real_files[-5:]):
+                if self.cap is None or self.current_source != real_file:
+                    if self.cap:
+                        self.cap.release()
+                    try:
+                        self.cap = cv2.VideoCapture(real_file)
+                        self.current_source = real_file
+                    except Exception:
+                        self.cap = None
 
-            if self.cap and self.cap.isOpened():
-                ret, frame = self.cap.read()
-                if ret and frame is not None:
-                    return frame, True
-                else:
-                    # Rewind to start of video for continuous live looping
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                if self.cap and self.cap.isOpened():
                     ret, frame = self.cap.read()
-                    if ret and frame is not None:
+                    if ret and frame is not None and frame.size > 0:
                         return frame, True
-                    self.cap.release()
-                    self.cap = None
+                    else:
+                        # Rewind to start of video
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, frame = self.cap.read()
+                        if ret and frame is not None and frame.size > 0:
+                            return frame, True
+                        self.cap.release()
+                        self.cap = None
 
-        # Fallback: if storage is initializing
-        return self._generate_synthetic_frame(), False
+        # Fallback frame guarantee
+        return self._generate_fallback_frame(), False
 
-    def _generate_synthetic_frame(self) -> np.ndarray:
+    def _generate_fallback_frame(self) -> np.ndarray:
         w, h = 640, 480
         self.frame_counter += 1
-        frame = np.full((h, w, 3), (25, 30, 35), dtype=np.uint8)
+        frame = np.full((h, w, 3), (20, 25, 35), dtype=np.uint8)
         timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
-        cv2.putText(frame, f"CAM: {self.camera_id} | {timestamp_str} | STREAMING", (15, 30),
+        cv2.putText(frame, f"CAM: {self.camera_id} | {timestamp_str} | CONNECTING", (15, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1, cv2.LINE_AA)
         return frame

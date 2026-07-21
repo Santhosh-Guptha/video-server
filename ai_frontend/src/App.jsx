@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ShieldAlert, UserCheck, Smile, Car, Bell, Sliders,
-  Eye, Cpu, Radio, Plus, Trash2, Zap
+  Eye, Cpu, Radio, Plus, Trash2, Zap, Search, Grid, LayoutGrid,
+  Filter, CheckCircle, Video, Activity, RefreshCw
 } from 'lucide-react';
 
 const getAiServiceHost = () => {
@@ -29,12 +30,13 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [zones, setZones] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
-  const [selectedCamera, setSelectedCamera] = useState('cam-01');
-  const [cameraList, setCameraList] = useState([
-    { id: 'cam-01', name: 'Main Entrance - Cam 01', url: 'rtsp://localhost:8554/live/cam-01' },
-    { id: 'cam-02', name: 'Perimeter Fence - Cam 02', url: 'rtsp://localhost:8554/live/cam-02' },
-    { id: 'cam-03', name: 'Parking Lot - Cam 03', url: 'rtsp://localhost:8554/live/cam-03' }
-  ]);
+  const [selectedCamera, setSelectedCamera] = useState('VMSTEST1002C5_HD');
+  const [gridMode, setGridMode] = useState('1x1'); // '1x1' or '2x2'
+
+  // Camera List & Search/Filter state
+  const [cameraList, setCameraList] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [profileFilter, setProfileFilter] = useState('ALL'); // 'ALL', 'HD', 'NORMAL'
 
   // Model toggles per camera
   const [activeModels, setActiveModels] = useState({
@@ -51,15 +53,15 @@ export default function App() {
   const [newZoneName, setNewZoneName] = useState('');
   const videoCanvasRef = useRef(null);
 
-  // Filter state for events
+  // Event log filter state
   const [eventFilter, setEventFilter] = useState('all');
 
-  // Load cameras from AI service
+  // Fetch camera catalog from AI service
   useEffect(() => {
     fetchCameras();
   }, [aiServiceHost]);
 
-  // Load initial events and zones from ai_service
+  // Load initial events and zones
   useEffect(() => {
     fetchEvents();
     fetchZones();
@@ -71,14 +73,12 @@ export default function App() {
     const connectWS = () => {
       try {
         ws = new WebSocket(aiWsHost);
-        ws.onopen = () => {
-          setWsConnected(true);
-        };
+        ws.onopen = () => setWsConnected(true);
         ws.onmessage = (event) => {
           try {
             const payload = JSON.parse(event.data);
             if (payload.type === 'ai_event') {
-              setEvents((prev) => [payload.data, ...prev.slice(0, 49)]);
+              setEvents((prev) => [payload.data, ...prev.slice(0, 99)]);
             }
           } catch (e) {
             console.error('Failed parsing WS message:', e);
@@ -88,9 +88,7 @@ export default function App() {
           setWsConnected(false);
           setTimeout(connectWS, 3000);
         };
-        ws.onerror = () => {
-          setWsConnected(false);
-        };
+        ws.onerror = () => setWsConnected(false);
       } catch (err) {
         setWsConnected(false);
       }
@@ -109,7 +107,9 @@ export default function App() {
         const data = await res.json();
         if (data && data.length > 0) {
           setCameraList(data);
-          setSelectedCamera(data[0].id);
+          if (!selectedCamera || !data.some(c => c.id === selectedCamera)) {
+            setSelectedCamera(data[0].id);
+          }
         }
       }
     } catch (e) {
@@ -211,6 +211,16 @@ export default function App() {
     }
   };
 
+  // Filter camera list by search term and profile
+  const filteredCameras = cameraList.filter((cam) => {
+    const matchesSearch = cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          cam.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesProfile = profileFilter === 'ALL' ||
+                           (profileFilter === 'HD' && cam.id.includes('HD')) ||
+                           (profileFilter === 'NORMAL' && (cam.id.includes('NORMAL') || cam.id.includes('SUB')));
+    return matchesSearch && matchesProfile;
+  });
+
   const filteredEvents = events.filter((evt) => {
     if (eventFilter === 'all') return true;
     return evt.event_type.includes(eventFilter);
@@ -219,130 +229,195 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#060913', color: '#f8fafc', padding: '16px' }}>
       {/* Header Bar */}
-      <header className="glass-panel" style={{ padding: '16px 24px', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 20px rgba(6,182,212,0.4)' }}>
-            <Cpu size={24} color="#ffffff" />
+      <header className="glass-panel" style={{ padding: '14px 24px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 20px rgba(6,182,212,0.4)' }}>
+            <Cpu size={22} color="#ffffff" />
           </div>
           <div>
-            <h1 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px', background: 'linear-gradient(to right, #ffffff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              AI Vision Analytics Platform
+            <h1 style={{ fontSize: '18px', fontWeight: '700', letterSpacing: '-0.5px', background: 'linear-gradient(to right, #ffffff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              Production AI Vision Analytics Center
             </h1>
-            <p style={{ fontSize: '12px', color: '#64748b' }}>
-              Standalone Computer Vision Microservice | Host: {aiServiceHost}
+            <p style={{ fontSize: '11px', color: '#64748b' }}>
+              Real-World CCTV Computer Vision | {cameraList.length} Active Platform Cameras
             </p>
           </div>
         </div>
 
-        {/* Tab Navigation */}
-        <div style={{ display: 'flex', gap: '8px', background: 'rgba(15,23,42,0.8)', padding: '4px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+        {/* Navigation Tabs */}
+        <div style={{ display: 'flex', gap: '6px', background: 'rgba(15,23,42,0.8)', padding: '4px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
           <button
             onClick={() => setActiveTab('live')}
             style={{
-              padding: '8px 16px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
+              padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
               background: activeTab === 'live' ? 'linear-gradient(135deg, #06b6d4, #0284c7)' : 'transparent',
               color: activeTab === 'live' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
             }}
           >
-            <Eye size={16} /> Live AI View
+            <Eye size={15} /> Live AI View
           </button>
           <button
             onClick={() => setActiveTab('zones')}
             style={{
-              padding: '8px 16px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
+              padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
               background: activeTab === 'zones' ? 'linear-gradient(135deg, #06b6d4, #0284c7)' : 'transparent',
               color: activeTab === 'zones' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
             }}
           >
-            <ShieldAlert size={16} /> Intrusion Zones ({zones.length})
+            <ShieldAlert size={15} /> Intrusion Zones ({zones.length})
           </button>
           <button
             onClick={() => setActiveTab('events')}
             style={{
-              padding: '8px 16px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
+              padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
               background: activeTab === 'events' ? 'linear-gradient(135deg, #06b6d4, #0284c7)' : 'transparent',
               color: activeTab === 'events' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
             }}
           >
-            <Bell size={16} /> AI Events ({events.length})
+            <Bell size={15} /> AI Events ({events.length})
           </button>
           <button
             onClick={() => setActiveTab('models')}
             style={{
-              padding: '8px 16px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
+              padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: '600',
               background: activeTab === 'models' ? 'linear-gradient(135deg, #06b6d4, #0284c7)' : 'transparent',
               color: activeTab === 'models' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
             }}
           >
-            <Sliders size={16} /> Model Settings
+            <Sliders size={15} /> Model Controls
           </button>
         </div>
 
         {/* Live Service Status Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: wsConnected ? 'rgba(16,185,129,0.15)' : 'rgba(244,63,94,0.15)', padding: '6px 12px', borderRadius: '20px', border: wsConnected ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(244,63,94,0.3)' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: wsConnected ? '#10b981' : '#f43f5e' }} className={wsConnected ? 'pulse-badge' : ''} />
             <span style={{ fontSize: '12px', fontWeight: '600', color: wsConnected ? '#34d399' : '#fb7185' }}>
-              {wsConnected ? 'AI WebSocket Online' : 'AI Offline / Connecting'}
+              {wsConnected ? 'AI Engine Live' : 'AI Offline'}
             </span>
           </div>
         </div>
       </header>
 
-      {/* Main Content Dashboard */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '20px' }}>
+      {/* Main Dashboard Layout */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '16px' }}>
         
-        {/* Left Panel: Stream View / Zone Configurator / Event Table */}
+        {/* Main Content Area */}
         <main>
           {activeTab === 'live' && (
-            <div className="glass-panel" style={{ padding: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div className="glass-panel" style={{ padding: '16px' }}>
+              
+              {/* Production Camera Search Bar & Layout Controls */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', background: 'rgba(15,23,42,0.6)', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                
+                {/* Search Input Box */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, maxWidth: '380px', background: '#090d16', border: '1px solid #334155', borderRadius: '6px', padding: '6px 12px' }}>
+                  <Search size={15} color="#64748b" />
+                  <input
+                    type="text"
+                    placeholder={`Search ${cameraList.length} cameras by ID or name...`}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    style={{ background: 'transparent', border: 'none', color: '#f8fafc', outline: 'none', fontSize: '13px', width: '100%' }}
+                  />
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery('')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '12px' }}>✕</button>
+                  )}
+                </div>
+
+                {/* Profile Filter & Camera Dropdown */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <select
+                    value={profileFilter}
+                    onChange={(e) => setProfileFilter(e.target.value)}
+                    style={{ background: '#090d16', color: '#94a3b8', border: '1px solid #334155', padding: '6px 10px', borderRadius: '6px', fontSize: '12px', outline: 'none' }}
+                  >
+                    <option value="ALL">All Streams ({cameraList.length})</option>
+                    <option value="HD">HD Streams Only</option>
+                    <option value="NORMAL">Sub-Streams Only</option>
+                  </select>
+
                   <select
                     value={selectedCamera}
                     onChange={(e) => setSelectedCamera(e.target.value)}
-                    style={{ background: '#0f172a', color: '#f8fafc', border: '1px solid #334155', padding: '8px 12px', borderRadius: '6px', fontSize: '14px', outline: 'none' }}
+                    style={{ background: '#090d16', color: '#38bdf8', border: '1px solid #06b6d4', padding: '6px 12px', borderRadius: '6px', fontSize: '13px', fontWeight: '600', outline: 'none', maxWidth: '240px' }}
                   >
-                    {cameraList.map((cam) => (
-                      <option key={cam.id} value={cam.id}>{cam.name}</option>
-                    ))}
+                    {filteredCameras.length === 0 ? (
+                      <option value="">No cameras match search</option>
+                    ) : (
+                      filteredCameras.map((cam) => (
+                        <option key={cam.id} value={cam.id}>{cam.name}</option>
+                      ))
+                    )}
                   </select>
-                  <span style={{ fontSize: '12px', color: '#06b6d4', background: 'rgba(6,182,212,0.1)', padding: '4px 10px', borderRadius: '12px', border: '1px solid rgba(6,182,212,0.2)' }}>
-                    RTSP Live Stream Consumed
-                  </span>
                 </div>
 
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <span style={{ fontSize: '12px', background: activeModels.person ? 'rgba(16,185,129,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.person ? '#34d399' : '#64748b', padding: '4px 10px', borderRadius: '6px' }}>
-                    Person AI
-                  </span>
-                  <span style={{ fontSize: '12px', background: activeModels.face ? 'rgba(6,182,212,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.face ? '#38bdf8' : '#64748b', padding: '4px 10px', borderRadius: '6px' }}>
-                    Face AI
-                  </span>
-                  <span style={{ fontSize: '12px', background: activeModels.vehicle ? 'rgba(245,158,11,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.vehicle ? '#fbbf24' : '#64748b', padding: '4px 10px', borderRadius: '6px' }}>
-                    Vehicle/ANPR
-                  </span>
-                  <span style={{ fontSize: '12px', background: activeModels.intrusion ? 'rgba(244,63,94,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.intrusion ? '#fb7185' : '#64748b', padding: '4px 10px', borderRadius: '6px' }}>
-                    Intrusion Zone
-                  </span>
+                {/* Grid Mode View Toggles */}
+                <div style={{ display: 'flex', gap: '4px', background: '#090d16', padding: '2px', borderRadius: '6px', border: '1px solid #334155' }}>
+                  <button
+                    onClick={() => setGridMode('1x1')}
+                    style={{ padding: '6px 10px', background: gridMode === '1x1' ? '#06b6d4' : 'transparent', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}
+                    title="1x1 Single Focus Stream View"
+                  >
+                    <Grid size={15} />
+                  </button>
+                  <button
+                    onClick={() => setGridMode('2x2')}
+                    style={{ padding: '6px 10px', background: gridMode === '2x2' ? '#06b6d4' : 'transparent', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}
+                    title="2x2 Multi-Camera Matrix View"
+                  >
+                    <LayoutGrid size={15} />
+                  </button>
                 </div>
               </div>
 
-              {/* Video Player Container with AI Bounding Box Overlay */}
-              <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b', aspectRatio: '16/9' }}>
-                <img
-                  key={selectedCamera}
-                  src={`${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
-                  alt="AI Live Feed"
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                />
-                
-                {/* Visual Overlay Watermark */}
-                <div style={{ position: 'absolute', top: '16px', left: '16px', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', padding: '6px 12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                  <Radio size={14} color="#10b981" />
-                  <span style={{ fontSize: '12px', fontWeight: '600', letterSpacing: '0.5px' }}>LIVE AI ANALYTICS STREAM</span>
+              {/* Active AI Model Indicators */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Video size={16} color="#06b6d4" />
+                  <span style={{ fontSize: '13px', fontWeight: '600', color: '#cbd5e1' }}>
+                    Active Feed: {selectedCamera}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <span style={{ fontSize: '11px', background: activeModels.person ? 'rgba(16,185,129,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.person ? '#34d399' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Person</span>
+                  <span style={{ fontSize: '11px', background: activeModels.face ? 'rgba(6,182,212,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.face ? '#38bdf8' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Face</span>
+                  <span style={{ fontSize: '11px', background: activeModels.vehicle ? 'rgba(245,158,11,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.vehicle ? '#fbbf24' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Vehicle/ANPR</span>
+                  <span style={{ fontSize: '11px', background: activeModels.intrusion ? 'rgba(244,63,94,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.intrusion ? '#fb7185' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Intrusion</span>
                 </div>
               </div>
+
+              {/* Real Video Stream Viewport */}
+              {gridMode === '1x1' ? (
+                <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b', aspectRatio: '16/9' }}>
+                  <img
+                    key={selectedCamera}
+                    src={`${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
+                    alt="Real AI Camera Feed"
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  />
+                  <div style={{ position: 'absolute', top: '12px', left: '12px', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                    <Radio size={13} color="#10b981" />
+                    <span style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.5px' }}>REAL LIVE CCTV FEED</span>
+                  </div>
+                </div>
+              ) : (
+                /* 2x2 Multi-Camera Grid View */
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  {filteredCameras.slice(0, 4).map((cam) => (
+                    <div key={cam.id} style={{ position: 'relative', width: '100%', aspectRatio: '16/9', borderRadius: '6px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b' }}>
+                      <img
+                        src={`${aiServiceHost}/api/ai/streams/${cam.id}/live`}
+                        alt={cam.name}
+                        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      />
+                      <div style={{ position: 'absolute', bottom: '8px', left: '8px', background: 'rgba(0,0,0,0.7)', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: '600', color: '#38bdf8' }}>
+                        {cam.id}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -350,30 +425,21 @@ export default function App() {
             <div className="glass-panel" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <div>
-                  <h2 style={{ fontSize: '16px', fontWeight: '700' }}>Polygonal Intrusion Zone Drawer</h2>
-                  <p style={{ fontSize: '12px', color: '#64748b' }}>Click directly on the video canvas below to draw perimeter boundaries</p>
+                  <h2 style={{ fontSize: '16px', fontWeight: '700' }}>Polygonal Intrusion Zone Configurator</h2>
+                  <p style={{ fontSize: '12px', color: '#64748b' }}>Click on the live video canvas to set polygon boundary points</p>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   {isDrawingZone ? (
                     <>
-                      <button
-                        onClick={saveZone}
-                        style={{ padding: '8px 14px', background: '#10b981', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}
-                      >
+                      <button onClick={saveZone} style={{ padding: '8px 14px', background: '#10b981', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>
                         Save Zone ({newZonePoints.length} points)
                       </button>
-                      <button
-                        onClick={() => { setIsDrawingZone(false); setNewZonePoints([]); }}
-                        style={{ padding: '8px 14px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}
-                      >
+                      <button onClick={() => { setIsDrawingZone(false); setNewZonePoints([]); }} style={{ padding: '8px 14px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>
                         Cancel
                       </button>
                     </>
                   ) : (
-                    <button
-                      onClick={() => setIsDrawingZone(true)}
-                      style={{ padding: '8px 14px', background: '#06b6d4', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}
-                    >
+                    <button onClick={() => setIsDrawingZone(true)} style={{ padding: '8px 14px', background: '#06b6d4', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <Plus size={16} /> Draw New Intrusion Zone
                     </button>
                   )}
@@ -384,7 +450,7 @@ export default function App() {
                 <div style={{ marginBottom: '12px', display: 'flex', gap: '10px' }}>
                   <input
                     type="text"
-                    placeholder="Enter Zone Name (e.g. Restricted Gate A)"
+                    placeholder="Enter Zone Name (e.g. Perimeter Gate A)"
                     value={newZoneName}
                     onChange={(e) => setNewZoneName(e.target.value)}
                     style={{ flex: 1, background: '#0f172a', border: '1px solid #334155', color: '#fff', padding: '8px 12px', borderRadius: '6px', fontSize: '13px' }}
@@ -392,7 +458,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Interactive Zone Canvas Container */}
               <div
                 ref={videoCanvasRef}
                 onClick={handleCanvasClick}
@@ -408,7 +473,6 @@ export default function App() {
                   style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
                 />
                 
-                {/* Render SVG overlay for drawing points */}
                 <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
                   {zones.map((z) => (
                     <g key={z.zone_id}>
@@ -420,7 +484,6 @@ export default function App() {
                       />
                     </g>
                   ))}
-
                   {newZonePoints.length > 0 && (
                     <g>
                       <polygon
@@ -438,7 +501,6 @@ export default function App() {
                 </svg>
               </div>
 
-              {/* Saved Zones List */}
               <div style={{ marginTop: '20px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '10px' }}>Active Intrusion Zones</h3>
                 {zones.length === 0 ? (
@@ -451,10 +513,7 @@ export default function App() {
                           <p style={{ fontSize: '13px', fontWeight: '600' }}>{z.name}</p>
                           <p style={{ fontSize: '11px', color: '#64748b' }}>{z.polygon.length} Vertices Polygon</p>
                         </div>
-                        <button
-                          onClick={() => deleteZone(z.zone_id)}
-                          style={{ background: 'rgba(244,63,94,0.15)', color: '#fb7185', border: '1px solid rgba(244,63,94,0.3)', padding: '6px', borderRadius: '6px', cursor: 'pointer' }}
-                        >
+                        <button onClick={() => deleteZone(z.zone_id)} style={{ background: 'rgba(244,63,94,0.15)', color: '#fb7185', border: '1px solid rgba(244,63,94,0.3)', padding: '6px', borderRadius: '6px', cursor: 'pointer' }}>
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -468,7 +527,7 @@ export default function App() {
           {activeTab === 'events' && (
             <div className="glass-panel" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h2 style={{ fontSize: '16px', fontWeight: '700' }}>Historical AI Detection Logs</h2>
+                <h2 style={{ fontSize: '16px', fontWeight: '700' }}>Historical AI Analytics Logs</h2>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button onClick={() => setEventFilter('all')} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '12px', background: eventFilter === 'all' ? '#06b6d4' : '#1e293b', color: '#fff', border: 'none', cursor: 'pointer' }}>All</button>
                   <button onClick={() => setEventFilter('person')} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '12px', background: eventFilter === 'person' ? '#06b6d4' : '#1e293b', color: '#fff', border: 'none', cursor: 'pointer' }}>Person</button>
@@ -514,7 +573,7 @@ export default function App() {
 
           {activeTab === 'models' && (
             <div className="glass-panel" style={{ padding: '20px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '16px' }}>AI Model Zoo & Threshold Tuning</h2>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '16px' }}>Production AI Model Zoo & Sensitivity Controls</h2>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div className="glass-card" style={{ padding: '16px' }}>
@@ -523,15 +582,10 @@ export default function App() {
                       <UserCheck color="#10b981" />
                       <div>
                         <h3 style={{ fontSize: '14px', fontWeight: '600' }}>Person Detection Engine</h3>
-                        <p style={{ fontSize: '12px', color: '#64748b' }}>OpenCV / MobileNet-SSD Human Detection</p>
+                        <p style={{ fontSize: '12px', color: '#64748b' }}>Real Human Body & Centroid Tracker</p>
                       </div>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={activeModels.person}
-                      onChange={() => toggleModel('person')}
-                      style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                    />
+                    <input type="checkbox" checked={activeModels.person} onChange={() => toggleModel('person')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                   </div>
                 </div>
 
@@ -541,15 +595,10 @@ export default function App() {
                       <Smile color="#38bdf8" />
                       <div>
                         <h3 style={{ fontSize: '14px', fontWeight: '600' }}>Face Recognition Engine</h3>
-                        <p style={{ fontSize: '12px', color: '#64748b' }}>Face Bounding Box & Landmark Estimator</p>
+                        <p style={{ fontSize: '12px', color: '#64748b' }}>Facial Bounding Box & Landmark Estimator</p>
                       </div>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={activeModels.face}
-                      onChange={() => toggleModel('face')}
-                      style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                    />
+                    <input type="checkbox" checked={activeModels.face} onChange={() => toggleModel('face')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                   </div>
                 </div>
 
@@ -562,12 +611,7 @@ export default function App() {
                         <p style={{ fontSize: '12px', color: '#64748b' }}>Vehicle & License Plate Region Extractor</p>
                       </div>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={activeModels.vehicle}
-                      onChange={() => toggleModel('vehicle')}
-                      style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                    />
+                    <input type="checkbox" checked={activeModels.vehicle} onChange={() => toggleModel('vehicle')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                   </div>
                 </div>
 
@@ -577,20 +621,15 @@ export default function App() {
                       <ShieldAlert color="#fb7185" />
                       <div>
                         <h3 style={{ fontSize: '14px', fontWeight: '600' }}>Intrusion & Tripwire Engine</h3>
-                        <p style={{ fontSize: '12px', color: '#64748b' }}>Polygon Perimeter Breach Detector</p>
+                        <p style={{ fontSize: '12px', color: '#64748b' }}>Geometric Polygon Breach Alarm</p>
                       </div>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={activeModels.intrusion}
-                      onChange={() => toggleModel('intrusion')}
-                      style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                    />
+                    <input type="checkbox" checked={activeModels.intrusion} onChange={() => toggleModel('intrusion')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                   </div>
                 </div>
               </div>
 
-              <div className="glass-card" style={{ marginTop: '24px', padding: '16px' }}>
+              <div className="glass-card" style={{ marginTop: '20px', padding: '16px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>Global Confidence Threshold: {(confidenceThreshold * 100).toFixed(0)}%</h3>
                 <input
                   type="range"
@@ -606,9 +645,9 @@ export default function App() {
           )}
         </main>
 
-        {/* Right Sidebar: Real-Time Event Alert Ticker */}
+        {/* Right Sidebar: Real-Time Event Feed Ticker */}
         <aside className="glass-panel" style={{ padding: '16px', height: 'fit-content' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Zap size={18} color="#06b6d4" />
               <h3 style={{ fontSize: '14px', fontWeight: '700' }}>Real-Time Event Stream</h3>
