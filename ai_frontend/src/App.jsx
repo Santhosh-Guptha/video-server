@@ -55,6 +55,127 @@ const getPolygonPointsStr = (polygon) => {
     .join(' ');
 };
 
+// ─── WebRTC Player Component (WHEP with automatic HLS Fallback) ───
+function WebRTCVideoPlayer({ streamId, vmsBackendHost, style, onCanPlay, onError, videoRef: externalRef }) {
+  const internalRef = useRef(null);
+  const videoRef = externalRef || internalRef;
+  const pcRef = useRef(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    let timeoutId = null;
+
+    const startWebRTC = async () => {
+      try {
+        // Fetch ICE servers if available from VMS backend
+        let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+        try {
+          const iceResp = await fetch(`${vmsBackendHost}/api/webrtc/ice-servers`);
+          if (iceResp.ok) {
+            const data = await iceResp.json();
+            if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+              iceServers = data.iceServers;
+            }
+          }
+        } catch (e) {}
+
+        if (!isMountedRef.current) return;
+
+        const pc = new RTCPeerConnection({ iceServers });
+        pcRef.current = pc;
+
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+
+        pc.ontrack = (event) => {
+          if (!isMountedRef.current) return;
+          const video = videoRef.current;
+          if (video && event.streams && event.streams[0]) {
+            video.srcObject = event.streams[0];
+            video.play().catch(() => {});
+            onCanPlay && onCanPlay('webrtc');
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          if (!isMountedRef.current) return;
+          if (pc.iceConnectionState === 'failed') {
+            onError && onError('WebRTC ICE Failed');
+          }
+        };
+
+        // Set a 6-second connection timeout for WebRTC
+        timeoutId = setTimeout(() => {
+          if (isMountedRef.current && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+            onError && onError('WebRTC Timeout');
+          }
+        }, 6000);
+
+        const offer = await pc.createOffer();
+        if (!isMountedRef.current) { pc.close(); return; }
+        await pc.setLocalDescription(offer);
+        if (!isMountedRef.current) { pc.close(); return; }
+
+        // WHEP SDP Offer POST request
+        const whepUrl = `${vmsBackendHost}/api/streams/${encodeURIComponent(streamId)}/live/whep`;
+        const whepResp = await fetch(whepUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body: offer.sdp,
+        });
+
+        if (!isMountedRef.current) { pc.close(); return; }
+        if (!whepResp.ok) {
+          throw new Error(`WHEP failed with status ${whepResp.status}`);
+        }
+
+        const answerSdp = await whepResp.text();
+        if (!isMountedRef.current) { pc.close(); return; }
+        await pc.setRemoteDescription(new RTCSessionDescription({
+          type: 'answer',
+          sdp: answerSdp
+        }));
+
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        onError && onError(err.message || 'WebRTC Negotiation Failed');
+      }
+    };
+
+    startWebRTC();
+
+    return () => {
+      isMountedRef.current = false;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      const video = videoRef.current;
+      if (video) {
+        if (video.srcObject) {
+          const stream = video.srcObject;
+          if (stream && typeof stream.getTracks === 'function') {
+            stream.getTracks().forEach(t => t.stop());
+          }
+          video.srcObject = null;
+        }
+      }
+    };
+  }, [streamId, vmsBackendHost, onCanPlay, onError, videoRef]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted
+      style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', ...style }}
+    />
+  );
+}
+
 // ─── HLS Live Video Player Component ─────────────────────────────
 function HLSVideoPlayer({ src, style, onCanPlay, onError, videoRef: externalRef }) {
   const internalRef = useRef(null);
@@ -103,7 +224,7 @@ function HLSVideoPlayer({ src, style, onCanPlay, onError, videoRef: externalRef 
       if (!isMountedRef.current) return;
       retryCountRef.current = 0;
       video.play().catch(() => {});
-      onCanPlay && onCanPlay();
+      onCanPlay && onCanPlay('hls');
     });
 
     hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -166,7 +287,44 @@ function HLSVideoPlayer({ src, style, onCanPlay, onError, videoRef: externalRef 
   );
 }
 
-// ─── Live Camera Cell for the Wall (Pure HLS, No AI) ────────────
+// ─── Smart Stream Player (Prefers WebRTC, Falls Back to HLS) ──────
+function SmartStreamPlayer({ streamId, vmsBackendHost, style, onCanPlay, onError, videoRef }) {
+  const [protocol, setProtocol] = useState('webrtc'); // 'webrtc' | 'hls'
+
+  // Reset to WebRTC whenever streamId changes
+  useEffect(() => {
+    setProtocol('webrtc');
+  }, [streamId]);
+
+  if (protocol === 'webrtc') {
+    return (
+      <WebRTCVideoPlayer
+        streamId={streamId}
+        vmsBackendHost={vmsBackendHost}
+        style={style}
+        videoRef={videoRef}
+        onCanPlay={(proto) => onCanPlay && onCanPlay(proto || 'webrtc')}
+        onError={(err) => {
+          console.warn(`[SmartStreamPlayer:${streamId}] WebRTC failed (${err}). Falling back to HLS.`);
+          setProtocol('hls');
+        }}
+      />
+    );
+  }
+
+  const hlsSrc = `${vmsBackendHost}/api/streams/${encodeURIComponent(streamId)}/live/index.m3u8`;
+  return (
+    <HLSVideoPlayer
+      src={hlsSrc}
+      style={style}
+      videoRef={videoRef}
+      onCanPlay={(proto) => onCanPlay && onCanPlay(proto || 'hls')}
+      onError={() => onError && onError()}
+    />
+  );
+}
+
+// ─── Live Camera Cell for the Wall (Smart WebRTC / HLS, No AI) ────────────
 function LiveWallCell({ camera, vmsBackendHost, onFocusCamera }) {
   if (!camera || !camera.id) {
     return (
@@ -176,9 +334,9 @@ function LiveWallCell({ camera, vmsBackendHost, onFocusCamera }) {
 
   const camId = camera.id;
   const camName = camera.name || `Camera ${camId}`;
-  const hlsSrc = `${vmsBackendHost}/api/streams/${encodeURIComponent(camId)}/live/index.m3u8`;
 
   const [status, setStatus] = useState('connecting');
+  const [protocol, setProtocol] = useState('webrtc');
 
   return (
     <div
@@ -196,9 +354,13 @@ function LiveWallCell({ camera, vmsBackendHost, onFocusCamera }) {
       }}
       title={`Click to focus: ${camName}`}
     >
-      <HLSVideoPlayer
-        src={hlsSrc}
-        onCanPlay={() => setStatus('live')}
+      <SmartStreamPlayer
+        streamId={camId}
+        vmsBackendHost={vmsBackendHost}
+        onCanPlay={(proto) => {
+          setStatus('live');
+          setProtocol(proto || 'webrtc');
+        }}
         onError={() => setStatus('offline')}
       />
 
@@ -211,7 +373,7 @@ function LiveWallCell({ camera, vmsBackendHost, onFocusCamera }) {
         }}>
           <div style={{ textAlign: 'center' }}>
             <div style={{ width: '20px', height: '20px', border: '2px solid #06b6d4', borderTop: '2px solid transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 6px' }} />
-            <span style={{ fontSize: '10px', color: '#94a3b8' }}>Connecting...</span>
+            <span style={{ fontSize: '10px', color: '#94a3b8' }}>Connecting WebRTC...</span>
           </div>
         </div>
       )}
@@ -235,10 +397,10 @@ function LiveWallCell({ camera, vmsBackendHost, onFocusCamera }) {
         </div>
         <span style={{
           fontSize: '8px', padding: '1px 5px', borderRadius: '3px', fontWeight: '600',
-          background: status === 'live' ? 'rgba(16,185,129,0.3)' : 'rgba(100,116,139,0.3)',
-          color: status === 'live' ? '#34d399' : '#94a3b8'
+          background: status === 'live' ? (protocol === 'webrtc' ? 'rgba(56,189,248,0.3)' : 'rgba(16,185,129,0.3)') : 'rgba(100,116,139,0.3)',
+          color: status === 'live' ? (protocol === 'webrtc' ? '#38bdf8' : '#34d399') : '#94a3b8'
         }}>
-          {status === 'live' ? 'LIVE' : status === 'offline' ? 'OFFLINE' : '...'}
+          {status === 'live' ? protocol.toUpperCase() : status === 'offline' ? 'OFFLINE' : '...'}
         </span>
       </div>
     </div>
@@ -749,8 +911,9 @@ export default function App() {
                     cursor: isDrawingZone ? 'crosshair' : 'default'
                   }}
                 >
-                  <HLSVideoPlayer
-                    src={`${vmsBackendHost}/api/streams/${encodeURIComponent(selectedCamera.id)}/live/index.m3u8`}
+                  <SmartStreamPlayer
+                    streamId={selectedCamera.id}
+                    vmsBackendHost={vmsBackendHost}
                     videoRef={focusVideoRef}
                   />
 
