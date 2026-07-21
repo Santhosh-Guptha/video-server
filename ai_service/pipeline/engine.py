@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Ensure system dist-packages is in sys.path for ultralytics & PyTorch
+for p in ["/usr/local/lib/python3.10/dist-packages", "/usr/lib/python3/dist-packages"]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.append(p)
+
 import cv2
 import numpy as np
 import time
@@ -12,28 +20,108 @@ from ..models.intrusion_detector import IntrusionDetector
 from ..database import get_intrusion_zones
 from ..events.event_manager import event_manager
 
+# Color palette for different detection types (BGR)
+COLORS = {
+    "person": (0, 255, 100),       # Green
+    "head": (0, 220, 180),         # Teal
+    "upper body": (0, 200, 150),   # Light teal
+    "face": (255, 200, 0),         # Cyan/Yellow
+    "car": (0, 165, 255),          # Orange
+    "motorcycle": (0, 200, 255),   # Light Orange
+    "bicycle": (200, 255, 0),      # Yellow-Green
+    "bus": (0, 100, 255),          # Dark Orange
+    "truck": (50, 80, 255),        # Red-Orange
+    "train": (255, 0, 150),        # Purple
+    "vehicle": (0, 165, 255),      # Orange (fallback)
+    "intrusion": (0, 0, 255),      # Red
+    "default": (255, 100, 0),      # Blue
+}
+
+
+def get_color(label: str) -> tuple:
+    key = label.lower()
+    return COLORS.get(key, COLORS["default"])
+
+
+def draw_fancy_box(frame, xmin, ymin, xmax, ymax, label_str, color, thickness=2):
+    """Draw a bounding box with a filled label background for readability."""
+    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, thickness)
+
+    # Corner accents (top-left and bottom-right)
+    corner_len = min(20, (xmax - xmin) // 4, (ymax - ymin) // 4)
+    cv2.line(frame, (xmin, ymin), (xmin + corner_len, ymin), color, thickness + 1)
+    cv2.line(frame, (xmin, ymin), (xmin, ymin + corner_len), color, thickness + 1)
+    cv2.line(frame, (xmax, ymax), (xmax - corner_len, ymax), color, thickness + 1)
+    cv2.line(frame, (xmax, ymax), (xmax, ymax - corner_len), color, thickness + 1)
+
+    # Label background
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.45
+    (tw, th), _ = cv2.getTextSize(label_str, font, font_scale, 1)
+    label_y = max(0, ymin - 4)
+    cv2.rectangle(frame, (xmin, label_y - th - 6), (xmin + tw + 8, label_y), color, -1)
+    cv2.putText(frame, label_str, (xmin + 4, label_y - 4), font, font_scale, (0, 0, 0), 1, cv2.LINE_AA)
+
 
 class AIPipelineEngine:
-    """On-demand AI pipeline engine — processes cameras only when explicitly requested."""
+    """On-demand AI pipeline engine with shared YOLO model and configurable thresholds."""
 
     def __init__(self):
-        self.person_detector = PersonDetector(confidence_threshold=0.45)
-        self.face_detector = FaceDetector(confidence_threshold=0.5)
-        self.vehicle_detector = VehicleDetector(confidence_threshold=0.30)
+        # ─── Load Shared YOLOv8s Model (once) ──────────────────────
+        self.shared_yolo = None
+        try:
+            from ultralytics import YOLO
+            self.shared_yolo = YOLO("yolov8s.pt")
+            print("[Engine] ✓ Shared YOLOv8s model loaded successfully!")
+        except Exception as e:
+            print(f"[Engine] YOLOv8s load error ({e}), detectors will load own models")
+
+        # ─── Initialize Detectors with Shared Model ────────────────
+        self.person_detector = PersonDetector(confidence_threshold=0.15, shared_model=self.shared_yolo)
+        self.face_detector = FaceDetector(confidence_threshold=0.30)
+        self.vehicle_detector = VehicleDetector(confidence_threshold=0.15, shared_model=self.shared_yolo)
         self.intrusion_detector = IntrusionDetector()
 
+        # ─── State ─────────────────────────────────────────────────
         self.ingesters: Dict[str, StreamIngester] = {}
         self.active_models: Dict[str, List[str]] = {}
         self.annotated_frames: Dict[str, np.ndarray] = {}
         self.latest_detections: Dict[str, List[Dict[str, Any]]] = {}
         self.last_event_times: Dict[str, float] = {}
+
+        # ─── Configurable Thresholds (per-camera or global) ────────
+        self.config: Dict[str, Any] = {
+            "person_threshold": 0.15,
+            "vehicle_threshold": 0.15,
+            "face_threshold": 0.30,
+            "inference_size": 960,
+        }
+        self.camera_configs: Dict[str, Dict[str, Any]] = {}
+
         self.lock = threading.Lock()
 
+    # ─── Configuration ─────────────────────────────────────────────
+    def update_config(self, new_config: Dict[str, Any], camera_id: str = None):
+        """Update global or per-camera AI configuration."""
+        if camera_id:
+            if camera_id not in self.camera_configs:
+                self.camera_configs[camera_id] = {}
+            self.camera_configs[camera_id].update(new_config)
+        else:
+            self.config.update(new_config)
+
+    def get_config(self, camera_id: str = None) -> Dict[str, Any]:
+        """Get effective config (camera-specific overrides global)."""
+        cfg = dict(self.config)
+        if camera_id and camera_id in self.camera_configs:
+            cfg.update(self.camera_configs[camera_id])
+        return cfg
+
+    # ─── Camera Management ─────────────────────────────────────────
     def register_camera(self, camera_id: str, stream_url: str, active_models: List[str]):
-        """Register a camera ingester for on-demand processing. Does NOT start background loop."""
+        """Register a camera ingester for on-demand processing."""
         with self.lock:
             if camera_id in self.ingesters:
-                # Already registered — just update models
                 self.active_models[camera_id] = active_models
                 return
 
@@ -43,7 +131,7 @@ class AIPipelineEngine:
             self.active_models[camera_id] = active_models
 
     def unregister_camera(self, camera_id: str):
-        """Stop and remove a camera ingester, freeing resources."""
+        """Stop and remove a camera ingester."""
         with self.lock:
             ingester = self.ingesters.pop(camera_id, None)
             if ingester:
@@ -51,6 +139,7 @@ class AIPipelineEngine:
             self.active_models.pop(camera_id, None)
             self.annotated_frames.pop(camera_id, None)
             self.latest_detections.pop(camera_id, None)
+            self.camera_configs.pop(camera_id, None)
 
     def update_camera_models(self, camera_id: str, active_models: List[str]):
         with self.lock:
@@ -70,9 +159,10 @@ class AIPipelineEngine:
     def get_active_camera_ids(self) -> List[str]:
         return list(self.ingesters.keys())
 
+    # ─── Core Processing ───────────────────────────────────────────
     def process_camera_once(self, camera_id: str) -> Dict[str, Any]:
         """
-        On-demand: grab one frame from the camera, run AI detection models,
+        On-demand: grab one frame, run AI models, draw annotations,
         cache results, and return detections + zones immediately.
         """
         ingester = self.ingesters.get(camera_id)
@@ -105,13 +195,18 @@ class AIPipelineEngine:
                 "status": "no_frame"
             }
 
+        # Get effective config for this camera
+        cfg = self.get_config(camera_id)
         active_mods = self.active_models.get(camera_id, ["person"])
         detections = []
 
-        # Execute AI Models
+        # ─── Execute AI Models ─────────────────────────────────────
         if "person" in active_mods:
             try:
-                p_dets = self.person_detector.detect(frame, camera_id)
+                p_dets = self.person_detector.detect(
+                    frame, camera_id,
+                    confidence_override=cfg.get("person_threshold")
+                )
                 detections.extend(p_dets)
             except Exception:
                 pass
@@ -125,12 +220,15 @@ class AIPipelineEngine:
 
         if "vehicle" in active_mods:
             try:
-                v_dets = self.vehicle_detector.detect(frame, camera_id)
+                v_dets = self.vehicle_detector.detect(
+                    frame, camera_id,
+                    confidence_override=cfg.get("vehicle_threshold")
+                )
                 detections.extend(v_dets)
             except Exception:
                 pass
 
-        # Fetch active intrusion zones for camera
+        # ─── Intrusion Zone Processing ─────────────────────────────
         zones = get_intrusion_zones(camera_id)
         breaches = []
         if "intrusion" in active_mods and zones:
@@ -139,7 +237,7 @@ class AIPipelineEngine:
             except Exception:
                 pass
 
-        # Draw Visual AI Annotations on Frame Buffer
+        # ─── Draw Visual AI Annotations ────────────────────────────
         annotated = frame.copy()
         h, w = annotated.shape[:2]
 
@@ -148,9 +246,12 @@ class AIPipelineEngine:
             if z.get("enabled") and z.get("polygon"):
                 try:
                     pts = np.array([[int(pt["x"] * w), int(pt["y"] * h)] for pt in z["polygon"]], np.int32)
-                    cv2.polylines(annotated, [pts], isClosed=True, color=(0, 165, 255), thickness=2)
+                    overlay = annotated.copy()
+                    cv2.fillPoly(overlay, [pts], (0, 0, 255, 40))
+                    cv2.addWeighted(overlay, 0.15, annotated, 0.85, 0, annotated)
+                    cv2.polylines(annotated, [pts], isClosed=True, color=(0, 0, 255), thickness=2)
                     cv2.putText(annotated, f"Zone: {z['name']}", (pts[0][0], max(20, pts[0][1] - 10)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1, cv2.LINE_AA)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
                 except Exception:
                     pass
 
@@ -166,18 +267,15 @@ class AIPipelineEngine:
                 xmin, ymin = int(det.bbox.xmin * w), int(det.bbox.ymin * h)
                 xmax, ymax = int(det.bbox.xmax * w), int(det.bbox.ymax * h)
 
-                color = (0, 255, 0) if det.label == "Person" else (255, 200, 0) if det.label == "Face" else (0, 165, 255) if "Vehicle" in det.label else (255, 100, 0)
-                cv2.rectangle(annotated, (xmin, ymin), (xmax, ymax), color, 2)
-
+                color = get_color(det.label)
                 label_str = f"{det.label} {int(det.confidence * 100)}%"
-                cv2.putText(annotated, label_str, (xmin, max(15, ymin - 6)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                draw_fancy_box(annotated, xmin, ymin, xmax, ymax, label_str, color)
 
-                # Rate limit AI Event Generation (1 event per 3 seconds per label per camera)
+                # Rate-limited AI Event Generation (1 event per 3 seconds per label per camera)
                 evt_key = f"{camera_id}:{det.label}"
                 if now - self.last_event_times.get(evt_key, 0) > 3.0:
                     self.last_event_times[evt_key] = now
-                    evt_type = f"{det.label.lower()}_detected"
+                    evt_type = f"{det.class_name or det.label.lower()}_detected"
                     event_manager.process_and_emit(
                         camera_id=camera_id,
                         camera_name=f"Camera {camera_id}",
@@ -208,6 +306,14 @@ class AIPipelineEngine:
                     )
             except Exception:
                 pass
+
+        # Draw detection count HUD overlay
+        det_count = len(detections)
+        if det_count > 0:
+            hud_text = f"Detections: {det_count}"
+            cv2.rectangle(annotated, (w - 160, 8), (w - 10, 30), (0, 0, 0), -1)
+            cv2.putText(annotated, hud_text, (w - 155, 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1, cv2.LINE_AA)
 
         with self.lock:
             self.annotated_frames[camera_id] = annotated

@@ -177,6 +177,30 @@ def update_models(camera_id: str, payload: Dict[str, Any]):
     pipeline_engine.update_camera_models(camera_id, active_models)
     return {"status": "updated", "camera_id": camera_id, "active_models": active_models}
 
+# ─── AI Configuration Endpoints ───────────────────────────────────
+
+@app.get("/api/ai/config")
+def get_ai_config():
+    """Get global AI configuration (thresholds, inference size)."""
+    return pipeline_engine.get_config()
+
+@app.post("/api/ai/config")
+def update_ai_config(payload: Dict[str, Any]):
+    """Update global AI configuration."""
+    pipeline_engine.update_config(payload)
+    return {"status": "updated", "config": pipeline_engine.get_config()}
+
+@app.post("/api/ai/cameras/{camera_id}/config")
+def update_camera_config(camera_id: str, payload: Dict[str, Any]):
+    """Update per-camera AI configuration (overrides global)."""
+    pipeline_engine.update_config(payload, camera_id=camera_id)
+    return {"status": "updated", "camera_id": camera_id, "config": pipeline_engine.get_config(camera_id)}
+
+@app.get("/api/ai/cameras/{camera_id}/config")
+def get_camera_config(camera_id: str):
+    """Get effective AI configuration for a specific camera."""
+    return pipeline_engine.get_config(camera_id)
+
 # ─── On-Demand Detection Endpoints ────────────────────────────────
 
 @app.get("/api/ai/streams/{camera_id}/detections")

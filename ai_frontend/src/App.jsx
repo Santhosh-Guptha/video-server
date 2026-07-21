@@ -473,6 +473,11 @@ export default function App() {
   const [aiModels, setAiModels] = useState({
     person: true, face: false, vehicle: false, intrusion: false
   });
+  const [aiThresholds, setAiThresholds] = useState({
+    person_threshold: 0.15,
+    vehicle_threshold: 0.15,
+    face_threshold: 0.30
+  });
   const [aiStatus, setAiStatus] = useState('idle'); // idle | starting | active | stopping
 
   // Intrusion zone drawing
@@ -613,6 +618,19 @@ export default function App() {
       return updated;
     });
   }, [selectedCamera, aiEnabled, aiServiceHost]);
+
+  // Update confidence thresholds on the backend
+  const updateThreshold = useCallback(async (key, value) => {
+    const newThresholds = { ...aiThresholds, [key]: value };
+    setAiThresholds(newThresholds);
+    if (selectedCamera && aiEnabled) {
+      fetch(`${aiServiceHost}/api/ai/cameras/${selectedCamera.id}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: value })
+      }).catch(() => {});
+    }
+  }, [selectedCamera, aiEnabled, aiServiceHost, aiThresholds]);
 
   // When selecting a different camera, stop AI on the previous one
   const handleFocusCamera = useCallback((cam) => {
@@ -1058,6 +1076,55 @@ export default function App() {
                 <ModelToggle icon={Car} label="Vehicle Detection" color="#fbbf24" modelKey="vehicle" />
                 <ModelToggle icon={ShieldAlert} label="Intrusion Detection" color="#f43f5e" modelKey="intrusion" />
               </div>
+
+              {/* Confidence Threshold Controls */}
+              {aiEnabled && (
+                <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                    <Sliders size={14} color="#94a3b8" />
+                    <span style={{ fontSize: '11px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sensitivity</span>
+                  </div>
+
+                  {aiModels.person && (
+                    <div style={{ marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '11px', color: '#10b981' }}>Person</span>
+                        <span style={{ fontSize: '10px', color: '#64748b' }}>{Math.round(aiThresholds.person_threshold * 100)}%</span>
+                      </div>
+                      <input type="range" min="5" max="80" value={Math.round(aiThresholds.person_threshold * 100)}
+                        onChange={(e) => updateThreshold('person_threshold', parseInt(e.target.value) / 100)}
+                        style={{ width: '100%', height: '4px', accentColor: '#10b981', cursor: 'pointer' }}
+                      />
+                    </div>
+                  )}
+
+                  {aiModels.vehicle && (
+                    <div style={{ marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '11px', color: '#fbbf24' }}>Vehicle</span>
+                        <span style={{ fontSize: '10px', color: '#64748b' }}>{Math.round(aiThresholds.vehicle_threshold * 100)}%</span>
+                      </div>
+                      <input type="range" min="5" max="80" value={Math.round(aiThresholds.vehicle_threshold * 100)}
+                        onChange={(e) => updateThreshold('vehicle_threshold', parseInt(e.target.value) / 100)}
+                        style={{ width: '100%', height: '4px', accentColor: '#fbbf24', cursor: 'pointer' }}
+                      />
+                    </div>
+                  )}
+
+                  {aiModels.face && (
+                    <div style={{ marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '11px', color: '#38bdf8' }}>Face</span>
+                        <span style={{ fontSize: '10px', color: '#64748b' }}>{Math.round(aiThresholds.face_threshold * 100)}%</span>
+                      </div>
+                      <input type="range" min="5" max="80" value={Math.round(aiThresholds.face_threshold * 100)}
+                        onChange={(e) => updateThreshold('face_threshold', parseInt(e.target.value) / 100)}
+                        style={{ width: '100%', height: '4px', accentColor: '#38bdf8', cursor: 'pointer' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Zone Drawing Controls */}
               {aiModels.intrusion && aiEnabled && (
