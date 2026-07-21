@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ShieldAlert, UserCheck, Smile, Car, Bell, Sliders,
-  Eye, Cpu, Radio, Plus, Trash2, Zap, Search, Grid, LayoutGrid,
-  Video, Users, Maximize2, RotateCw, ChevronLeft, ChevronRight, X
+  Eye, Cpu, Radio, Plus, Trash2, Zap, Search, LayoutGrid,
+  Video, Maximize2, RotateCw, ChevronLeft, ChevronRight, X
 } from 'lucide-react';
 
 const getAiServiceHost = () => {
@@ -30,24 +30,14 @@ const getAiWsHost = () => {
   return 'ws://localhost:8001/ws/ai-events';
 };
 
-// Robust WebRTC & AI Visual Markings Overlay Player Component
-function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCamera }) {
-  const videoRef = useRef(null);
-  const pcRef = useRef(null);
-  const [webrtcConnected, setWebrtcConnected] = useState(false);
+// 100% Stable Live Camera Cell Component with AI Bounding Box Markings
+function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
   const [detections, setDetections] = useState([]);
   const [zones, setZones] = useState([]);
+  const [useFallbackFrame, setUseFallbackFrame] = useState(false);
+  const [frameUrl, setFrameUrl] = useState('');
 
-  // Resolve stream ID for WebRTC WHEP
-  const streamId = useMemo(() => {
-    if (camera.streams && camera.streams.length > 0) {
-      const gridStream = camera.streams.find(s => s.stream_id.includes('_grid')) || camera.streams[0];
-      return gridStream.stream_id;
-    }
-    return camera.id;
-  }, [camera]);
-
-  // Subscribe camera to AI service pipeline on mount
+  // Register camera with AI service engine on mount
   useEffect(() => {
     fetch(`${aiServiceHost}/api/ai/cameras/subscribe`, {
       method: 'POST',
@@ -60,79 +50,18 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
     }).catch(() => {});
   }, [camera.id, aiServiceHost]);
 
-  // Start WebRTC WHEP Stream
+  // Fallback 10 FPS polling loop if MJPEG stream triggers onError
   useEffect(() => {
-    let isMounted = true;
-
-    async function startWebRTC() {
-      try {
-        if (pcRef.current) {
-          pcRef.current.close();
-          pcRef.current = null;
-        }
-
-        const pc = new RTCPeerConnection({
-          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        });
-        pcRef.current = pc;
-
-        pc.addTransceiver('video', { direction: 'recvonly' });
-
-        pc.ontrack = (event) => {
-          if (!isMounted) return;
-          const video = videoRef.current;
-          if (video) {
-            if (event.streams && event.streams[0]) {
-              video.srcObject = event.streams[0];
-            } else if (event.track) {
-              const stream = new MediaStream([event.track]);
-              video.srcObject = stream;
-            }
-            video.play().then(() => {
-              if (isMounted) setWebrtcConnected(true);
-            }).catch(() => {
-              if (isMounted) setWebrtcConnected(false);
-            });
-          }
-        };
-
-        const offer = await pc.createOffer();
-        if (!isMounted) return;
-        await pc.setLocalDescription(offer);
-        if (!isMounted) return;
-
-        const user_id = `user_${Math.random().toString(36).substring(2, 9)}`;
-        const tab_id = `tab_${Math.random().toString(36).substring(2, 9)}`;
-        const whepUrl = `${vmsBackendHost}/api/streams/${encodeURIComponent(streamId)}/live/whep?user_id=${user_id}&browser_tab_id=${tab_id}`;
-
-        const resp = await fetch(whepUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/sdp' },
-          body: offer.sdp
-        });
-
-        if (resp.ok && isMounted) {
-          const answerSdp = await resp.text();
-          await pc.setRemoteDescription(new RTCSessionDescription({
-            type: 'answer',
-            sdp: answerSdp
-          }));
-        }
-      } catch (err) {
-        if (isMounted) setWebrtcConnected(false);
-      }
+    let timerId;
+    if (useFallbackFrame) {
+      timerId = setInterval(() => {
+        setFrameUrl(`${aiServiceHost}/api/ai/streams/${camera.id}/frame?t=${Date.now()}`);
+      }, 100);
     }
-
-    startWebRTC();
-
     return () => {
-      isMounted = false;
-      if (pcRef.current) {
-        pcRef.current.close();
-        pcRef.current = null;
-      }
+      if (timerId) clearInterval(timerId);
     };
-  }, [streamId, vmsBackendHost]);
+  }, [useFallbackFrame, camera.id, aiServiceHost]);
 
   // Telemetry polling for real-time AI detections & polygon intrusion zones
   useEffect(() => {
@@ -164,33 +93,20 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
         border: '1px solid #1e293b',
         cursor: 'pointer'
       }}
-      title="Double-click to focus camera"
+      title="Double-click to focus camera details"
     >
-      {/* Video Element (WebRTC Player) */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{
-          width: '100%',
-          height: '100%',
-          objectFit: 'contain',
-          display: webrtcConnected ? 'block' : 'none'
+      {/* Live AI Video Stream Image Element */}
+      <img
+        src={useFallbackFrame ? frameUrl : `${aiServiceHost}/api/ai/streams/${camera.id}/live`}
+        alt={camera.name}
+        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+        onError={() => {
+          if (!useFallbackFrame) {
+            console.warn(`MJPEG stream retry for ${camera.id}`);
+            setUseFallbackFrame(true);
+          }
         }}
       />
-
-      {/* Fallback AI Stream Image Element */}
-      {!webrtcConnected && (
-        <img
-          src={`${aiServiceHost}/api/ai/streams/${camera.id}/live`}
-          alt={camera.name}
-          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-          onError={(e) => {
-            e.target.src = `${aiServiceHost}/api/ai/streams/${camera.id}/frame?t=${Date.now()}`;
-          }}
-        />
-      )}
 
       {/* AI Visual Markings Overlay Layer (Z-Index 10 directly on top of Video) */}
       <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
@@ -268,8 +184,8 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
             {camera.name}
           </span>
         </div>
-        <span style={{ fontSize: '9px', background: webrtcConnected ? 'rgba(16,185,129,0.3)' : 'rgba(6,182,212,0.3)', color: webrtcConnected ? '#34d399' : '#38bdf8', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
-          {webrtcConnected ? 'WEBRTC LIVE + AI' : 'AI LIVE'}
+        <span style={{ fontSize: '9px', background: 'rgba(6,182,212,0.3)', color: '#38bdf8', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
+          AI LIVE
         </span>
       </div>
     </div>
@@ -293,7 +209,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isFullWall, setIsFullWall] = useState(false);
 
-  // Active Streaming Camera Catalog
+  // Active Streaming Camera Catalog (Filtered to ONLY live streaming cameras)
   const [activeCameras, setActiveCameras] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -521,11 +437,10 @@ export default function App() {
       }}
     >
       {paginatedCameras.map((cam) => (
-        <WebRTCStreamPlayer
+        <LiveCameraCell
           key={cam.id}
           camera={cam}
           aiServiceHost={aiServiceHost}
-          vmsBackendHost={vmsBackendHost}
           onFocusCamera={(c) => setSelectedModalCamera(c)}
         />
       ))}
@@ -545,7 +460,7 @@ export default function App() {
               AI Live Camera Wall Center
             </h1>
             <p style={{ fontSize: '11px', color: '#64748b' }}>
-              Real-Time WebRTC Video Stream & AI Detection Overlay | {activeCameras.length} Active Live Cameras
+              Real-Time Video Stream & AI Bounding Box Overlay | {activeCameras.length} Active Live Cameras
             </p>
           </div>
         </div>
@@ -724,10 +639,9 @@ export default function App() {
               </div>
 
               <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b', aspectRatio: '16/9' }}>
-                <WebRTCStreamPlayer
+                <LiveCameraCell
                   camera={activeCameras.find(c => c.id === selectedCamera) || { id: selectedCamera, name: selectedCamera }}
                   aiServiceHost={aiServiceHost}
-                  vmsBackendHost={vmsBackendHost}
                 />
               </div>
             </div>
@@ -959,10 +873,9 @@ export default function App() {
               {selectedModalCamera.name} ({selectedModalCamera.id})
             </h3>
             <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', borderRadius: '8px', overflow: 'hidden', background: '#020617' }}>
-              <WebRTCStreamPlayer
+              <LiveCameraCell
                 camera={selectedModalCamera}
                 aiServiceHost={aiServiceHost}
-                vmsBackendHost={vmsBackendHost}
               />
             </div>
           </div>
