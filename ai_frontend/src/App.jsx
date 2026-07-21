@@ -43,19 +43,41 @@ const getPolygonPointsStr = (polygon) => {
 };
 
 // Hook to compute exact video render rectangle (handles letterboxing/pillarboxing)
-const useVideoRect = (videoRef) => {
-  const [rect, setRect] = useState({ left: '0%', top: '0%', width: '100%', height: '100%' });
+const useVideoRect = (containerRef, aiEnabled, selectedCamera) => {
+  const [rect, setRect] = useState({ left: 0, top: 0, width: 0, height: 0 });
 
   const updateRect = useCallback(() => {
-    const video = videoRef?.current;
-    if (!video || !video.videoWidth || !video.videoHeight || !video.parentElement) return;
+    const container = containerRef?.current;
+    if (!container) return;
 
-    const cw = video.parentElement.clientWidth;
-    const ch = video.parentElement.clientHeight;
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
+    const img = container.querySelector('img');
+    const video = container.querySelector('video');
+    const el = img || video;
+    if (!el) {
+      // Default to 16:9 container size
+      setRect({
+        left: 0,
+        top: 0,
+        width: container.clientWidth,
+        height: container.clientHeight
+      });
+      return;
+    }
 
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
     if (!cw || !ch) return;
+
+    let vw = 16;
+    let vh = 9;
+
+    if (img) {
+      vw = img.naturalWidth || 16;
+      vh = img.naturalHeight || 9;
+    } else if (video) {
+      vw = video.videoWidth || 16;
+      vh = video.videoHeight || 9;
+    }
 
     const containerAspect = cw / ch;
     const videoAspect = vw / vh;
@@ -74,25 +96,22 @@ const useVideoRect = (videoRef) => {
     }
 
     setRect({
-      left: `${(rx / cw) * 100}%`,
-      top: `${(ry / ch) * 100}%`,
-      width: `${(rw / cw) * 100}%`,
-      height: `${(rh / ch) * 100}%`
+      left: rx,
+      top: ry,
+      width: rw,
+      height: rh
     });
-  }, [videoRef]);
+  }, [containerRef]);
 
   useEffect(() => {
-    const video = videoRef?.current;
-    if (!video) return;
-
     updateRect();
-    const timer = setInterval(updateRect, 400);
+    const timer = setInterval(updateRect, 500);
     window.addEventListener('resize', updateRect);
     return () => {
       clearInterval(timer);
       window.removeEventListener('resize', updateRect);
     };
-  }, [videoRef, updateRect]);
+  }, [updateRect, aiEnabled, selectedCamera]);
 
   return rect;
 };
@@ -488,7 +507,7 @@ export default function App() {
   const [newZoneDirection, setNewZoneDirection] = useState('both'); // 'both' | 'A_to_B' | 'B_to_A'
   const focusVideoRef = useRef(null);
   const focusContainerRef = useRef(null);
-  const videoOverlayRect = useVideoRect(focusVideoRef);
+  const videoRect = useVideoRect(focusContainerRef, aiEnabled, selectedCamera);
 
   // ─── Fetch Active Cameras ──────────────────────────────────────
   useEffect(() => {
@@ -666,10 +685,21 @@ export default function App() {
   }, [selectedCamera, fetchZones]);
 
   const handleCanvasClick = (e) => {
-    if (!isDrawingZone || !focusContainerRef.current) return;
+    if (!isDrawingZone || !focusContainerRef.current || !videoRect.width || !videoRect.height) return;
     const rect = focusContainerRef.current.getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    
+    // Position clicked relative to container
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    // Shift by letterbox offset and normalize by displayed video dimensions
+    const xVideo = (clickX - videoRect.left) / videoRect.width;
+    const yVideo = (clickY - videoRect.top) / videoRect.height;
+
+    // Constraint within [0, 1] bounds
+    const x = Math.max(0, Math.min(1, xVideo));
+    const y = Math.max(0, Math.min(1, yVideo));
+
     setNewZonePoints(prev => [...(Array.isArray(prev) ? prev : []), { x: parseFloat(x.toFixed(3)), y: parseFloat(y.toFixed(3)) }]);
   };
 
@@ -1001,7 +1031,15 @@ export default function App() {
 
                   {/* Intrusion Zone Drawing Layer Overlay */}
                   {isDrawingZone && (
-                    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
+                    <div style={{
+                      position: 'absolute',
+                      left: `${videoRect.left}px`,
+                      top: `${videoRect.top}px`,
+                      width: `${videoRect.width}px`,
+                      height: `${videoRect.height}px`,
+                      pointerEvents: 'none',
+                      zIndex: 10
+                    }}>
                       <svg style={{ width: '100%', height: '100%' }}>
                         {/* Existing Zones / Tripwires */}
                         {safeZones.map((z) => {
