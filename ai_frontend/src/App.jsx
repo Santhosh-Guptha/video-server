@@ -218,7 +218,7 @@ function WebRTCVideoPlayer({ streamId, vmsBackendHost, style, onCanPlay, onError
         }
       }
     };
-  }, [streamId, vmsBackendHost, onCanPlay, onError, videoRef]);
+  }, [streamId, vmsBackendHost]);
 
   return (
     <video
@@ -303,7 +303,7 @@ function HLSVideoPlayer({ src, style, onCanPlay, onError, videoRef: externalRef 
         }
       }
     });
-  }, [onCanPlay, onError, videoRef]);
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -329,7 +329,7 @@ function HLSVideoPlayer({ src, style, onCanPlay, onError, videoRef: externalRef 
         try { video.load(); } catch (e) {}
       }
     };
-  }, [src, startHls, videoRef]);
+  }, [src]);
 
   return (
     <video

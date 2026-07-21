@@ -1,9 +1,16 @@
+import sys
+import os
 import cv2
 import numpy as np
 import uuid
-import os
 import time
 from typing import List
+
+# Ensure system dist-packages is in sys.path for ultralytics & PyTorch
+for p in ["/usr/local/lib/python3.10/dist-packages", "/usr/lib/python3/dist-packages"]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.append(p)
+
 from ..schemas import DetectionResult, BoundingBox
 
 class PersonDetector:
@@ -106,13 +113,13 @@ class PersonDetector:
                     winStride=(4, 4),
                     padding=(8, 8),
                     scale=1.05,
-                    hitThreshold=0.0
+                    hitThreshold=0.2
                 )
 
                 for i, (x, y, bw, bh) in enumerate(boxes):
                     weight = float(weights[i]) if (weights is not None and i < len(weights)) else 0.5
-                    if weight >= 0.1:
-                        conf = min(0.98, max(0.60, 0.70 + (weight * 0.2)))
+                    if weight >= 0.3:
+                        conf = min(0.98, max(0.65, 0.70 + (weight * 0.2)))
 
                         xmin = float(x / rw)
                         ymin = float(y / rh)
@@ -146,9 +153,9 @@ class PersonDetector:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 bodies = []
                 if self.fullbody_cascade is not None:
-                    bodies = self.fullbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 60))
+                    bodies = self.fullbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 80))
                 if len(bodies) == 0 and self.upperbody_cascade is not None:
-                    bodies = self.upperbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 50))
+                    bodies = self.upperbody_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 70))
 
                 for i, (x, y, bw, bh) in enumerate(bodies):
                     xmin = float(x / w)
