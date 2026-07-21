@@ -496,8 +496,9 @@ class AIPipelineEngine:
         if "intrusion" in active_mods and intrusion_polys:
             try:
                 breaches = self.intrusion_detector.check_breaches(detections, intrusion_polys)
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"[Intrusion] Error checking breaches: {e}", file=sys.stderr)
 
         # ─── Draw Visual AI Annotations ────────────────────────────
         annotated = frame.copy()
