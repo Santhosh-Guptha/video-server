@@ -572,8 +572,11 @@ class AIPipelineEngine:
                         bbox=det.bbox.model_dump(),
                         details=det.attributes
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                import traceback
+                print(f"[Engine] Exception in det loop: {e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
         # Process Zone Breaches
         for breach in breaches:
