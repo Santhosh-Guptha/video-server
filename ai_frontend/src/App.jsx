@@ -30,7 +30,36 @@ const getAiWsHost = () => {
   return 'ws://localhost:8001/ws/ai-events';
 };
 
-// 100% Stable Live Camera Cell Component with Defensive Null Guards
+// Safe helper for bbox coordinate parsing (handles arrays, objects, or tuples)
+const getBboxCoords = (bbox) => {
+  if (Array.isArray(bbox) && bbox.length >= 4) {
+    return [
+      Number(bbox[0]) || 0,
+      Number(bbox[1]) || 0,
+      Number(bbox[2]) || 0,
+      Number(bbox[3]) || 0
+    ];
+  }
+  if (bbox && typeof bbox === 'object') {
+    const x1 = Number(bbox.xmin ?? bbox.x1 ?? bbox.x ?? 0);
+    const y1 = Number(bbox.ymin ?? bbox.y1 ?? bbox.y ?? 0);
+    const x2 = Number(bbox.xmax ?? bbox.x2 ?? (x1 + (bbox.width ?? 0.2)));
+    const y2 = Number(bbox.ymax ?? bbox.y2 ?? (y1 + (bbox.height ?? 0.2)));
+    return [x1, y1, x2, y2];
+  }
+  return [0, 0, 0, 0];
+};
+
+// Safe helper for polygon points formatting
+const getPolygonPointsStr = (polygon) => {
+  if (!Array.isArray(polygon)) return '';
+  return polygon
+    .filter(p => p && typeof p === 'object')
+    .map(p => `${(Number(p.x) || 0) * 100}%,${(Number(p.y) || 0) * 100}%`)
+    .join(' ');
+};
+
+// 100% Stable Live Camera Cell Component
 function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
   if (!camera || !camera.id) {
     return (
@@ -81,14 +110,17 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
         const res = await fetch(`${aiServiceHost}/api/ai/streams/${camId}/detections`);
         if (res.ok) {
           const data = await res.json();
-          setDetections(data.detections || []);
-          setZones(data.zones || []);
+          setDetections(Array.isArray(data.detections) ? data.detections : []);
+          setZones(Array.isArray(data.zones) ? data.zones : []);
         }
       } catch (e) {}
     }, 300);
 
     return () => clearInterval(intervalId);
   }, [camId, aiServiceHost]);
+
+  const safeZones = Array.isArray(zones) ? zones : [];
+  const safeDetections = Array.isArray(detections) ? detections : [];
 
   return (
     <div
@@ -121,10 +153,10 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
       {/* AI Visual Markings Overlay Layer (Z-Index 10 directly on top of Video) */}
       <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
         {/* Intrusion Polygon Zones */}
-        {zones.map((z) => (
+        {safeZones.map((z) => (
           <polygon
             key={z.zone_id}
-            points={z.polygon.map((p) => `${p.x * 100}%,${p.y * 100}%`).join(' ')}
+            points={getPolygonPointsStr(z.polygon)}
             fill="rgba(244, 63, 94, 0.25)"
             stroke="#f43f5e"
             strokeWidth="2.5"
@@ -132,11 +164,14 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
         ))}
 
         {/* Real-time AI Bounding Boxes */}
-        {detections.map((det, idx) => {
-          const [x1, y1, x2, y2] = det.bbox || [0, 0, 0, 0];
-          const color = det.class_name === 'person' ? '#10b981' :
-                        det.class_name === 'face' ? '#38bdf8' :
-                        det.class_name === 'vehicle' ? '#fbbf24' : '#f43f5e';
+        {safeDetections.map((det, idx) => {
+          const [x1, y1, x2, y2] = getBboxCoords(det.bbox);
+          const className = String(det.class_name || 'object').toLowerCase();
+          const color = className === 'person' ? '#10b981' :
+                        className === 'face' ? '#38bdf8' :
+                        className === 'vehicle' ? '#fbbf24' : '#f43f5e';
+          const confidence = Number(det.confidence || 0.85);
+
           return (
             <g key={idx}>
               <rect
@@ -165,7 +200,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
                 fontSize="10"
                 fontWeight="bold"
               >
-                {(det.class_name || 'OBJECT').toUpperCase()} {((det.confidence || 0.8) * 100).toFixed(0)}%
+                {className.toUpperCase()} {(confidence * 100).toFixed(0)}%
               </text>
             </g>
           );
@@ -254,8 +289,8 @@ export default function App() {
         ws.onmessage = (event) => {
           try {
             const payload = JSON.parse(event.data);
-            if (payload.type === 'ai_event') {
-              setEvents((prev) => [payload.data, ...prev.slice(0, 99)]);
+            if (payload.type === 'ai_event' && payload.data) {
+              setEvents((prev) => [payload.data, ...(Array.isArray(prev) ? prev.slice(0, 99) : [])]);
             }
           } catch (e) {}
         };
@@ -351,11 +386,11 @@ export default function App() {
     const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
 
-    setNewZonePoints([...newZonePoints, { x: parseFloat(x.toFixed(3)), y: parseFloat(y.toFixed(3)) }]);
+    setNewZonePoints([...(Array.isArray(newZonePoints) ? newZonePoints : []), { x: parseFloat(x.toFixed(3)), y: parseFloat(y.toFixed(3)) }]);
   };
 
   const saveZone = async () => {
-    if (newZonePoints.length < 3) {
+    if (!Array.isArray(newZonePoints) || newZonePoints.length < 3) {
       alert('A polygon zone must have at least 3 points.');
       return;
     }
@@ -420,10 +455,13 @@ export default function App() {
     return filteredCameras.slice(start, start + gridSize);
   }, [filteredCameras, currentPage, gridSize]);
 
-  const filteredEvents = events.filter((evt) => {
+  const safeEvents = Array.isArray(events) ? events : [];
+  const safeZones = Array.isArray(zones) ? zones : [];
+
+  const filteredEvents = safeEvents.filter((evt) => {
     if (!evt || !evt.event_type) return false;
     if (eventFilter === 'all') return true;
-    return evt.event_type.includes(eventFilter);
+    return String(evt.event_type).includes(eventFilter);
   });
 
   const getGridColumns = () => {
@@ -504,7 +542,7 @@ export default function App() {
               color: activeTab === 'zones' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
             }}
           >
-            <ShieldAlert size={15} /> Intrusion Zones ({zones.length})
+            <ShieldAlert size={15} /> Intrusion Zones ({safeZones.length})
           </button>
           <button
             onClick={() => setActiveTab('events')}
@@ -514,7 +552,7 @@ export default function App() {
               color: activeTab === 'events' ? '#ffffff' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px'
             }}
           >
-            <Bell size={15} /> AI Events ({events.length})
+            <Bell size={15} /> AI Events ({safeEvents.length})
           </button>
           <button
             onClick={() => setActiveTab('models')}
@@ -667,7 +705,7 @@ export default function App() {
                   {isDrawingZone ? (
                     <>
                       <button onClick={saveZone} style={{ padding: '8px 14px', background: '#10b981', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>
-                        Save Zone ({newZonePoints.length} points)
+                        Save Zone ({Array.isArray(newZonePoints) ? newZonePoints.length : 0} points)
                       </button>
                       <button onClick={() => { setIsDrawingZone(false); setNewZonePoints([]); }} style={{ padding: '8px 14px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}>
                         Cancel
@@ -709,27 +747,27 @@ export default function App() {
                 />
                 
                 <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
-                  {zones.map((z) => (
+                  {safeZones.map((z) => (
                     <g key={z.zone_id}>
                       <polygon
-                        points={z.polygon.map((p) => `${p.x * 100}%,${p.y * 100}%`).join(' ')}
+                        points={getPolygonPointsStr(z.polygon)}
                         fill="rgba(244, 63, 94, 0.25)"
                         stroke="#f43f5e"
                         strokeWidth="2"
                       />
                     </g>
                   ))}
-                  {newZonePoints.length > 0 && (
+                  {Array.isArray(newZonePoints) && newZonePoints.length > 0 && (
                     <g>
                       <polygon
-                        points={newZonePoints.map((p) => `${p.x * 100}%,${p.y * 100}%`).join(' ')}
+                        points={getPolygonPointsStr(newZonePoints)}
                         fill="rgba(6, 182, 212, 0.3)"
                         stroke="#06b6d4"
                         strokeWidth="2"
                         strokeDasharray="4"
                       />
                       {newZonePoints.map((p, idx) => (
-                        <circle key={idx} cx={`${p.x * 100}%`} cy={`${p.y * 100}%`} r="5" fill="#06b6d4" />
+                        <circle key={idx} cx={`${(Number(p?.x) || 0) * 100}%`} cy={`${(Number(p?.y) || 0) * 100}%`} r="5" fill="#06b6d4" />
                       ))}
                     </g>
                   )}
@@ -758,18 +796,18 @@ export default function App() {
                   <tbody>
                     {filteredEvents.map((evt) => (
                       <tr key={evt.event_id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                        <td style={{ padding: '10px', color: '#94a3b8' }}>{evt.formatted_time}</td>
+                        <td style={{ padding: '10px', color: '#94a3b8' }}>{evt.formatted_time || '-'}</td>
                         <td style={{ padding: '10px' }}>
                           <span style={{
                             padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600',
-                            background: evt.event_type.includes('intrusion') ? 'rgba(244,63,94,0.2)' : evt.event_type.includes('person') ? 'rgba(16,185,129,0.2)' : 'rgba(6,182,212,0.2)',
-                            color: evt.event_type.includes('intrusion') ? '#fb7185' : evt.event_type.includes('person') ? '#34d399' : '#38bdf8'
+                            background: String(evt.event_type || '').includes('intrusion') ? 'rgba(244,63,94,0.2)' : String(evt.event_type || '').includes('person') ? 'rgba(16,185,129,0.2)' : 'rgba(6,182,212,0.2)',
+                            color: String(evt.event_type || '').includes('intrusion') ? '#fb7185' : String(evt.event_type || '').includes('person') ? '#34d399' : '#38bdf8'
                           }}>
-                            {evt.label}
+                            {evt.label || 'Event'}
                           </span>
                         </td>
-                        <td style={{ padding: '10px' }}>{evt.camera_name}</td>
-                        <td style={{ padding: '10px', fontWeight: '600' }}>{(evt.confidence * 100).toFixed(0)}%</td>
+                        <td style={{ padding: '10px' }}>{evt.camera_name || evt.camera_id}</td>
+                        <td style={{ padding: '10px', fontWeight: '600' }}>{((Number(evt.confidence) || 0.8) * 100).toFixed(0)}%</td>
                         <td style={{ padding: '10px', color: '#94a3b8' }}>{evt.details ? JSON.stringify(evt.details) : '-'}</td>
                       </tr>
                     ))}
@@ -824,16 +862,16 @@ export default function App() {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '580px', overflowY: 'auto' }}>
-            {events.length === 0 ? (
+            {safeEvents.length === 0 ? (
               <p style={{ fontSize: '12px', color: '#64748b', textAlign: 'center', padding: '20px 0' }}>
                 Listening for real-time AI events...
               </p>
             ) : (
-              events.map((evt) => {
-                const isIntrusion = evt.event_type.includes('intrusion');
+              safeEvents.map((evt) => {
+                const isIntrusion = String(evt.event_type || '').includes('intrusion');
                 return (
                   <div
-                    key={evt.event_id}
+                    key={evt.event_id || Math.random()}
                     className="glass-card"
                     style={{
                       padding: '12px',
@@ -843,12 +881,12 @@ export default function App() {
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <span style={{ fontSize: '12px', fontWeight: '700', color: isIntrusion ? '#fb7185' : '#38bdf8' }}>
-                        {evt.label}
+                        {evt.label || 'AI Event'}
                       </span>
-                      <span style={{ fontSize: '10px', color: '#64748b' }}>{evt.formatted_time.split(' ')[1]}</span>
+                      <span style={{ fontSize: '10px', color: '#64748b' }}>{String(evt.formatted_time || '').split(' ')[1] || '-'}</span>
                     </div>
                     <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
-                      {evt.camera_name} | Confidence: {(evt.confidence * 100).toFixed(0)}%
+                      {evt.camera_name || evt.camera_id} | Confidence: {((Number(evt.confidence) || 0.8) * 100).toFixed(0)}%
                     </p>
                   </div>
                 );
@@ -879,7 +917,7 @@ export default function App() {
               <X size={20} />
             </button>
             <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '12px', color: '#38bdf8' }}>
-              {selectedModalCamera.name} ({selectedModalCamera.id})
+              {selectedModalCamera.name || selectedModalCamera.id} ({selectedModalCamera.id})
             </h3>
             <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', borderRadius: '8px', overflow: 'hidden', background: '#020617' }}>
               <LiveCameraCell
