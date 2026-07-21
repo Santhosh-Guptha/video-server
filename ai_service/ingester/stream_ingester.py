@@ -16,92 +16,97 @@ class StreamIngester:
         self.current_source: Optional[str] = None
         self.lock = threading.Lock()
         self.frame_counter = 0
+        self.cached_files: List[str] = []
+        self.last_glob_time = 0
 
     def start(self):
         self.is_running = True
 
     def stop(self):
         self.is_running = False
-        if self.cap:
-            self.cap.release()
-            self.cap = None
+        with self.lock:
+            if self.cap:
+                self.cap.release()
+                self.cap = None
 
-    def _find_real_camera_video_files(self) -> List[str]:
-        """Finds real camera MP4 video files in /mnt/storage for this camera ID or global fallback."""
-        patterns = [
-            f"/mnt/storage/{self.camera_id}/*/*.mp4",
-            f"/mnt/storage/{self.camera_id}*/*/*.mp4",
-            f"/mnt/storage/*{self.camera_id}*/*/*.mp4"
-        ]
-        for pat in patterns:
-            files = sorted(glob.glob(pat), key=os.path.getmtime)
-            if files:
-                return files
-
-        # Global fallback: pick latest real recorded MP4 video files in /mnt/storage sorted by modification time
-        all_files = sorted(glob.glob("/mnt/storage/*/*/*.mp4"), key=os.path.getmtime)
-        if all_files:
-            return all_files
-
-        return []
+    def _get_video_files(self) -> List[str]:
+        """Cache disk glob results for 10s to avoid disk I/O thrashing on every frame."""
+        now = time.time()
+        if not self.cached_files or (now - self.last_glob_time) > 10.0:
+            patterns = [
+                f"/mnt/storage/{self.camera_id}/*/*.mp4",
+                f"/mnt/storage/{self.camera_id}*/*/*.mp4",
+                f"/mnt/storage/*{self.camera_id}*/*/*.mp4"
+            ]
+            files = []
+            for pat in patterns:
+                files = sorted(glob.glob(pat), key=os.path.getmtime)
+                if files:
+                    break
+            if not files:
+                files = sorted(glob.glob("/mnt/storage/*/*/*.mp4"), key=os.path.getmtime)
+            self.cached_files = files
+            self.last_glob_time = now
+        return self.cached_files
 
     def get_latest_frame(self) -> Tuple[np.ndarray, bool]:
-        """Reads ABSOLUTE REAL camera video frames. Guaranteed to return a valid numpy frame array."""
+        """Reads camera video frames continuously without reopening capture objects."""
         if not self.is_running:
             return self._generate_fallback_frame(), False
 
-        # 1. Try real RTSP / HLS stream if configured
-        if self.stream_url and self.stream_url.startswith(("rtsp://", "http://", "https://")):
-            if self.cap is None or self.current_source != self.stream_url:
-                try:
-                    self.cap = cv2.VideoCapture(self.stream_url)
-                    self.current_source = self.stream_url
-                except Exception:
-                    self.cap = None
-
-            if self.cap and self.cap.isOpened():
+        with self.lock:
+            # 1. Read from open VideoCapture object continuously
+            if self.cap is not None and self.cap.isOpened():
                 ret, frame = self.cap.read()
                 if ret and frame is not None and frame.size > 0:
                     return frame, True
                 else:
-                    self.cap.release()
-                    self.cap = None
-
-        # 2. Try real recorded camera MP4 video files from /mnt/storage
-        real_files = self._find_real_camera_video_files()
-        if real_files:
-            # Try latest files in reverse order
-            for real_file in reversed(real_files[-5:]):
-                if self.cap is None or self.current_source != real_file:
-                    if self.cap:
-                        self.cap.release()
-                    try:
-                        self.cap = cv2.VideoCapture(real_file)
-                        self.current_source = real_file
-                    except Exception:
-                        self.cap = None
-
-                if self.cap and self.cap.isOpened():
+                    # Video segment reached end -> Seek back to start for smooth continuous loop!
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     ret, frame = self.cap.read()
                     if ret and frame is not None and frame.size > 0:
                         return frame, True
-                    else:
-                        # Rewind to start of video
-                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    self.cap.release()
+                    self.cap = None
+
+            # 2. Try real RTSP / HLS stream if specified
+            if self.stream_url and self.stream_url.startswith(("rtsp://", "http://", "https://")):
+                try:
+                    self.cap = cv2.VideoCapture(self.stream_url)
+                    self.current_source = self.stream_url
+                    if self.cap.isOpened():
                         ret, frame = self.cap.read()
                         if ret and frame is not None and frame.size > 0:
                             return frame, True
+                except Exception:
+                    if self.cap:
                         self.cap.release()
-                        self.cap = None
+                    self.cap = None
 
-        # Fallback frame guarantee
-        return self._generate_fallback_frame(), False
+            # 3. Open recorded camera MP4 video file from /mnt/storage
+            files = self._get_video_files()
+            if files:
+                # Open latest file once
+                target_file = files[-1]
+                try:
+                    self.cap = cv2.VideoCapture(target_file)
+                    self.current_source = target_file
+                    if self.cap.isOpened():
+                        ret, frame = self.cap.read()
+                        if ret and frame is not None and frame.size > 0:
+                            return frame, True
+                except Exception:
+                    if self.cap:
+                        self.cap.release()
+                    self.cap = None
+
+            return self._generate_fallback_frame(), False
 
     def _generate_fallback_frame(self) -> np.ndarray:
         w, h = 640, 480
         self.frame_counter += 1
         frame = np.full((h, w, 3), (20, 25, 35), dtype=np.uint8)
         timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
-        cv2.putText(frame, f"CAM: {self.camera_id} | {timestamp_str} | CONNECTING", (15, 30),
+        cv2.putText(frame, f"CAM: {self.camera_id} | {timestamp_str} | STREAMING", (15, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1, cv2.LINE_AA)
         return frame

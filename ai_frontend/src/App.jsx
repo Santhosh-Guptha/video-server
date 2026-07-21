@@ -30,7 +30,7 @@ const getAiWsHost = () => {
   return 'ws://localhost:8001/ws/ai-events';
 };
 
-// WebRTC Player Component with AI Markings Overlay
+// Robust WebRTC & AI Visual Markings Player Component
 function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCamera }) {
   const videoRef = useRef(null);
   const pcRef = useRef(null);
@@ -41,7 +41,6 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
   // Resolve stream ID for WebRTC
   const streamId = useMemo(() => {
     if (camera.streams && camera.streams.length > 0) {
-      // Prefer grid or main stream
       const gridStream = camera.streams.find(s => s.stream_id.includes('_grid')) || camera.streams[0];
       return gridStream.stream_id;
     }
@@ -68,10 +67,19 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
 
         pc.ontrack = (event) => {
           if (!isMounted) return;
-          if (videoRef.current && event.streams && event.streams[0]) {
-            videoRef.current.srcObject = event.streams[0];
-            videoRef.current.play().catch(() => {});
-            setWebrtcConnected(true);
+          const video = videoRef.current;
+          if (video) {
+            if (event.streams && event.streams[0]) {
+              video.srcObject = event.streams[0];
+            } else if (event.track) {
+              const stream = new MediaStream([event.track]);
+              video.srcObject = stream;
+            }
+            video.play().then(() => {
+              if (isMounted) setWebrtcConnected(true);
+            }).catch(() => {
+              if (isMounted) setWebrtcConnected(false);
+            });
           }
         };
 
@@ -100,7 +108,7 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
         }
       } catch (err) {
         console.warn(`WebRTC stream negotiation failed for ${streamId}, falling back to AI MJPEG stream:`, err);
-        setWebrtcConnected(false);
+        if (isMounted) setWebrtcConnected(false);
       }
     }
 
@@ -147,16 +155,22 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
       }}
       title="Double-click to focus camera"
     >
-      {/* Video Element (WebRTC / MJPEG Fallback) */}
-      {webrtcConnected ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-        />
-      ) : (
+      {/* Video Element (WebRTC Player) */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          display: webrtcConnected ? 'block' : 'none'
+        }}
+      />
+
+      {/* Fallback AI Stream Image Element */}
+      {!webrtcConnected && (
         <img
           src={`${aiServiceHost}/api/ai/streams/${camera.id}/live`}
           alt={camera.name}
@@ -231,7 +245,7 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
           padding: '4px 8px',
           background: 'linear-gradient(to bottom, rgba(0,0,0,0.85), transparent)',
           display: 'flex',
-          justifyContent: 'space-between',
+          justify: 'space-between',
           alignItems: 'center',
           pointerEvents: 'none'
         }}
@@ -267,7 +281,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isFullWall, setIsFullWall] = useState(false);
 
-  // Active Streaming Camera Catalog
+  // Active Streaming Camera Catalog (Filtered to ONLY live streaming cameras)
   const [activeCameras, setActiveCameras] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -289,7 +303,7 @@ export default function App() {
   // Event log filter state
   const [eventFilter, setEventFilter] = useState('all');
 
-  // Fetch ONLY active streaming cameras from VMS backend API /api/cameras/active
+  // Fetch ONLY active live streaming cameras from VMS backend API /api/cameras/active
   useEffect(() => {
     fetchActiveCameras();
   }, [vmsBackendHost, aiServiceHost]);
