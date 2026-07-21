@@ -967,15 +967,26 @@ export default function App() {
                     cursor: isDrawingZone ? 'crosshair' : 'default'
                   }}
                 >
-                  <SmartStreamPlayer
-                    streamId={selectedCamera.id}
-                    vmsBackendHost={vmsBackendHost}
-                    videoRef={focusVideoRef}
-                  />
+                  {aiEnabled ? (
+                    /* Direct backend AI annotated live video stream — boxes rendered on server frames */
+                    <img
+                      key={`ai_live_${selectedCamera.id}`}
+                      src={`${aiServiceHost}/api/ai/streams/${selectedCamera.id}/live`}
+                      alt={selectedCamera.name}
+                      style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+                    />
+                  ) : (
+                    /* WebRTC / HLS low-latency video stream when AI is idle */
+                    <SmartStreamPlayer
+                      streamId={selectedCamera.id}
+                      vmsBackendHost={vmsBackendHost}
+                      videoRef={focusVideoRef}
+                    />
+                  )}
 
-                  {/* AI Detection Overlay (only when AI is enabled) */}
-                  {aiEnabled && (
-                    <div style={{ position: 'absolute', ...videoOverlayRect, pointerEvents: 'none', zIndex: 10 }}>
+                  {/* Intrusion Zone Drawing Layer Overlay */}
+                  {isDrawingZone && (
+                    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
                       <svg style={{ width: '100%', height: '100%' }}>
                         {/* Intrusion Zones */}
                         {safeZones.map((z) => (
@@ -988,36 +999,8 @@ export default function App() {
                           />
                         ))}
 
-                        {/* Detection Bounding Boxes */}
-                        {safeDetections.map((det, idx) => {
-                          const [x1, y1, x2, y2] = getBboxCoords(det.bbox);
-                          const cn = String(det.class_name || 'person').toLowerCase();
-                          const color = cn === 'person' ? '#10b981' : cn === 'face' ? '#38bdf8' : cn === 'vehicle' ? '#fbbf24' : '#f43f5e';
-                          const conf = Number(det.confidence || 0.85);
-                          return (
-                            <g key={idx}>
-                              <rect
-                                x={`${x1 * 100}%`} y={`${y1 * 100}%`}
-                                width={`${(x2 - x1) * 100}%`} height={`${(y2 - y1) * 100}%`}
-                                fill="none" stroke={color} strokeWidth="2.5"
-                                filter="drop-shadow(0px 0px 4px rgba(0,0,0,0.8))"
-                              />
-                              <rect
-                                x={`${x1 * 100}%`} y={`${Math.max(0, y1 * 100 - 4)}%`}
-                                width="80" height="16" fill={color} opacity="0.9" rx="3"
-                              />
-                              <text
-                                x={`${x1 * 100 + 1}%`} y={`${Math.max(0, y1 * 100 - 0.5)}%`}
-                                fill="#ffffff" fontSize="11" fontWeight="bold"
-                              >
-                                {cn.toUpperCase()} {(conf * 100).toFixed(0)}%
-                              </text>
-                            </g>
-                          );
-                        })}
-
                         {/* Drawing zone points */}
-                        {isDrawingZone && Array.isArray(newZonePoints) && newZonePoints.length > 0 && (
+                        {Array.isArray(newZonePoints) && newZonePoints.length > 0 && (
                           <g>
                             <polygon points={getPolygonPointsStr(newZonePoints)} fill="rgba(6,182,212,0.25)" stroke="#06b6d4" strokeWidth="2" strokeDasharray="4" />
                             {newZonePoints.map((p, idx) => (
