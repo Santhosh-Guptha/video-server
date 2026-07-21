@@ -157,6 +157,32 @@ def get_detections(camera_id: str):
         "zones": zones
     }
 
+@app.get("/api/ai/streams/{camera_id}/frame")
+def get_single_frame_jpeg(camera_id: str):
+    """Returns a single JPEG image frame with real-time AI bounding box annotations."""
+    if camera_id not in pipeline_engine.ingesters:
+        pipeline_engine.register_camera(
+            camera_id=camera_id,
+            stream_url=f"rtsp://localhost:8554/{camera_id}",
+            active_models=["person", "face", "vehicle", "intrusion"]
+        )
+
+    frame = pipeline_engine.get_latest_annotated_frame(camera_id)
+    if frame is None:
+        frame = np.full((480, 640, 3), (20, 25, 35), dtype=np.uint8)
+        cv2.putText(frame, f"CAM: {camera_id} | CONNECTING STREAM", (15, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1, cv2.LINE_AA)
+
+    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not ret:
+        raise HTTPException(status_code=500, detail="Failed to encode frame")
+
+    return Response(
+        content=buffer.tobytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+    )
+
 @app.get("/api/ai/streams/{camera_id}/live")
 def stream_annotated_feed(camera_id: str):
     """Motion JPEG stream with real-time AI visual overlays on ABSOLUTE REAL camera frames."""
@@ -171,20 +197,26 @@ def stream_annotated_feed(camera_id: str):
         while True:
             frame = pipeline_engine.get_latest_annotated_frame(camera_id)
             if frame is None:
-                # Guaranteed frame placeholder while stream initializes
                 frame = np.full((480, 640, 3), (20, 25, 35), dtype=np.uint8)
                 cv2.putText(frame, f"CAM: {camera_id} | INITIALIZING STREAM", (15, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1, cv2.LINE_AA)
 
             ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if ret:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                jpg_bytes = buffer.tobytes()
+                # Standard RFC 2046 MJPEG Multipart Frame Headers with Content-Length
+                header = (
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n'
+                    b'Content-Length: ' + str(len(jpg_bytes)).encode() + b'\r\n\r\n'
+                )
+                yield header + jpg_bytes + b'\r\n'
             time.sleep(0.08)
 
     return StreamingResponse(
         generate_frames(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
     )
 
 @app.websocket("/ws/ai-events")

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   ShieldAlert, UserCheck, Smile, Car, Bell, Sliders,
   Eye, Cpu, Radio, Plus, Trash2, Zap, Search, Grid, LayoutGrid,
-  Filter, CheckCircle, Video, Activity, RefreshCw
+  Video
 } from 'lucide-react';
 
 const getAiServiceHost = () => {
@@ -33,6 +33,10 @@ export default function App() {
   const [selectedCamera, setSelectedCamera] = useState('VMSTEST1002C5_HD');
   const [gridMode, setGridMode] = useState('1x1'); // '1x1' or '2x2'
 
+  // Stream rendering mode fallback state
+  const [streamFallbackMode, setStreamFallbackMode] = useState(false);
+  const [currentFrameUrl, setCurrentFrameUrl] = useState('');
+
   // Camera List & Search/Filter state
   const [cameraList, setCameraList] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,7 +60,7 @@ export default function App() {
   // Event log filter state
   const [eventFilter, setEventFilter] = useState('all');
 
-  // Fetch camera catalog from AI service
+  // Fetch camera catalog
   useEffect(() => {
     fetchCameras();
   }, [aiServiceHost]);
@@ -65,7 +69,21 @@ export default function App() {
   useEffect(() => {
     fetchEvents();
     fetchZones();
+    setStreamFallbackMode(false);
   }, [selectedCamera, aiServiceHost]);
+
+  // Fallback 10 FPS JPEG Frame polling loop if MJPEG stream triggers error
+  useEffect(() => {
+    let intervalId;
+    if (streamFallbackMode) {
+      intervalId = setInterval(() => {
+        setCurrentFrameUrl(`${aiServiceHost}/api/ai/streams/${selectedCamera}/frame?t=${Date.now()}`);
+      }, 100);
+    }
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [streamFallbackMode, selectedCamera, aiServiceHost]);
 
   // Setup WebSocket connection to AI microservice
   useEffect(() => {
@@ -211,7 +229,6 @@ export default function App() {
     }
   };
 
-  // Filter camera list by search term and profile
   const filteredCameras = cameraList.filter((cam) => {
     const matchesSearch = cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           cam.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -339,7 +356,10 @@ export default function App() {
 
                   <select
                     value={selectedCamera}
-                    onChange={(e) => setSelectedCamera(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedCamera(e.target.value);
+                      setStreamFallbackMode(false);
+                    }}
                     style={{ background: '#090d16', color: '#38bdf8', border: '1px solid #06b6d4', padding: '6px 12px', borderRadius: '6px', fontSize: '13px', fontWeight: '600', outline: 'none', maxWidth: '240px' }}
                   >
                     {filteredCameras.length === 0 ? (
@@ -392,13 +412,21 @@ export default function App() {
                 <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b', aspectRatio: '16/9' }}>
                   <img
                     key={selectedCamera}
-                    src={`${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
+                    src={streamFallbackMode ? currentFrameUrl : `${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
                     alt="Real AI Camera Feed"
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    onError={() => {
+                      if (!streamFallbackMode) {
+                        console.warn('MJPEG stream failed, switching to high-speed frame polling mode');
+                        setStreamFallbackMode(true);
+                      }
+                    }}
                   />
                   <div style={{ position: 'absolute', top: '12px', left: '12px', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', padding: '4px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)' }}>
                     <Radio size={13} color="#10b981" />
-                    <span style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.5px' }}>REAL LIVE CCTV FEED</span>
+                    <span style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.5px' }}>
+                      {streamFallbackMode ? 'REAL LIVE CCTV FEED (POLLING MODE)' : 'REAL LIVE CCTV FEED (MJPEG)'}
+                    </span>
                   </div>
                 </div>
               ) : (
@@ -410,6 +438,9 @@ export default function App() {
                         src={`${aiServiceHost}/api/ai/streams/${cam.id}/live`}
                         alt={cam.name}
                         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                        onError={(e) => {
+                          e.target.src = `${aiServiceHost}/api/ai/streams/${cam.id}/frame?t=${Date.now()}`;
+                        }}
                       />
                       <div style={{ position: 'absolute', bottom: '8px', left: '8px', background: 'rgba(0,0,0,0.7)', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: '600', color: '#38bdf8' }}>
                         {cam.id}
@@ -468,7 +499,7 @@ export default function App() {
                 }}
               >
                 <img
-                  src={`${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
+                  src={`${aiServiceHost}/api/ai/streams/${selectedCamera}/frame?t=${Date.now()}`}
                   alt="Zone Canvas"
                   style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
                 />
