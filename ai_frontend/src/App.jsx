@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ShieldAlert, UserCheck, Smile, Car, Bell, Sliders,
-  Eye, Cpu, Radio, Plus, Trash2, Zap, Search, LayoutGrid,
-  Video, Maximize2, RotateCw, ChevronLeft, ChevronRight, X
+  Eye, Cpu, Plus, Trash2, Zap, Search, LayoutGrid,
+  Maximize2, RotateCw, ChevronLeft, ChevronRight, X
 } from 'lucide-react';
 
 const getAiServiceHost = () => {
@@ -30,8 +30,17 @@ const getAiWsHost = () => {
   return 'ws://localhost:8001/ws/ai-events';
 };
 
-// 100% Stable Live Camera Cell Component with AI Bounding Box Markings
+// 100% Stable Live Camera Cell Component with Defensive Null Guards
 function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
+  if (!camera || !camera.id) {
+    return (
+      <div className="glass-card" style={{ width: '100%', aspectRatio: '16/9', background: '#020617', borderRadius: '6px', border: '1px solid #1e293b' }} />
+    );
+  }
+
+  const camId = camera.id;
+  const camName = camera.name || `Camera ${camId}`;
+
   const [detections, setDetections] = useState([]);
   const [zones, setZones] = useState([]);
   const [useFallbackFrame, setUseFallbackFrame] = useState(false);
@@ -39,35 +48,37 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
 
   // Register camera with AI service engine on mount
   useEffect(() => {
+    if (!camId) return;
     fetch(`${aiServiceHost}/api/ai/cameras/subscribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        camera_id: camera.id,
-        stream_url: `rtsp://localhost:8554/${camera.id}`,
+        camera_id: camId,
+        stream_url: `rtsp://localhost:8554/${camId}`,
         active_models: ['person', 'face', 'vehicle', 'intrusion']
       })
     }).catch(() => {});
-  }, [camera.id, aiServiceHost]);
+  }, [camId, aiServiceHost]);
 
   // Fallback 10 FPS polling loop if MJPEG stream triggers onError
   useEffect(() => {
     let timerId;
-    if (useFallbackFrame) {
+    if (useFallbackFrame && camId) {
       timerId = setInterval(() => {
-        setFrameUrl(`${aiServiceHost}/api/ai/streams/${camera.id}/frame?t=${Date.now()}`);
+        setFrameUrl(`${aiServiceHost}/api/ai/streams/${camId}/frame?t=${Date.now()}`);
       }, 100);
     }
     return () => {
       if (timerId) clearInterval(timerId);
     };
-  }, [useFallbackFrame, camera.id, aiServiceHost]);
+  }, [useFallbackFrame, camId, aiServiceHost]);
 
   // Telemetry polling for real-time AI detections & polygon intrusion zones
   useEffect(() => {
+    if (!camId) return;
     let intervalId = setInterval(async () => {
       try {
-        const res = await fetch(`${aiServiceHost}/api/ai/streams/${camera.id}/detections`);
+        const res = await fetch(`${aiServiceHost}/api/ai/streams/${camId}/detections`);
         if (res.ok) {
           const data = await res.json();
           setDetections(data.detections || []);
@@ -77,7 +88,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
     }, 300);
 
     return () => clearInterval(intervalId);
-  }, [camera.id, aiServiceHost]);
+  }, [camId, aiServiceHost]);
 
   return (
     <div
@@ -97,12 +108,11 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
     >
       {/* Live AI Video Stream Image Element */}
       <img
-        src={useFallbackFrame ? frameUrl : `${aiServiceHost}/api/ai/streams/${camera.id}/live`}
-        alt={camera.name}
+        src={useFallbackFrame ? frameUrl : `${aiServiceHost}/api/ai/streams/${camId}/live`}
+        alt={camName}
         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
         onError={() => {
           if (!useFallbackFrame) {
-            console.warn(`MJPEG stream retry for ${camera.id}`);
             setUseFallbackFrame(true);
           }
         }}
@@ -123,7 +133,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
 
         {/* Real-time AI Bounding Boxes */}
         {detections.map((det, idx) => {
-          const [x1, y1, x2, y2] = det.bbox; // Normalized [0, 1]
+          const [x1, y1, x2, y2] = det.bbox || [0, 0, 0, 0];
           const color = det.class_name === 'person' ? '#10b981' :
                         det.class_name === 'face' ? '#38bdf8' :
                         det.class_name === 'vehicle' ? '#fbbf24' : '#f43f5e';
@@ -155,7 +165,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
                 fontSize="10"
                 fontWeight="bold"
               >
-                {det.class_name.toUpperCase()} {(det.confidence * 100).toFixed(0)}%
+                {(det.class_name || 'OBJECT').toUpperCase()} {((det.confidence || 0.8) * 100).toFixed(0)}%
               </text>
             </g>
           );
@@ -181,7 +191,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
           <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} className="pulse-badge" />
           <span style={{ fontSize: '10px', fontWeight: '700', color: '#f8fafc', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
-            {camera.name}
+            {camName}
           </span>
         </div>
         <span style={{ fontSize: '9px', background: 'rgba(6,182,212,0.3)', color: '#38bdf8', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
@@ -197,23 +207,20 @@ export default function App() {
   const [vmsBackendHost] = useState(getVmsBackendHost());
   const [aiWsHost] = useState(getAiWsHost());
 
-  const [activeTab, setActiveTab] = useState('livewall'); // 'livewall', 'single', 'zones', 'events', 'models'
+  const [activeTab, setActiveTab] = useState('livewall');
   const [events, setEvents] = useState([]);
   const [zones, setZones] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [selectedCamera, setSelectedCamera] = useState('VMSTEST1002C5_HD');
   const [selectedModalCamera, setSelectedModalCamera] = useState(null);
 
-  // Live Wall Grid & Pagination state
-  const [gridSize, setGridSize] = useState(12); // default 12 (4x3 layout)
+  const [gridSize, setGridSize] = useState(12);
   const [currentPage, setCurrentPage] = useState(1);
   const [isFullWall, setIsFullWall] = useState(false);
 
-  // Active Streaming Camera Catalog (Filtered to ONLY live streaming cameras)
   const [activeCameras, setActiveCameras] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Model toggles
   const [activeModels, setActiveModels] = useState({
     person: true,
     face: true,
@@ -222,27 +229,22 @@ export default function App() {
   });
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
 
-  // Polygon Zone Drawing state
   const [isDrawingZone, setIsDrawingZone] = useState(false);
   const [newZonePoints, setNewZonePoints] = useState([]);
   const [newZoneName, setNewZoneName] = useState('');
   const videoCanvasRef = useRef(null);
 
-  // Event log filter state
   const [eventFilter, setEventFilter] = useState('all');
 
-  // Fetch ONLY active live streaming cameras from VMS backend API /api/cameras/active
   useEffect(() => {
     fetchActiveCameras();
   }, [vmsBackendHost, aiServiceHost]);
 
-  // Load initial events and zones
   useEffect(() => {
     fetchEvents();
     fetchZones();
   }, [selectedCamera, aiServiceHost]);
 
-  // Setup WebSocket connection to AI microservice
   useEffect(() => {
     let ws;
     const connectWS = () => {
@@ -255,9 +257,7 @@ export default function App() {
             if (payload.type === 'ai_event') {
               setEvents((prev) => [payload.data, ...prev.slice(0, 99)]);
             }
-          } catch (e) {
-            console.error('Failed parsing WS message:', e);
-          }
+          } catch (e) {}
         };
         ws.onclose = () => {
           setWsConnected(false);
@@ -280,17 +280,21 @@ export default function App() {
       const res = await fetch(`${vmsBackendHost}/api/cameras/active`);
       if (res.ok) {
         const data = await res.json();
-        const activeList = data.filter(c => c.active && c.streams && c.streams.length > 0).map(c => ({
-          id: c.server_camera_id || c.id,
-          name: c.name || `Camera ${c.id}`,
-          streams: c.streams
-        }));
-        if (activeList.length > 0) {
-          setActiveCameras(activeList);
-          if (!selectedCamera || !activeList.some(c => c.id === selectedCamera)) {
-            setSelectedCamera(activeList[0].id);
+        if (Array.isArray(data)) {
+          const activeList = data
+            .filter(c => c && c.active && c.streams && c.streams.length > 0)
+            .map(c => ({
+              id: c.server_camera_id || c.id,
+              name: c.name || `Camera ${c.id}`,
+              streams: c.streams || []
+            }));
+          if (activeList.length > 0) {
+            setActiveCameras(activeList);
+            if (!selectedCamera || !activeList.some(c => c.id === selectedCamera)) {
+              setSelectedCamera(activeList[0].id);
+            }
+            return;
           }
-          return;
         }
       }
     } catch (e) {}
@@ -299,7 +303,9 @@ export default function App() {
       const res = await fetch(`${aiServiceHost}/api/ai/cameras`);
       if (res.ok) {
         const data = await res.json();
-        setActiveCameras(data.map(c => ({ id: c.id, name: c.name, streams: [] })));
+        if (Array.isArray(data)) {
+          setActiveCameras(data.map(c => ({ id: c.id, name: c.name, streams: [] })));
+        }
       }
     } catch (e) {}
   };
@@ -309,7 +315,7 @@ export default function App() {
       const res = await fetch(`${aiServiceHost}/api/ai/events?limit=50`);
       if (res.ok) {
         const data = await res.json();
-        setEvents(data);
+        if (Array.isArray(data)) setEvents(data);
       }
     } catch (e) {}
   };
@@ -319,7 +325,7 @@ export default function App() {
       const res = await fetch(`${aiServiceHost}/api/ai/zones?camera_id=${selectedCamera}`);
       if (res.ok) {
         const data = await res.json();
-        setZones(data);
+        if (Array.isArray(data)) setZones(data);
       }
     } catch (e) {}
   };
@@ -335,9 +341,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active_models: enabledList })
       });
-    } catch (e) {
-      console.error('Failed to update models:', e);
-    }
+    } catch (e) {}
   };
 
   const handleCanvasClick = (e) => {
@@ -393,9 +397,13 @@ export default function App() {
   };
 
   const filteredCameras = useMemo(() => {
+    if (!Array.isArray(activeCameras)) return [];
     return activeCameras.filter((cam) => {
-      return cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-             cam.name.toLowerCase().includes(searchQuery.toLowerCase());
+      if (!cam || !cam.id) return false;
+      const camId = String(cam.id).toLowerCase();
+      const camName = String(cam.name || '').toLowerCase();
+      const q = searchQuery.toLowerCase();
+      return camId.includes(q) || camName.includes(q);
     });
   }, [activeCameras, searchQuery]);
 
@@ -413,6 +421,7 @@ export default function App() {
   }, [filteredCameras, currentPage, gridSize]);
 
   const filteredEvents = events.filter((evt) => {
+    if (!evt || !evt.event_type) return false;
     if (eventFilter === 'all') return true;
     return evt.event_type.includes(eventFilter);
   });
@@ -436,9 +445,9 @@ export default function App() {
         width: '100%'
       }}
     >
-      {paginatedCameras.map((cam) => (
+      {paginatedCameras.map((cam, idx) => (
         <LiveCameraCell
-          key={cam.id}
+          key={cam?.id || idx}
           camera={cam}
           aiServiceHost={aiServiceHost}
           onFocusCamera={(c) => setSelectedModalCamera(c)}
