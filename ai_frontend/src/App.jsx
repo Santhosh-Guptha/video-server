@@ -55,6 +55,61 @@ const getPolygonPointsStr = (polygon) => {
     .join(' ');
 };
 
+// Hook to compute exact video render rectangle (handles letterboxing/pillarboxing)
+const useVideoRect = (videoRef) => {
+  const [rect, setRect] = useState({ left: '0%', top: '0%', width: '100%', height: '100%' });
+
+  const updateRect = useCallback(() => {
+    const video = videoRef?.current;
+    if (!video || !video.videoWidth || !video.videoHeight || !video.parentElement) return;
+
+    const cw = video.parentElement.clientWidth;
+    const ch = video.parentElement.clientHeight;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+
+    if (!cw || !ch) return;
+
+    const containerAspect = cw / ch;
+    const videoAspect = vw / vh;
+
+    let rw, rh, rx, ry;
+    if (containerAspect > videoAspect) {
+      rh = ch;
+      rw = ch * videoAspect;
+      rx = (cw - rw) / 2;
+      ry = 0;
+    } else {
+      rw = cw;
+      rh = cw / videoAspect;
+      rx = 0;
+      ry = (ch - rh) / 2;
+    }
+
+    setRect({
+      left: `${(rx / cw) * 100}%`,
+      top: `${(ry / ch) * 100}%`,
+      width: `${(rw / cw) * 100}%`,
+      height: `${(rh / ch) * 100}%`
+    });
+  }, [videoRef]);
+
+  useEffect(() => {
+    const video = videoRef?.current;
+    if (!video) return;
+
+    updateRect();
+    const timer = setInterval(updateRect, 400);
+    window.addEventListener('resize', updateRect);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('resize', updateRect);
+    };
+  }, [videoRef, updateRect]);
+
+  return rect;
+};
+
 // ─── WebRTC Player Component (WHEP with automatic HLS Fallback) ───
 function WebRTCVideoPlayer({ streamId, vmsBackendHost, style, onCanPlay, onError, videoRef: externalRef }) {
   const internalRef = useRef(null);
@@ -440,6 +495,7 @@ export default function App() {
   const [newZoneName, setNewZoneName] = useState('');
   const focusVideoRef = useRef(null);
   const focusContainerRef = useRef(null);
+  const videoOverlayRect = useVideoRect(focusVideoRef);
 
   // ─── Fetch Active Cameras ──────────────────────────────────────
   useEffect(() => {
@@ -919,56 +975,58 @@ export default function App() {
 
                   {/* AI Detection Overlay (only when AI is enabled) */}
                   {aiEnabled && (
-                    <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
-                      {/* Intrusion Zones */}
-                      {safeZones.map((z) => (
-                        <polygon
-                          key={z.zone_id}
-                          points={getPolygonPointsStr(z.polygon)}
-                          fill="rgba(244, 63, 94, 0.2)"
-                          stroke="#f43f5e"
-                          strokeWidth="2"
-                        />
-                      ))}
+                    <div style={{ position: 'absolute', ...videoOverlayRect, pointerEvents: 'none', zIndex: 10 }}>
+                      <svg style={{ width: '100%', height: '100%' }}>
+                        {/* Intrusion Zones */}
+                        {safeZones.map((z) => (
+                          <polygon
+                            key={z.zone_id}
+                            points={getPolygonPointsStr(z.polygon)}
+                            fill="rgba(244, 63, 94, 0.2)"
+                            stroke="#f43f5e"
+                            strokeWidth="2"
+                          />
+                        ))}
 
-                      {/* Detection Bounding Boxes */}
-                      {safeDetections.map((det, idx) => {
-                        const [x1, y1, x2, y2] = getBboxCoords(det.bbox);
-                        const cn = String(det.class_name || 'person').toLowerCase();
-                        const color = cn === 'person' ? '#10b981' : cn === 'face' ? '#38bdf8' : cn === 'vehicle' ? '#fbbf24' : '#f43f5e';
-                        const conf = Number(det.confidence || 0.85);
-                        return (
-                          <g key={idx}>
-                            <rect
-                              x={`${x1 * 100}%`} y={`${y1 * 100}%`}
-                              width={`${(x2 - x1) * 100}%`} height={`${(y2 - y1) * 100}%`}
-                              fill="none" stroke={color} strokeWidth="2.5"
-                              filter="drop-shadow(0px 0px 4px rgba(0,0,0,0.8))"
-                            />
-                            <rect
-                              x={`${x1 * 100}%`} y={`${Math.max(0, y1 * 100 - 4)}%`}
-                              width="80" height="16" fill={color} opacity="0.9" rx="3"
-                            />
-                            <text
-                              x={`${x1 * 100 + 1}%`} y={`${Math.max(0, y1 * 100 - 0.5)}%`}
-                              fill="#ffffff" fontSize="11" fontWeight="bold"
-                            >
-                              {cn.toUpperCase()} {(conf * 100).toFixed(0)}%
-                            </text>
+                        {/* Detection Bounding Boxes */}
+                        {safeDetections.map((det, idx) => {
+                          const [x1, y1, x2, y2] = getBboxCoords(det.bbox);
+                          const cn = String(det.class_name || 'person').toLowerCase();
+                          const color = cn === 'person' ? '#10b981' : cn === 'face' ? '#38bdf8' : cn === 'vehicle' ? '#fbbf24' : '#f43f5e';
+                          const conf = Number(det.confidence || 0.85);
+                          return (
+                            <g key={idx}>
+                              <rect
+                                x={`${x1 * 100}%`} y={`${y1 * 100}%`}
+                                width={`${(x2 - x1) * 100}%`} height={`${(y2 - y1) * 100}%`}
+                                fill="none" stroke={color} strokeWidth="2.5"
+                                filter="drop-shadow(0px 0px 4px rgba(0,0,0,0.8))"
+                              />
+                              <rect
+                                x={`${x1 * 100}%`} y={`${Math.max(0, y1 * 100 - 4)}%`}
+                                width="80" height="16" fill={color} opacity="0.9" rx="3"
+                              />
+                              <text
+                                x={`${x1 * 100 + 1}%`} y={`${Math.max(0, y1 * 100 - 0.5)}%`}
+                                fill="#ffffff" fontSize="11" fontWeight="bold"
+                              >
+                                {cn.toUpperCase()} {(conf * 100).toFixed(0)}%
+                              </text>
+                            </g>
+                          );
+                        })}
+
+                        {/* Drawing zone points */}
+                        {isDrawingZone && Array.isArray(newZonePoints) && newZonePoints.length > 0 && (
+                          <g>
+                            <polygon points={getPolygonPointsStr(newZonePoints)} fill="rgba(6,182,212,0.25)" stroke="#06b6d4" strokeWidth="2" strokeDasharray="4" />
+                            {newZonePoints.map((p, idx) => (
+                              <circle key={idx} cx={`${(Number(p?.x) || 0) * 100}%`} cy={`${(Number(p?.y) || 0) * 100}%`} r="5" fill="#06b6d4" />
+                            ))}
                           </g>
-                        );
-                      })}
-
-                      {/* Drawing zone points */}
-                      {isDrawingZone && Array.isArray(newZonePoints) && newZonePoints.length > 0 && (
-                        <g>
-                          <polygon points={getPolygonPointsStr(newZonePoints)} fill="rgba(6,182,212,0.25)" stroke="#06b6d4" strokeWidth="2" strokeDasharray="4" />
-                          {newZonePoints.map((p, idx) => (
-                            <circle key={idx} cx={`${(Number(p?.x) || 0) * 100}%`} cy={`${(Number(p?.y) || 0) * 100}%`} r="5" fill="#06b6d4" />
-                          ))}
-                        </g>
-                      )}
-                    </svg>
+                        )}
+                      </svg>
+                    </div>
                   )}
 
                   {/* Camera label */}
