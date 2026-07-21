@@ -47,17 +47,23 @@ class IntrusionDetector:
             return breaches
 
         for det in detections:
-            # Bottom center point of the bounding box represents footstep/contact point
             det_bbox = det.bbox
+            
+            # 1. Feet Point (Bottom Center)
             bottom_center = Point2D(
                 x=(det_bbox.xmin + det_bbox.xmax) / 2.0,
                 y=det_bbox.ymax
+            )
+            
+            # 2. Body Center (Centroid)
+            centroid = Point2D(
+                x=(det_bbox.xmin + det_bbox.xmax) / 2.0,
+                y=(det_bbox.ymin + det_bbox.ymax) / 2.0
             )
 
             for zone in enabled_zones:
                 zone_poly = zone.polygon if hasattr(zone, "polygon") else zone.get("polygon", [])
                 
-                # Check point format
                 polygon_pts = []
                 for pt in zone_poly:
                     if isinstance(pt, dict):
@@ -65,7 +71,8 @@ class IntrusionDetector:
                     else:
                         polygon_pts.append(pt)
 
-                if is_point_in_polygon(bottom_center, polygon_pts):
+                # Trigger if either feet or body center is inside the zone
+                if is_point_in_polygon(bottom_center, polygon_pts) or is_point_in_polygon(centroid, polygon_pts):
                     z_id = zone.zone_id if hasattr(zone, "zone_id") else zone.get("zone_id")
                     z_name = zone.name if hasattr(zone, "name") else zone.get("name", "Zone")
                     
