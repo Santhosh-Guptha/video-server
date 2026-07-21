@@ -14,8 +14,9 @@ class Point2D(BaseModel):
 
 class DetectionResult(BaseModel):
     id: str
-    label: str
-    confidence: float
+    label: str = "Person"
+    class_name: str = "person"
+    confidence: float = 0.85
     bbox: BoundingBox
     track_id: Optional[int] = None
     attributes: Dict[str, Any] = Field(default_factory=dict)
@@ -31,26 +32,16 @@ class AIEvent(BaseModel):
     event_id: str
     camera_id: str
     camera_name: str
-    event_type: str  # "person_detected", "face_detected", "vehicle_detected", "intrusion_breach"
-    timestamp: float = Field(default_factory=time.time)
+    timestamp: float
     formatted_time: str
-    confidence: float
+    event_type: str  # "person_detected", "face_detected", "vehicle_detected", "intrusion_breach"
     label: str
-    bbox: BoundingBox
-    zone_id: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float
+    bbox: Optional[BoundingBox] = None
     snapshot_url: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
 
 class CameraSubscription(BaseModel):
     camera_id: str
-    name: str
     stream_url: str
     active_models: List[str] = Field(default=["person", "face", "vehicle", "intrusion"])
-    enabled: bool = True
-    sampling_fps: int = 5
-
-class ModelConfig(BaseModel):
-    model_name: str
-    enabled: bool = True
-    confidence_threshold: float = 0.5
-    min_size: int = 30

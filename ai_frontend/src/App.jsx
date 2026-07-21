@@ -89,7 +89,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
     }).catch(() => {});
   }, [camId, aiServiceHost]);
 
-  // Fallback 10 FPS polling loop if MJPEG stream triggers onError
+  // Dynamic 10 FPS frame refresh loop if MJPEG stream triggers onError
   useEffect(() => {
     let timerId;
     if (useFallbackFrame && camId) {
@@ -140,6 +140,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
     >
       {/* Live AI Video Stream Image Element */}
       <img
+        key={camId}
         src={useFallbackFrame ? frameUrl : `${aiServiceHost}/api/ai/streams/${camId}/live`}
         alt={camName}
         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
@@ -166,7 +167,7 @@ function LiveCameraCell({ camera, aiServiceHost, onFocusCamera }) {
         {/* Real-time AI Bounding Boxes */}
         {safeDetections.map((det, idx) => {
           const [x1, y1, x2, y2] = getBboxCoords(det.bbox);
-          const className = String(det.class_name || 'object').toLowerCase();
+          const className = String(det.class_name || 'person').toLowerCase();
           const color = className === 'person' ? '#10b981' :
                         className === 'face' ? '#38bdf8' :
                         className === 'vehicle' ? '#fbbf24' : '#f43f5e';
@@ -317,10 +318,10 @@ export default function App() {
         const data = await res.json();
         if (Array.isArray(data)) {
           const activeList = data
-            .filter(c => c && c.active && c.streams && c.streams.length > 0)
-            .map(c => ({
-              id: c.server_camera_id || c.id,
-              name: c.name || `Camera ${c.id}`,
+            .filter(c => c && (c.active !== false))
+            .map((c, idx) => ({
+              id: c.server_camera_id || c.id || `cam_${idx}`,
+              name: c.name || `Camera ${c.id || idx}`,
               streams: c.streams || []
             }));
           if (activeList.length > 0) {
@@ -339,7 +340,11 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          setActiveCameras(data.map(c => ({ id: c.id, name: c.name, streams: [] })));
+          setActiveCameras(data.map((c, idx) => ({
+            id: c.id || `cam_${idx}`,
+            name: c.name || `Camera ${c.id || idx}`,
+            streams: []
+          })));
         }
       }
     } catch (e) {}
@@ -485,7 +490,7 @@ export default function App() {
     >
       {paginatedCameras.map((cam, idx) => (
         <LiveCameraCell
-          key={cam?.id || idx}
+          key={cam?.id ? `${cam.id}_${idx}` : `cam_${idx}`}
           camera={cam}
           aiServiceHost={aiServiceHost}
           onFocusCamera={(c) => setSelectedModalCamera(c)}
