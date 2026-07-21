@@ -10,19 +10,21 @@ from ..database import save_ai_event, get_recent_ai_events
 class EventManager:
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.add(websocket)
+        # Capture the main thread event loop running the WebSocket connection
+        self.loop = asyncio.get_running_loop()
+        print(f"[EventManager] WebSocket connected. Captured event loop: {self.loop}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
     async def broadcast_event(self, event_data: Dict[str, Any]):
-        """Persist event to DB and broadcast to all connected WebSocket UI clients."""
-        save_ai_event(event_data)
-
+        """Broadcast event to all connected WebSocket UI clients."""
         if not self.active_connections:
             return
 
@@ -66,13 +68,26 @@ class EventManager:
             "snapshot_url": f"/api/ai/events/{event_id}/snapshot"
         }
 
-        # Schedule asynchronous broadcast
+        # ─── 1. Save to DB Synchronously ───────────────────────────
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.broadcast_event(event_dict))
-        except Exception:
-            pass
+            save_ai_event(event_dict)
+        except Exception as e:
+            print(f"[EventManager] SQLite save error: {e}")
+
+        # ─── 2. Thread-Safe WebSocket Broadcast ────────────────────
+        if self.loop and self.loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(self.broadcast_event(event_dict), self.loop)
+            except Exception as e:
+                print(f"[EventManager] Thread-safe broadcast error: {e}")
+        else:
+            # Fallback if loop is not set but we are in main loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.broadcast_event(event_dict))
+            except Exception:
+                pass
 
         return event_dict
 
