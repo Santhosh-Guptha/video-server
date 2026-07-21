@@ -27,6 +27,8 @@ class IntrusionZone(BaseModel):
     name: str
     polygon: List[Point2D]  # Normalized coordinates [0.0 - 1.0]
     enabled: bool = True
+    zone_type: Optional[str] = "intrusion"  # "intrusion" | "tripwire"
+    direction: Optional[str] = "both"  # "A_to_B" | "B_to_A" | "both"
 
 class AIEvent(BaseModel):
     event_id: str

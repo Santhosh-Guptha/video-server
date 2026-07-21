@@ -56,6 +56,16 @@ def init_db():
     )
     """)
 
+    # Alter intrusion_zones table if migration columns don't exist
+    try:
+        cursor.execute("ALTER TABLE intrusion_zones ADD COLUMN zone_type TEXT DEFAULT 'intrusion'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        cursor.execute("ALTER TABLE intrusion_zones ADD COLUMN direction TEXT DEFAULT 'both'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     conn.commit()
     conn.close()
 
@@ -124,14 +134,16 @@ def save_intrusion_zone(zone_dict: Dict[str, Any]):
     cursor = conn.cursor()
     cursor.execute("""
     INSERT OR REPLACE INTO intrusion_zones (
-        zone_id, camera_id, name, polygon_json, enabled
-    ) VALUES (?, ?, ?, ?, ?)
+        zone_id, camera_id, name, polygon_json, enabled, zone_type, direction
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         zone_dict["zone_id"],
         zone_dict["camera_id"],
         zone_dict["name"],
         json.dumps(zone_dict["polygon"]),
-        1 if zone_dict.get("enabled", True) else 0
+        1 if zone_dict.get("enabled", True) else 0,
+        zone_dict.get("zone_type", "intrusion"),
+        zone_dict.get("direction", "both")
     ))
     conn.commit()
     conn.close()
@@ -151,6 +163,9 @@ def get_intrusion_zones(camera_id: Optional[str] = None) -> List[Dict[str, Any]]
         item = dict(row)
         item["polygon"] = json.loads(item["polygon_json"])
         item["enabled"] = bool(item["enabled"])
+        # Handle cases where existing DB has NULL or missing values for newer columns
+        item["zone_type"] = item.get("zone_type") or "intrusion"
+        item["direction"] = item.get("direction") or "both"
         del item["polygon_json"]
         results.append(item)
     return results

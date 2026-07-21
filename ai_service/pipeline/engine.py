@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import time
 import threading
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 
 from ..ingester.stream_ingester import StreamIngester
 from ..models.person_detector import PersonDetector
@@ -61,6 +61,13 @@ def compute_iou(box1: List[float], box2: List[float]) -> float:
     return inter_area / union_area
 
 
+def segments_intersect(p1: List[float], p2: List[float], q1: List[float], q2: List[float]) -> bool:
+    """Check if segment p1-p2 intersects segment q1-q2 using ccw geometry orientation."""
+    def ccw(A, B, C):
+        return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+    return (ccw(p1, q1, q2) != ccw(p2, q1, q2)) and (ccw(p1, p2, q1) != ccw(p1, p2, q2))
+
+
 def draw_fancy_box(frame, xmin, ymin, xmax, ymax, label_str, color, thickness=2):
     """Draw a bounding box with a filled label background for readability."""
     cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, thickness)
@@ -109,6 +116,10 @@ class AIPipelineEngine:
 
         # ─── Object Tracking & Stabilization State ─────────────────
         self.tracks: Dict[str, List[Dict[str, Any]]] = {}
+
+        # ─── Tripwire Cross Counting State ─────────────────────────
+        self.tripwire_counts: Dict[str, Dict[str, int]] = {}
+        self.tripwire_crossings: Set[str] = set()
 
         # ─── Configurable Thresholds (per-camera or global) ────────
         self.config: Dict[str, Any] = {
@@ -221,6 +232,12 @@ class AIPipelineEngine:
                 prev_xmin, prev_ymin, prev_xmax, prev_ymax = track["bbox"]
                 new_xmin, new_ymin, new_xmax, new_ymax = det_box
 
+                # Store previous position for tripwire crossing calculations
+                track["prev_bottom_center"] = [
+                    (prev_xmin + prev_xmax) / 2.0,
+                    prev_ymax
+                ]
+
                 # Deadband calculations
                 prev_cx = (prev_xmin + prev_xmax) / 2.0
                 prev_cy = (prev_ymin + prev_ymax) / 2.0
@@ -313,7 +330,7 @@ class AIPipelineEngine:
     def process_camera_once(self, camera_id: str) -> Dict[str, Any]:
         """
         On-demand: grab one frame, run AI models, smooth/stabilize boxes,
-        draw annotations, cache results, and return detections + zones.
+        handle directional tripwires & polygons, draw annotations, and return.
         """
         ingester = self.ingesters.get(camera_id)
         if not ingester:
@@ -381,12 +398,89 @@ class AIPipelineEngine:
         # ─── Apply Bounding Box Tracking & Stabilization ──────────
         detections = self.track_and_stabilize(camera_id, detections)
 
-        # ─── Intrusion Zone Processing ─────────────────────────────
+        # Fetch active zones/tripwires for camera
         zones = get_intrusion_zones(camera_id)
-        breaches = []
-        if "intrusion" in active_mods and zones:
+
+        # ─── Directional Tripwire Crossing Logic ───────────────────
+        tripwires = [z for z in zones if z.get("zone_type") == "tripwire"]
+        if "intrusion" in active_mods and tripwires:
             try:
-                breaches = self.intrusion_detector.check_breaches(detections, zones)
+                with self.lock:
+                    tracks = list(self.tracks.get(camera_id, []))
+
+                for track in tracks:
+                    if track.get("missed_frames", 0) == 0 and "prev_bottom_center" in track:
+                        p1 = track["prev_bottom_center"]
+                        p2 = [
+                            (track["bbox"][0] + track["bbox"][2]) / 2.0,
+                            track["bbox"][3]
+                        ]
+
+                        for tw in tripwires:
+                            if not tw.get("enabled") or len(tw.get("polygon", [])) < 2:
+                                continue
+
+                            q1 = [tw["polygon"][0]["x"], tw["polygon"][0]["y"]]
+                            q2 = [tw["polygon"][1]["x"], tw["polygon"][1]["y"]]
+
+                            if segments_intersect(p1, p2, q1, q2):
+                                crossing_key = f"{tw['zone_id']}:{track['track_id']}"
+                                with self.lock:
+                                    already_crossed = crossing_key in self.tripwire_crossings
+
+                                if not already_crossed:
+                                    with self.lock:
+                                        self.tripwire_crossings.add(crossing_key)
+
+                                    # Cross product formula relative to line vector q1 -> q2
+                                    val1 = (q2[0] - q1[0]) * (p1[1] - q1[1]) - (q2[1] - q1[1]) * (p1[0] - q1[0])
+                                    val2 = (q2[0] - q1[0]) * (p2[1] - q1[1]) - (q2[1] - q1[1]) * (p2[0] - q1[0])
+
+                                    crossing_dir = "B_to_A"
+                                    if val1 < 0 and val2 >= 0:
+                                        crossing_dir = "A_to_B"
+                                    elif val1 > 0 and val2 <= 0:
+                                        crossing_dir = "B_to_A"
+
+                                    rule = tw.get("direction", "both")
+                                    if rule == "both" or rule == crossing_dir:
+                                        with self.lock:
+                                            counts = self.tripwire_counts.setdefault(tw["zone_id"], {"in": 0, "out": 0})
+                                            if crossing_dir == "A_to_B":
+                                                counts["in"] += 1
+                                            else:
+                                                counts["out"] += 1
+
+                                        event_manager.process_and_emit(
+                                            camera_id=camera_id,
+                                            camera_name=f"Camera {camera_id}",
+                                            event_type="tripwire_crossed",
+                                            label=f"Tripwire Crossed ({track['label']})",
+                                            confidence=track["confidence"],
+                                            bbox={
+                                                "xmin": track["bbox"][0],
+                                                "ymin": track["bbox"][1],
+                                                "xmax": track["bbox"][2],
+                                                "ymax": track["bbox"][3],
+                                            },
+                                            zone_id=tw["zone_id"],
+                                            details={
+                                                "zone_name": tw["name"],
+                                                "crossing_direction": crossing_dir,
+                                                "in_count": counts["in"],
+                                                "out_count": counts["out"],
+                                                "object_type": track["label"]
+                                            }
+                                        )
+            except Exception as e:
+                print(f"[Tripwire] Error checking crossing segment: {e}")
+
+        # ─── Polygon Intrusion Zone Processing ─────────────────────
+        intrusion_polys = [z for z in zones if z.get("zone_type") != "tripwire"]
+        breaches = []
+        if "intrusion" in active_mods and intrusion_polys:
+            try:
+                breaches = self.intrusion_detector.check_breaches(detections, intrusion_polys)
             except Exception:
                 pass
 
@@ -394,9 +488,33 @@ class AIPipelineEngine:
         annotated = frame.copy()
         h, w = annotated.shape[:2]
 
-        # Draw intrusion zone polygons
+        # Draw zones and tripwires
         for z in zones:
-            if z.get("enabled") and z.get("polygon"):
+            if not z.get("enabled") or not z.get("polygon"):
+                continue
+
+            z_type = z.get("zone_type", "intrusion")
+            if z_type == "tripwire" and len(z["polygon"]) >= 2:
+                # Render Tripwire line
+                try:
+                    pt1 = (int(z["polygon"][0]["x"] * w), int(z["polygon"][0]["y"] * h))
+                    pt2 = (int(z["polygon"][1]["x"] * w), int(z["polygon"][1]["y"] * h))
+
+                    # Vibrant yellow for tripwire segment
+                    cv2.line(annotated, pt1, pt2, (0, 190, 255), 2)
+
+                    # Direction direction mid dot
+                    mx, my = (pt1[0] + pt2[0]) // 2, (pt1[1] + pt2[1]) // 2
+                    cv2.circle(annotated, (mx, my), 5, (0, 190, 255), -1)
+
+                    counts = self.tripwire_counts.get(z["zone_id"], {"in": 0, "out": 0})
+                    lbl = f"{z['name']} (In:{counts['in']} Out:{counts['out']})"
+                    cv2.putText(annotated, lbl, (min(pt1[0], pt2[0]), min(pt1[1], pt2[1]) - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 190, 255), 1, cv2.LINE_AA)
+                except Exception:
+                    pass
+            else:
+                # Render Polygon Intrusion Zone
                 try:
                     pts = np.array([[int(pt["x"] * w), int(pt["y"] * h)] for pt in z["polygon"]], np.int32)
                     overlay = annotated.copy()

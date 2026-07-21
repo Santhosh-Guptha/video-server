@@ -484,6 +484,8 @@ export default function App() {
   const [isDrawingZone, setIsDrawingZone] = useState(false);
   const [newZonePoints, setNewZonePoints] = useState([]);
   const [newZoneName, setNewZoneName] = useState('');
+  const [newZoneType, setNewZoneType] = useState('intrusion'); // 'intrusion' | 'tripwire'
+  const [newZoneDirection, setNewZoneDirection] = useState('both'); // 'both' | 'A_to_B' | 'B_to_A'
   const focusVideoRef = useRef(null);
   const focusContainerRef = useRef(null);
   const videoOverlayRect = useVideoRect(focusVideoRef);
@@ -642,6 +644,27 @@ export default function App() {
   }, [selectedCamera, aiEnabled, stopAI]);
 
   // ─── Zone Drawing ─────────────────────────────────────────────
+  const fetchZones = useCallback(async () => {
+    if (!selectedCamera) return;
+    try {
+      const res = await fetch(`${aiServiceHost}/api/ai/zones?camera_id=${selectedCamera.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAiZones(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch zones:', e);
+    }
+  }, [selectedCamera, aiServiceHost]);
+
+  useEffect(() => {
+    if (selectedCamera) {
+      fetchZones();
+    } else {
+      setAiZones([]);
+    }
+  }, [selectedCamera, fetchZones]);
+
   const handleCanvasClick = (e) => {
     if (!isDrawingZone || !focusContainerRef.current) return;
     const rect = focusContainerRef.current.getBoundingClientRect();
@@ -651,11 +674,20 @@ export default function App() {
   };
 
   const saveZone = async () => {
-    if (!Array.isArray(newZonePoints) || newZonePoints.length < 3 || !selectedCamera) {
-      alert('A polygon zone must have at least 3 points.');
-      return;
+    if (!selectedCamera) return;
+    if (newZoneType === 'intrusion') {
+      if (!Array.isArray(newZonePoints) || newZonePoints.length < 3) {
+        alert('A polygon zone must have at least 3 points.');
+        return;
+      }
+    } else {
+      if (!Array.isArray(newZonePoints) || newZonePoints.length !== 2) {
+        alert('A tripwire line must have exactly 2 points.');
+        return;
+      }
     }
-    const zoneName = newZoneName.trim() || `Zone ${Date.now()}`;
+
+    const zoneName = newZoneName.trim() || `${newZoneType === 'tripwire' ? 'Tripwire' : 'Zone'} ${Date.now()}`;
     try {
       await fetch(`${aiServiceHost}/api/ai/zones`, {
         method: 'POST',
@@ -665,18 +697,23 @@ export default function App() {
           camera_id: selectedCamera.id,
           name: zoneName,
           polygon: newZonePoints,
-          enabled: true
+          enabled: true,
+          zone_type: newZoneType,
+          direction: newZoneDirection
         })
       });
       setNewZonePoints([]);
       setNewZoneName('');
       setIsDrawingZone(false);
+      // Refresh zones
+      fetchZones();
     } catch (e) { alert('Failed to save zone'); }
   };
 
   const deleteZone = async (zoneId) => {
     try {
       await fetch(`${aiServiceHost}/api/ai/zones/${zoneId}`, { method: 'DELETE' });
+      fetchZones();
     } catch (e) {}
   };
 
@@ -966,21 +1003,61 @@ export default function App() {
                   {isDrawingZone && (
                     <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
                       <svg style={{ width: '100%', height: '100%' }}>
-                        {/* Intrusion Zones */}
-                        {safeZones.map((z) => (
-                          <polygon
-                            key={z.zone_id}
-                            points={getPolygonPointsStr(z.polygon)}
-                            fill="rgba(244, 63, 94, 0.2)"
-                            stroke="#f43f5e"
-                            strokeWidth="2"
-                          />
-                        ))}
+                        {/* Existing Zones / Tripwires */}
+                        {safeZones.map((z) => {
+                          if (z.zone_type === 'tripwire' && Array.isArray(z.polygon) && z.polygon.length >= 2) {
+                            return (
+                              <g key={z.zone_id}>
+                                <line
+                                  x1={`${(Number(z.polygon[0]?.x) || 0) * 100}%`}
+                                  y1={`${(Number(z.polygon[0]?.y) || 0) * 100}%`}
+                                  x2={`${(Number(z.polygon[1]?.x) || 0) * 100}%`}
+                                  y2={`${(Number(z.polygon[1]?.y) || 0) * 100}%`}
+                                  stroke="#fbbf24"
+                                  strokeWidth="3"
+                                />
+                                <text
+                                  x={`${((Number(z.polygon[0]?.x) + Number(z.polygon[1]?.x)) / 2) * 100}%`}
+                                  y={`${((Number(z.polygon[0]?.y) + Number(z.polygon[1]?.y)) / 2) * 100 - 10}%`}
+                                  fill="#fbbf24"
+                                  fontSize="10"
+                                  fontWeight="700"
+                                  textAnchor="middle"
+                                >
+                                  {z.name} ({z.direction})
+                                </text>
+                              </g>
+                            );
+                          }
+                          return (
+                            <polygon
+                              key={z.zone_id}
+                              points={getPolygonPointsStr(z.polygon)}
+                              fill="rgba(244, 63, 94, 0.15)"
+                              stroke="#f43f5e"
+                              strokeWidth="2"
+                            />
+                          );
+                        })}
 
-                        {/* Drawing zone points */}
+                        {/* Drawing new zone / tripwire points */}
                         {Array.isArray(newZonePoints) && newZonePoints.length > 0 && (
                           <g>
-                            <polygon points={getPolygonPointsStr(newZonePoints)} fill="rgba(6,182,212,0.25)" stroke="#06b6d4" strokeWidth="2" strokeDasharray="4" />
+                            {newZoneType === 'tripwire' ? (
+                              newZonePoints.length >= 2 ? (
+                                <line
+                                  x1={`${(Number(newZonePoints[0]?.x) || 0) * 100}%`}
+                                  y1={`${(Number(newZonePoints[0]?.y) || 0) * 100}%`}
+                                  x2={`${(Number(newZonePoints[1]?.x) || 0) * 100}%`}
+                                  y2={`${(Number(newZonePoints[1]?.y) || 0) * 100}%`}
+                                  stroke="#06b6d4"
+                                  strokeWidth="3"
+                                  strokeDasharray="4"
+                                />
+                              ) : null
+                            ) : (
+                              <polygon points={getPolygonPointsStr(newZonePoints)} fill="rgba(6,182,212,0.25)" stroke="#06b6d4" strokeWidth="2" strokeDasharray="4" />
+                            )}
                             {newZonePoints.map((p, idx) => (
                               <circle key={idx} cx={`${(Number(p?.x) || 0) * 100}%`} cy={`${(Number(p?.y) || 0) * 100}%`} r="5" fill="#06b6d4" />
                             ))}
@@ -1130,12 +1207,57 @@ export default function App() {
               {aiModels.intrusion && aiEnabled && (
                 <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                   {isDrawingZone ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       <input
-                        type="text" placeholder="Zone name..."
+                        type="text" placeholder="Zone/Line name..."
                         value={newZoneName} onChange={(e) => setNewZoneName(e.target.value)}
                         style={{ background: '#0f172a', border: '1px solid #334155', color: '#fff', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}
                       />
+
+                      {/* Type Switcher */}
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          type="button"
+                          onClick={() => { setNewZoneType('intrusion'); setNewZonePoints([]); }}
+                          style={{
+                            flex: 1, padding: '4px 6px', fontSize: '10px', fontWeight: '700', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)',
+                            background: newZoneType === 'intrusion' ? '#06b6d4' : 'transparent',
+                            color: newZoneType === 'intrusion' ? '#fff' : '#64748b',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Polygon Zone
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setNewZoneType('tripwire'); setNewZonePoints([]); }}
+                          style={{
+                            flex: 1, padding: '4px 6px', fontSize: '10px', fontWeight: '700', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)',
+                            background: newZoneType === 'tripwire' ? '#fbbf24' : 'transparent',
+                            color: newZoneType === 'tripwire' ? '#000' : '#64748b',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Tripwire Line
+                        </button>
+                      </div>
+
+                      {/* Direction Selection (only for tripwire) */}
+                      {newZoneType === 'tripwire' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          <span style={{ fontSize: '9px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase' }}>Direction Rule</span>
+                          <select
+                            value={newZoneDirection}
+                            onChange={(e) => setNewZoneDirection(e.target.value)}
+                            style={{ background: '#0f172a', border: '1px solid #334155', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}
+                          >
+                            <option value="both">Both Directions</option>
+                            <option value="A_to_B">A to B (Inward Only)</option>
+                            <option value="B_to_A">B to A (Outward Only)</option>
+                          </select>
+                        </div>
+                      )}
+
                       <div style={{ display: 'flex', gap: '6px' }}>
                         <button onClick={saveZone} style={{ flex: 1, padding: '6px', background: '#10b981', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>
                           Save ({Array.isArray(newZonePoints) ? newZonePoints.length : 0} pts)
@@ -1146,8 +1268,8 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <button onClick={() => setIsDrawingZone(true)} style={{ width: '100%', padding: '8px', background: 'rgba(6,182,212,0.15)', border: '1px solid rgba(6,182,212,0.3)', color: '#38bdf8', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                      <Plus size={14} /> Draw Intrusion Zone
+                    <button onClick={() => { setIsDrawingZone(true); setNewZoneType('intrusion'); }} style={{ width: '100%', padding: '8px', background: 'rgba(6,182,212,0.15)', border: '1px solid rgba(6,182,212,0.3)', color: '#38bdf8', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <Plus size={14} /> Draw Analytics Zone
                     </button>
                   )}
 
@@ -1155,8 +1277,10 @@ export default function App() {
                   {safeZones.length > 0 && (
                     <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {safeZones.map(z => (
-                        <div key={z.zone_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: 'rgba(244,63,94,0.1)', borderRadius: '4px', fontSize: '11px' }}>
-                          <span style={{ color: '#fb7185' }}>{z.name}</span>
+                        <div key={z.zone_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', background: z.zone_type === 'tripwire' ? 'rgba(251,191,36,0.1)' : 'rgba(244,63,94,0.1)', borderRadius: '4px', fontSize: '11px' }}>
+                          <span style={{ color: z.zone_type === 'tripwire' ? '#fbbf24' : '#fb7185', fontWeight: '600' }}>
+                            {z.name} <span style={{ fontSize: '9px', opacity: 0.7 }}>({z.zone_type === 'tripwire' ? 'Line' : 'Zone'})</span>
+                          </span>
                           <button onClick={() => deleteZone(z.zone_id)} style={{ background: 'none', border: 'none', color: '#f43f5e', cursor: 'pointer', padding: '2px' }}>
                             <Trash2 size={12} />
                           </button>
