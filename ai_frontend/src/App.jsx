@@ -292,11 +292,20 @@ export default function App() {
         if (Array.isArray(data)) {
           const activeList = data
             .filter(c => c && (c.active !== false))
-            .map((c, idx) => ({
-              id: c.server_camera_id || c.id || `cam_${idx}`,
-              name: c.name || `Camera ${c.id || idx}`,
-              streams: c.streams || []
-            }));
+            .map((c, idx) => {
+              // Extract the actual stream_id from the streams array — this is what HLS needs
+              const streams = Array.isArray(c.streams) ? c.streams : [];
+              const mainStream = streams.find(s => s && (String(s.profile_type || '').toUpperCase().includes('MAIN') || String(s.profile_type || '').toUpperCase().includes('HD')));
+              const firstStream = mainStream || streams[0];
+              const streamId = firstStream?.stream_id || c.server_camera_id || String(c.id || `cam_${idx}`);
+              const camName = c.name || `Camera ${c.id || idx}`;
+
+              return {
+                id: streamId,
+                name: `${camName} (${streamId})`,
+                streams: streams
+              };
+            });
           if (activeList.length > 0) {
             setActiveCameras(activeList);
             return;
@@ -312,7 +321,7 @@ export default function App() {
         if (Array.isArray(data)) {
           setActiveCameras(data.map((c, idx) => ({
             id: c.id || `cam_${idx}`,
-            name: c.name || `Camera ${c.id || idx}`,
+            name: `${c.name || 'Camera'} (${c.id || idx})`,
             streams: []
           })));
         }
