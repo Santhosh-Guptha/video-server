@@ -148,6 +148,12 @@ def update_models(camera_id: str, payload: Dict[str, Any]):
 
 @app.get("/api/ai/streams/{camera_id}/detections")
 def get_detections(camera_id: str):
+    if camera_id not in pipeline_engine.ingesters:
+        pipeline_engine.register_camera(
+            camera_id=camera_id,
+            stream_url=f"rtsp://localhost:8554/{camera_id}",
+            active_models=["person", "face", "vehicle", "intrusion"]
+        )
     dets = pipeline_engine.get_latest_detections(camera_id)
     zones = get_intrusion_zones(camera_id)
     return {
@@ -204,7 +210,6 @@ def stream_annotated_feed(camera_id: str):
             ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if ret:
                 jpg_bytes = buffer.tobytes()
-                # Standard RFC 2046 MJPEG Multipart Frame Headers with Content-Length
                 header = (
                     b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n'

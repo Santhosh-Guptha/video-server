@@ -30,7 +30,7 @@ const getAiWsHost = () => {
   return 'ws://localhost:8001/ws/ai-events';
 };
 
-// Robust WebRTC & AI Visual Markings Player Component
+// Robust WebRTC & AI Visual Markings Overlay Player Component
 function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCamera }) {
   const videoRef = useRef(null);
   const pcRef = useRef(null);
@@ -38,7 +38,7 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
   const [detections, setDetections] = useState([]);
   const [zones, setZones] = useState([]);
 
-  // Resolve stream ID for WebRTC
+  // Resolve stream ID for WebRTC WHEP
   const streamId = useMemo(() => {
     if (camera.streams && camera.streams.length > 0) {
       const gridStream = camera.streams.find(s => s.stream_id.includes('_grid')) || camera.streams[0];
@@ -46,6 +46,19 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
     }
     return camera.id;
   }, [camera]);
+
+  // Subscribe camera to AI service pipeline on mount
+  useEffect(() => {
+    fetch(`${aiServiceHost}/api/ai/cameras/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        camera_id: camera.id,
+        stream_url: `rtsp://localhost:8554/${camera.id}`,
+        active_models: ['person', 'face', 'vehicle', 'intrusion']
+      })
+    }).catch(() => {});
+  }, [camera.id, aiServiceHost]);
 
   // Start WebRTC WHEP Stream
   useEffect(() => {
@@ -88,7 +101,6 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
         await pc.setLocalDescription(offer);
         if (!isMounted) return;
 
-        // WHEP Signaling POST request to VMS Backend
         const user_id = `user_${Math.random().toString(36).substring(2, 9)}`;
         const tab_id = `tab_${Math.random().toString(36).substring(2, 9)}`;
         const whepUrl = `${vmsBackendHost}/api/streams/${encodeURIComponent(streamId)}/live/whep?user_id=${user_id}&browser_tab_id=${tab_id}`;
@@ -107,7 +119,6 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
           }));
         }
       } catch (err) {
-        console.warn(`WebRTC stream negotiation failed for ${streamId}, falling back to AI MJPEG stream:`, err);
         if (isMounted) setWebrtcConnected(false);
       }
     }
@@ -134,7 +145,7 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
           setZones(data.zones || []);
         }
       } catch (e) {}
-    }, 400);
+    }, 300);
 
     return () => clearInterval(intervalId);
   }, [camera.id, aiServiceHost]);
@@ -181,8 +192,8 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
         />
       )}
 
-      {/* AI Visual Markings Overlay Layer (Bounding Boxes & Zones) */}
-      <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+      {/* AI Visual Markings Overlay Layer (Z-Index 10 directly on top of Video) */}
+      <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
         {/* Intrusion Polygon Zones */}
         {zones.map((z) => (
           <polygon
@@ -190,7 +201,7 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
             points={z.polygon.map((p) => `${p.x * 100}%,${p.y * 100}%`).join(' ')}
             fill="rgba(244, 63, 94, 0.25)"
             stroke="#f43f5e"
-            strokeWidth="2"
+            strokeWidth="2.5"
           />
         ))}
 
@@ -209,23 +220,23 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
                 height={`${(y2 - y1) * 100}%`}
                 fill="none"
                 stroke={color}
-                strokeWidth="2"
-                strokeDasharray={det.class_name === 'intrusion' ? '4' : '0'}
+                strokeWidth="2.5"
+                filter="drop-shadow(0px 0px 4px rgba(0,0,0,0.8))"
               />
               <rect
                 x={`${x1 * 100}%`}
-                y={`${Math.max(0, y1 * 100 - 4)}%`}
-                width="60"
-                height="14"
+                y={`${Math.max(0, y1 * 100 - 5)}%`}
+                width="70"
+                height="15"
                 fill={color}
-                opacity="0.85"
-                rx="2"
+                opacity="0.9"
+                rx="3"
               />
               <text
-                x={`${x1 * 100 + 1}%`}
+                x={`${x1 * 100 + 2}%`}
                 y={`${Math.max(0, y1 * 100 - 1)}%`}
                 fill="#ffffff"
-                fontSize="9"
+                fontSize="10"
                 fontWeight="bold"
               >
                 {det.class_name.toUpperCase()} {(det.confidence * 100).toFixed(0)}%
@@ -235,7 +246,7 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
         })}
       </svg>
 
-      {/* Stream Label Header Overlay */}
+      {/* Stream Label Header Overlay (Z-Index 11) */}
       <div
         style={{
           position: 'absolute',
@@ -247,7 +258,8 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
           display: 'flex',
           justify: 'space-between',
           alignItems: 'center',
-          pointerEvents: 'none'
+          pointerEvents: 'none',
+          zIndex: 11
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -257,7 +269,7 @@ function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCame
           </span>
         </div>
         <span style={{ fontSize: '9px', background: webrtcConnected ? 'rgba(16,185,129,0.3)' : 'rgba(6,182,212,0.3)', color: webrtcConnected ? '#34d399' : '#38bdf8', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
-          {webrtcConnected ? 'WEBRTC LIVE' : 'AI LIVE'}
+          {webrtcConnected ? 'WEBRTC LIVE + AI' : 'AI LIVE'}
         </span>
       </div>
     </div>
@@ -281,7 +293,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isFullWall, setIsFullWall] = useState(false);
 
-  // Active Streaming Camera Catalog (Filtered to ONLY live streaming cameras)
+  // Active Streaming Camera Catalog
   const [activeCameras, setActiveCameras] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -349,11 +361,9 @@ export default function App() {
 
   const fetchActiveCameras = async () => {
     try {
-      // Query VMS backend /api/cameras/active to get ONLY live streaming cameras
       const res = await fetch(`${vmsBackendHost}/api/cameras/active`);
       if (res.ok) {
         const data = await res.json();
-        // Filter standard cameras that are active & online
         const activeList = data.filter(c => c.active && c.streams && c.streams.length > 0).map(c => ({
           id: c.server_camera_id || c.id,
           name: c.name || `Camera ${c.id}`,
@@ -367,11 +377,8 @@ export default function App() {
           return;
         }
       }
-    } catch (e) {
-      console.warn('Failed fetching active cameras from VMS backend:', e);
-    }
+    } catch (e) {}
 
-    // Fallback to AI service camera endpoint
     try {
       const res = await fetch(`${aiServiceHost}/api/ai/cameras`);
       if (res.ok) {
@@ -469,7 +476,6 @@ export default function App() {
     } catch (e) {}
   };
 
-  // Filter ONLY active cameras by search query
   const filteredCameras = useMemo(() => {
     return activeCameras.filter((cam) => {
       return cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -779,7 +785,7 @@ export default function App() {
                   style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
                 />
                 
-                <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+                <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
                   {zones.map((z) => (
                     <g key={z.zone_id}>
                       <polygon
