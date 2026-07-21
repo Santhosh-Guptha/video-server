@@ -250,7 +250,7 @@ def stream_annotated_feed(camera_id: str):
                     b'Content-Length: ' + str(len(jpg_bytes)).encode() + b'\r\n\r\n'
                 )
                 yield header + jpg_bytes + b'\r\n'
-            time.sleep(0.1)
+            time.sleep(0.04)
 
     return StreamingResponse(
         generate_frames(),
