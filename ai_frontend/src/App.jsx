@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ShieldAlert, UserCheck, Smile, Car, Bell, Sliders,
   Eye, Cpu, Radio, Plus, Trash2, Zap, Search, Grid, LayoutGrid,
-  Video, Users, Maximize2, Minimize2, RotateCw, ChevronLeft, ChevronRight, X
+  Video, Users, Maximize2, RotateCw, ChevronLeft, ChevronRight, X
 } from 'lucide-react';
 
 const getAiServiceHost = () => {
@@ -11,6 +11,14 @@ const getAiServiceHost = () => {
     return `http://${hostname}:8001`;
   }
   return 'http://localhost:8001';
+};
+
+const getVmsBackendHost = () => {
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname || 'localhost';
+    return `http://${hostname}:8005`;
+  }
+  return 'http://localhost:8005';
 };
 
 const getAiWsHost = () => {
@@ -22,8 +30,229 @@ const getAiWsHost = () => {
   return 'ws://localhost:8001/ws/ai-events';
 };
 
+// WebRTC Player Component with AI Markings Overlay
+function WebRTCStreamPlayer({ camera, aiServiceHost, vmsBackendHost, onFocusCamera }) {
+  const videoRef = useRef(null);
+  const pcRef = useRef(null);
+  const [webrtcConnected, setWebrtcConnected] = useState(false);
+  const [detections, setDetections] = useState([]);
+  const [zones, setZones] = useState([]);
+
+  // Resolve stream ID for WebRTC
+  const streamId = useMemo(() => {
+    if (camera.streams && camera.streams.length > 0) {
+      // Prefer grid or main stream
+      const gridStream = camera.streams.find(s => s.stream_id.includes('_grid')) || camera.streams[0];
+      return gridStream.stream_id;
+    }
+    return camera.id;
+  }, [camera]);
+
+  // Start WebRTC WHEP Stream
+  useEffect(() => {
+    let isMounted = true;
+
+    async function startWebRTC() {
+      try {
+        if (pcRef.current) {
+          pcRef.current.close();
+          pcRef.current = null;
+        }
+
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        pcRef.current = pc;
+
+        pc.addTransceiver('video', { direction: 'recvonly' });
+
+        pc.ontrack = (event) => {
+          if (!isMounted) return;
+          if (videoRef.current && event.streams && event.streams[0]) {
+            videoRef.current.srcObject = event.streams[0];
+            videoRef.current.play().catch(() => {});
+            setWebrtcConnected(true);
+          }
+        };
+
+        const offer = await pc.createOffer();
+        if (!isMounted) return;
+        await pc.setLocalDescription(offer);
+        if (!isMounted) return;
+
+        // WHEP Signaling POST request to VMS Backend
+        const user_id = `user_${Math.random().toString(36).substring(2, 9)}`;
+        const tab_id = `tab_${Math.random().toString(36).substring(2, 9)}`;
+        const whepUrl = `${vmsBackendHost}/api/streams/${encodeURIComponent(streamId)}/live/whep?user_id=${user_id}&browser_tab_id=${tab_id}`;
+
+        const resp = await fetch(whepUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body: offer.sdp
+        });
+
+        if (resp.ok && isMounted) {
+          const answerSdp = await resp.text();
+          await pc.setRemoteDescription(new RTCSessionDescription({
+            type: 'answer',
+            sdp: answerSdp
+          }));
+        }
+      } catch (err) {
+        console.warn(`WebRTC stream negotiation failed for ${streamId}, falling back to AI MJPEG stream:`, err);
+        setWebrtcConnected(false);
+      }
+    }
+
+    startWebRTC();
+
+    return () => {
+      isMounted = false;
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+    };
+  }, [streamId, vmsBackendHost]);
+
+  // Telemetry polling for real-time AI detections & polygon intrusion zones
+  useEffect(() => {
+    let intervalId = setInterval(async () => {
+      try {
+        const res = await fetch(`${aiServiceHost}/api/ai/streams/${camera.id}/detections`);
+        if (res.ok) {
+          const data = await res.json();
+          setDetections(data.detections || []);
+          setZones(data.zones || []);
+        }
+      } catch (e) {}
+    }, 400);
+
+    return () => clearInterval(intervalId);
+  }, [camera.id, aiServiceHost]);
+
+  return (
+    <div
+      className="glass-card"
+      onDoubleClick={() => onFocusCamera && onFocusCamera(camera)}
+      style={{
+        position: 'relative',
+        width: '100%',
+        aspectRatio: '16/9',
+        borderRadius: '6px',
+        overflow: 'hidden',
+        background: '#020617',
+        border: '1px solid #1e293b',
+        cursor: 'pointer'
+      }}
+      title="Double-click to focus camera"
+    >
+      {/* Video Element (WebRTC / MJPEG Fallback) */}
+      {webrtcConnected ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+        />
+      ) : (
+        <img
+          src={`${aiServiceHost}/api/ai/streams/${camera.id}/live`}
+          alt={camera.name}
+          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+          onError={(e) => {
+            e.target.src = `${aiServiceHost}/api/ai/streams/${camera.id}/frame?t=${Date.now()}`;
+          }}
+        />
+      )}
+
+      {/* AI Visual Markings Overlay Layer (Bounding Boxes & Zones) */}
+      <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+        {/* Intrusion Polygon Zones */}
+        {zones.map((z) => (
+          <polygon
+            key={z.zone_id}
+            points={z.polygon.map((p) => `${p.x * 100}%,${p.y * 100}%`).join(' ')}
+            fill="rgba(244, 63, 94, 0.25)"
+            stroke="#f43f5e"
+            strokeWidth="2"
+          />
+        ))}
+
+        {/* Real-time AI Bounding Boxes */}
+        {detections.map((det, idx) => {
+          const [x1, y1, x2, y2] = det.bbox; // Normalized [0, 1]
+          const color = det.class_name === 'person' ? '#10b981' :
+                        det.class_name === 'face' ? '#38bdf8' :
+                        det.class_name === 'vehicle' ? '#fbbf24' : '#f43f5e';
+          return (
+            <g key={idx}>
+              <rect
+                x={`${x1 * 100}%`}
+                y={`${y1 * 100}%`}
+                width={`${(x2 - x1) * 100}%`}
+                height={`${(y2 - y1) * 100}%`}
+                fill="none"
+                stroke={color}
+                strokeWidth="2"
+                strokeDasharray={det.class_name === 'intrusion' ? '4' : '0'}
+              />
+              <rect
+                x={`${x1 * 100}%`}
+                y={`${Math.max(0, y1 * 100 - 4)}%`}
+                width="60"
+                height="14"
+                fill={color}
+                opacity="0.85"
+                rx="2"
+              />
+              <text
+                x={`${x1 * 100 + 1}%`}
+                y={`${Math.max(0, y1 * 100 - 1)}%`}
+                fill="#ffffff"
+                fontSize="9"
+                fontWeight="bold"
+              >
+                {det.class_name.toUpperCase()} {(det.confidence * 100).toFixed(0)}%
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Stream Label Header Overlay */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          padding: '4px 8px',
+          background: 'linear-gradient(to bottom, rgba(0,0,0,0.85), transparent)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          pointerEvents: 'none'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} className="pulse-badge" />
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#f8fafc', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+            {camera.name}
+          </span>
+        </div>
+        <span style={{ fontSize: '9px', background: webrtcConnected ? 'rgba(16,185,129,0.3)' : 'rgba(6,182,212,0.3)', color: webrtcConnected ? '#34d399' : '#38bdf8', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
+          {webrtcConnected ? 'WEBRTC LIVE' : 'AI LIVE'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [aiServiceHost] = useState(getAiServiceHost());
+  const [vmsBackendHost] = useState(getVmsBackendHost());
   const [aiWsHost] = useState(getAiWsHost());
 
   const [activeTab, setActiveTab] = useState('livewall'); // 'livewall', 'single', 'zones', 'events', 'models'
@@ -38,10 +267,9 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isFullWall, setIsFullWall] = useState(false);
 
-  // Camera Catalog & Search state
-  const [cameraList, setCameraList] = useState([]);
+  // Active Streaming Camera Catalog
+  const [activeCameras, setActiveCameras] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [profileFilter, setProfileFilter] = useState('ALL');
 
   // Model toggles
   const [activeModels, setActiveModels] = useState({
@@ -61,10 +289,10 @@ export default function App() {
   // Event log filter state
   const [eventFilter, setEventFilter] = useState('all');
 
-  // Fetch camera catalog
+  // Fetch ONLY active streaming cameras from VMS backend API /api/cameras/active
   useEffect(() => {
-    fetchCameras();
-  }, [aiServiceHost]);
+    fetchActiveCameras();
+  }, [vmsBackendHost, aiServiceHost]);
 
   // Load initial events and zones
   useEffect(() => {
@@ -105,21 +333,38 @@ export default function App() {
     };
   }, [aiWsHost]);
 
-  const fetchCameras = async () => {
+  const fetchActiveCameras = async () => {
+    try {
+      // Query VMS backend /api/cameras/active to get ONLY live streaming cameras
+      const res = await fetch(`${vmsBackendHost}/api/cameras/active`);
+      if (res.ok) {
+        const data = await res.json();
+        // Filter standard cameras that are active & online
+        const activeList = data.filter(c => c.active && c.streams && c.streams.length > 0).map(c => ({
+          id: c.server_camera_id || c.id,
+          name: c.name || `Camera ${c.id}`,
+          streams: c.streams
+        }));
+        if (activeList.length > 0) {
+          setActiveCameras(activeList);
+          if (!selectedCamera || !activeList.some(c => c.id === selectedCamera)) {
+            setSelectedCamera(activeList[0].id);
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed fetching active cameras from VMS backend:', e);
+    }
+
+    // Fallback to AI service camera endpoint
     try {
       const res = await fetch(`${aiServiceHost}/api/ai/cameras`);
       if (res.ok) {
         const data = await res.json();
-        if (data && data.length > 0) {
-          setCameraList(data);
-          if (!selectedCamera || !data.some(c => c.id === selectedCamera)) {
-            setSelectedCamera(data[0].id);
-          }
-        }
+        setActiveCameras(data.map(c => ({ id: c.id, name: c.name, streams: [] })));
       }
-    } catch (e) {
-      console.warn('Failed loading cameras:', e);
-    }
+    } catch (e) {}
   };
 
   const fetchEvents = async () => {
@@ -129,9 +374,7 @@ export default function App() {
         const data = await res.json();
         setEvents(data);
       }
-    } catch (e) {
-      console.warn('ai_service offline or loading:', e);
-    }
+    } catch (e) {}
   };
 
   const fetchZones = async () => {
@@ -141,9 +384,7 @@ export default function App() {
         const data = await res.json();
         setZones(data);
       }
-    } catch (e) {
-      console.warn('ai_service offline or loading:', e);
-    }
+    } catch (e) {}
   };
 
   const toggleModel = async (modelKey) => {
@@ -211,22 +452,16 @@ export default function App() {
       if (res.ok) {
         fetchZones();
       }
-    } catch (e) {
-      console.error('Failed to delete zone:', e);
-    }
+    } catch (e) {}
   };
 
-  // Filter camera catalog
+  // Filter ONLY active cameras by search query
   const filteredCameras = useMemo(() => {
-    return cameraList.filter((cam) => {
-      const matchesSearch = cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            cam.name.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesProfile = profileFilter === 'ALL' ||
-                             (profileFilter === 'HD' && cam.id.includes('HD')) ||
-                             (profileFilter === 'NORMAL' && (cam.id.includes('NORMAL') || cam.id.includes('SUB')));
-      return matchesSearch && matchesProfile;
+    return activeCameras.filter((cam) => {
+      return cam.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+             cam.name.toLowerCase().includes(searchQuery.toLowerCase());
     });
-  }, [cameraList, searchQuery, profileFilter]);
+  }, [activeCameras, searchQuery]);
 
   const totalPages = Math.ceil(filteredCameras.length / gridSize) || 1;
 
@@ -266,64 +501,20 @@ export default function App() {
       }}
     >
       {paginatedCameras.map((cam) => (
-        <div
+        <WebRTCStreamPlayer
           key={cam.id}
-          className="glass-card"
-          onDoubleClick={() => setSelectedModalCamera(cam)}
-          style={{
-            position: 'relative',
-            width: '100%',
-            aspectRatio: '16/9',
-            borderRadius: '6px',
-            overflow: 'hidden',
-            background: '#020617',
-            border: selectedCamera === cam.id ? '2px solid #06b6d4' : '1px solid #1e293b',
-            cursor: 'pointer'
-          }}
-          title="Double-click to focus camera details"
-        >
-          <img
-            src={`${aiServiceHost}/api/ai/streams/${cam.id}/live`}
-            alt={cam.name}
-            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            onError={(e) => {
-              e.target.src = `${aiServiceHost}/api/ai/streams/${cam.id}/frame?t=${Date.now()}`;
-            }}
-          />
-
-          {/* Cell Overlay Header */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              padding: '4px 8px',
-              background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)',
-              display: 'flex',
-              justify: 'space-between',
-              alignItems: 'center',
-              pointerEvents: 'none'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} className="pulse-badge" />
-              <span style={{ fontSize: '10px', fontWeight: '700', color: '#f8fafc', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
-                {cam.name}
-              </span>
-            </div>
-            <span style={{ fontSize: '9px', background: 'rgba(6,182,212,0.3)', color: '#38bdf8', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
-              AI LIVE
-            </span>
-          </div>
-        </div>
+          camera={cam}
+          aiServiceHost={aiServiceHost}
+          vmsBackendHost={vmsBackendHost}
+          onFocusCamera={(c) => setSelectedModalCamera(c)}
+        />
       ))}
     </div>
   );
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#060913', color: '#f8fafc', padding: '16px' }}>
-      {/* Top Bar */}
+      {/* Top Header */}
       <header className="glass-panel" style={{ padding: '14px 24px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 20px rgba(6,182,212,0.4)' }}>
@@ -334,7 +525,7 @@ export default function App() {
               AI Live Camera Wall Center
             </h1>
             <p style={{ fontSize: '11px', color: '#64748b' }}>
-              Real-Time Computer Vision Detection | {filteredCameras.length} Active Platform Cameras
+              Real-Time WebRTC Video Stream & AI Detection Overlay | {activeCameras.length} Active Live Cameras
             </p>
           </div>
         </div>
@@ -407,7 +598,7 @@ export default function App() {
       {/* Main Content Layout */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '16px' }}>
         
-        {/* Left Panel */}
+        {/* Left Main View */}
         <main>
           {activeTab === 'livewall' && (
             <div className="glass-panel" style={{ padding: '16px' }}>
@@ -418,7 +609,7 @@ export default function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} className="pulse-badge" />
                   <span style={{ fontSize: '13px', fontWeight: '700', color: '#f8fafc' }}>
-                    Live Wall — {filteredCameras.length} active cameras online
+                    Live Wall — {filteredCameras.length} active live cameras online
                   </span>
                 </div>
 
@@ -428,7 +619,7 @@ export default function App() {
                     <Search size={14} color="#64748b" />
                     <input
                       type="text"
-                      placeholder="Search cameras..."
+                      placeholder="Search active live cameras..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       style={{ background: 'transparent', border: 'none', color: '#f8fafc', outline: 'none', fontSize: '12px', width: '100%' }}
@@ -436,7 +627,7 @@ export default function App() {
                   </div>
 
                   {/* Refresh Button */}
-                  <button onClick={fetchCameras} style={{ padding: '5px 10px', background: '#1e293b', border: '1px solid #334155', color: '#fff', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button onClick={fetchActiveCameras} style={{ padding: '5px 10px', background: '#1e293b', border: '1px solid #334155', color: '#fff', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <RotateCw size={12} /> Refresh
                   </button>
 
@@ -510,24 +701,13 @@ export default function App() {
                     <option key={cam.id} value={cam.id}>{cam.name}</option>
                   ))}
                 </select>
-
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <span style={{ fontSize: '11px', background: activeModels.person ? 'rgba(16,185,129,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.person ? '#34d399' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Person</span>
-                  <span style={{ fontSize: '11px', background: activeModels.face ? 'rgba(6,182,212,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.face ? '#38bdf8' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Face</span>
-                  <span style={{ fontSize: '11px', background: activeModels.vehicle ? 'rgba(245,158,11,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.vehicle ? '#fbbf24' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Vehicle/ANPR</span>
-                  <span style={{ fontSize: '11px', background: activeModels.intrusion ? 'rgba(244,63,94,0.2)' : 'rgba(51,65,85,0.4)', color: activeModels.intrusion ? '#fb7185' : '#64748b', padding: '3px 8px', borderRadius: '4px' }}>Intrusion</span>
-                </div>
               </div>
 
               <div style={{ position: 'relative', width: '100%', borderRadius: '8px', overflow: 'hidden', background: '#020617', border: '1px solid #1e293b', aspectRatio: '16/9' }}>
-                <img
-                  key={selectedCamera}
-                  src={`${aiServiceHost}/api/ai/streams/${selectedCamera}/live`}
-                  alt="Focus Stream"
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  onError={(e) => {
-                    e.target.src = `${aiServiceHost}/api/ai/streams/${selectedCamera}/frame?t=${Date.now()}`;
-                  }}
+                <WebRTCStreamPlayer
+                  camera={activeCameras.find(c => c.id === selectedCamera) || { id: selectedCamera, name: selectedCamera }}
+                  aiServiceHost={aiServiceHost}
+                  vmsBackendHost={vmsBackendHost}
                 />
               </div>
             </div>
@@ -612,27 +792,6 @@ export default function App() {
                   )}
                 </svg>
               </div>
-
-              <div style={{ marginTop: '20px' }}>
-                <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '10px' }}>Active Intrusion Zones</h3>
-                {zones.length === 0 ? (
-                  <p style={{ fontSize: '13px', color: '#64748b' }}>No intrusion zones configured for this camera yet.</p>
-                ) : (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
-                    {zones.map((z) => (
-                      <div key={z.zone_id} className="glass-card" style={{ padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <p style={{ fontSize: '13px', fontWeight: '600' }}>{z.name}</p>
-                          <p style={{ fontSize: '11px', color: '#64748b' }}>{z.polygon.length} Vertices Polygon</p>
-                        </div>
-                        <button onClick={() => deleteZone(z.zone_id)} style={{ background: 'rgba(244,63,94,0.15)', color: '#fb7185', border: '1px solid rgba(244,63,94,0.3)', padding: '6px', borderRadius: '6px', cursor: 'pointer' }}>
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
           )}
 
@@ -640,12 +799,6 @@ export default function App() {
             <div className="glass-panel" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h2 style={{ fontSize: '16px', fontWeight: '700' }}>Historical AI Analytics Logs</h2>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => setEventFilter('all')} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '12px', background: eventFilter === 'all' ? '#06b6d4' : '#1e293b', color: '#fff', border: 'none', cursor: 'pointer' }}>All</button>
-                  <button onClick={() => setEventFilter('person')} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '12px', background: eventFilter === 'person' ? '#06b6d4' : '#1e293b', color: '#fff', border: 'none', cursor: 'pointer' }}>Person</button>
-                  <button onClick={() => setEventFilter('face')} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '12px', background: eventFilter === 'face' ? '#06b6d4' : '#1e293b', color: '#fff', border: 'none', cursor: 'pointer' }}>Face</button>
-                  <button onClick={() => setEventFilter('intrusion')} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '12px', background: eventFilter === 'intrusion' ? '#06b6d4' : '#1e293b', color: '#fff', border: 'none', cursor: 'pointer' }}>Intrusions</button>
-                </div>
               </div>
 
               <div style={{ overflowX: 'auto' }}>
@@ -685,8 +838,7 @@ export default function App() {
 
           {activeTab === 'models' && (
             <div className="glass-panel" style={{ padding: '20px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '16px' }}>Production AI Model Zoo & Sensitivity Controls</h2>
-
+              <h2 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '16px' }}>Production AI Model Zoo Controls</h2>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div className="glass-card" style={{ padding: '16px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -694,7 +846,6 @@ export default function App() {
                       <UserCheck color="#10b981" />
                       <div>
                         <h3 style={{ fontSize: '14px', fontWeight: '600' }}>Person Detection Engine</h3>
-                        <p style={{ fontSize: '12px', color: '#64748b' }}>Real Human Body & Centroid Tracker</p>
                       </div>
                     </div>
                     <input type="checkbox" checked={activeModels.person} onChange={() => toggleModel('person')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
@@ -707,57 +858,17 @@ export default function App() {
                       <Smile color="#38bdf8" />
                       <div>
                         <h3 style={{ fontSize: '14px', fontWeight: '600' }}>Face Recognition Engine</h3>
-                        <p style={{ fontSize: '12px', color: '#64748b' }}>Facial Bounding Box & Landmark Estimator</p>
                       </div>
                     </div>
                     <input type="checkbox" checked={activeModels.face} onChange={() => toggleModel('face')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                   </div>
                 </div>
-
-                <div className="glass-card" style={{ padding: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <Car color="#fbbf24" />
-                      <div>
-                        <h3 style={{ fontSize: '14px', fontWeight: '600' }}>Vehicle & ANPR Detector</h3>
-                        <p style={{ fontSize: '12px', color: '#64748b' }}>Vehicle & License Plate Region Extractor</p>
-                      </div>
-                    </div>
-                    <input type="checkbox" checked={activeModels.vehicle} onChange={() => toggleModel('vehicle')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
-                  </div>
-                </div>
-
-                <div className="glass-card" style={{ padding: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <ShieldAlert color="#fb7185" />
-                      <div>
-                        <h3 style={{ fontSize: '14px', fontWeight: '600' }}>Intrusion & Tripwire Engine</h3>
-                        <p style={{ fontSize: '12px', color: '#64748b' }}>Geometric Polygon Breach Alarm</p>
-                      </div>
-                    </div>
-                    <input type="checkbox" checked={activeModels.intrusion} onChange={() => toggleModel('intrusion')} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
-                  </div>
-                </div>
-              </div>
-
-              <div className="glass-card" style={{ marginTop: '20px', padding: '16px' }}>
-                <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>Global Confidence Threshold: {(confidenceThreshold * 100).toFixed(0)}%</h3>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="0.9"
-                  step="0.05"
-                  value={confidenceThreshold}
-                  onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
-                  style={{ width: '100%', cursor: 'pointer' }}
-                />
               </div>
             </div>
           )}
         </main>
 
-        {/* Right Sidebar: Real-Time Event Feed Ticker */}
+        {/* Right Sidebar */}
         <aside className="glass-panel" style={{ padding: '16px', height: 'fit-content' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -828,10 +939,10 @@ export default function App() {
               {selectedModalCamera.name} ({selectedModalCamera.id})
             </h3>
             <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', borderRadius: '8px', overflow: 'hidden', background: '#020617' }}>
-              <img
-                src={`${aiServiceHost}/api/ai/streams/${selectedModalCamera.id}/live`}
-                alt={selectedModalCamera.name}
-                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              <WebRTCStreamPlayer
+                camera={selectedModalCamera}
+                aiServiceHost={aiServiceHost}
+                vmsBackendHost={vmsBackendHost}
               />
             </div>
           </div>
