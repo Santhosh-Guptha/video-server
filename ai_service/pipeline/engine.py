@@ -19,6 +19,7 @@ from ..models.vehicle_detector import VehicleDetector
 from ..models.intrusion_detector import IntrusionDetector
 from ..database import get_intrusion_zones
 from ..events.event_manager import event_manager
+from ..schemas import DetectionResult, BoundingBox
 
 # Color palette for different detection types (BGR)
 COLORS = {
@@ -41,6 +42,23 @@ COLORS = {
 def get_color(label: str) -> tuple:
     key = label.lower()
     return COLORS.get(key, COLORS["default"])
+
+
+def compute_iou(box1: List[float], box2: List[float]) -> float:
+    """Compute Intersection-over-Union (IoU) of two normalized boxes."""
+    xA = max(box1[0], box2[0])
+    yA = max(box1[1], box2[1])
+    xB = min(box1[2], box2[2])
+    yB = min(box1[3], box2[3])
+
+    inter_area = max(0.0, xB - xA) * max(0.0, yB - yA)
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+    union_area = box1_area + box2_area - inter_area
+    if union_area <= 0.0:
+        return 0.0
+    return inter_area / union_area
 
 
 def draw_fancy_box(frame, xmin, ymin, xmax, ymax, label_str, color, thickness=2):
@@ -89,6 +107,9 @@ class AIPipelineEngine:
         self.latest_detections: Dict[str, List[Dict[str, Any]]] = {}
         self.last_event_times: Dict[str, float] = {}
 
+        # ─── Object Tracking & Stabilization State ─────────────────
+        self.tracks: Dict[str, List[Dict[str, Any]]] = {}
+
         # ─── Configurable Thresholds (per-camera or global) ────────
         self.config: Dict[str, Any] = {
             "person_threshold": 0.15,
@@ -129,6 +150,7 @@ class AIPipelineEngine:
             ingester.start()
             self.ingesters[camera_id] = ingester
             self.active_models[camera_id] = active_models
+            self.tracks[camera_id] = []
 
     def unregister_camera(self, camera_id: str):
         """Stop and remove a camera ingester."""
@@ -140,6 +162,7 @@ class AIPipelineEngine:
             self.annotated_frames.pop(camera_id, None)
             self.latest_detections.pop(camera_id, None)
             self.camera_configs.pop(camera_id, None)
+            self.tracks.pop(camera_id, None)
 
     def update_camera_models(self, camera_id: str, active_models: List[str]):
         with self.lock:
@@ -159,11 +182,138 @@ class AIPipelineEngine:
     def get_active_camera_ids(self) -> List[str]:
         return list(self.ingesters.keys())
 
+    # ─── Object Stabilization & Tracking ───────────────────────────
+    def track_and_stabilize(self, camera_id: str, new_detections: List[DetectionResult]) -> List[DetectionResult]:
+        """
+        Track objects across frames using IoU matching and stabilize boxes
+        via EMA smoothing + a deadband hysteresis window. Bridge detection gaps.
+        """
+        if camera_id not in self.tracks:
+            self.tracks[camera_id] = []
+        tracks = self.tracks[camera_id]
+
+        matched_track_indices = set()
+        matched_detection_indices = set()
+
+        # 1. Match current detections to active tracks
+        for d_idx, det in enumerate(new_detections):
+            best_iou = 0.0
+            best_t_idx = -1
+            det_box = [det.bbox.xmin, det.bbox.ymin, det.bbox.xmax, det.bbox.ymax]
+
+            for t_idx, track in enumerate(tracks):
+                if t_idx in matched_track_indices:
+                    continue
+                # Ensure class name matches (e.g. don't match person with car)
+                if track["class_name"] != det.class_name:
+                    continue
+
+                iou = compute_iou(track["bbox"], det_box)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_t_idx = t_idx
+
+            if best_iou >= 0.20:
+                matched_track_indices.add(best_t_idx)
+                matched_detection_indices.add(d_idx)
+                track = tracks[best_t_idx]
+
+                prev_xmin, prev_ymin, prev_xmax, prev_ymax = track["bbox"]
+                new_xmin, new_ymin, new_xmax, new_ymax = det_box
+
+                # Deadband calculations
+                prev_cx = (prev_xmin + prev_xmax) / 2.0
+                prev_cy = (prev_ymin + prev_ymax) / 2.0
+                prev_w = prev_xmax - prev_xmin
+                prev_h = prev_ymax - prev_ymin
+
+                new_cx = (new_xmin + new_xmax) / 2.0
+                new_cy = (new_ymin + new_ymax) / 2.0
+                new_w = new_xmax - new_xmin
+                new_h = new_ymax - new_ymin
+
+                # Hysteresis shift and size deadband threshold (1.5%)
+                shift_limit = 0.015
+                size_limit = 0.015
+
+                if (abs(new_cx - prev_cx) < shift_limit and
+                        abs(new_cy - prev_cy) < shift_limit and
+                        abs(new_w - prev_w) < size_limit and
+                        abs(new_h - prev_h) < size_limit):
+                    # Stationary object -> lock the bounding box coordinates
+                    smoothed_box = [prev_xmin, prev_ymin, prev_xmax, prev_ymax]
+                else:
+                    # Active movement -> apply EMA smoothing
+                    alpha = 0.25
+                    smoothed_box = [
+                        alpha * new_xmin + (1.0 - alpha) * prev_xmin,
+                        alpha * new_ymin + (1.0 - alpha) * prev_ymin,
+                        alpha * new_xmax + (1.0 - alpha) * prev_xmax,
+                        alpha * new_ymax + (1.0 - alpha) * prev_ymax
+                    ]
+
+                # Update track details
+                track["bbox"] = smoothed_box
+                track["label"] = det.label
+                track["confidence"] = 0.3 * det.confidence + 0.7 * track["confidence"]
+                track["missed_frames"] = 0
+                track["seen_count"] += 1
+                track["attributes"] = det.attributes
+
+        # 2. Handle missed tracks
+        for t_idx, track in enumerate(tracks):
+            if t_idx not in matched_track_indices:
+                track["missed_frames"] += 1
+
+        # 3. Create tracks for new unmatched detections
+        for d_idx, det in enumerate(new_detections):
+            if d_idx not in matched_detection_indices:
+                new_track = {
+                    "id": det.id,
+                    "label": det.label,
+                    "class_name": det.class_name,
+                    "bbox": [det.bbox.xmin, det.bbox.ymin, det.bbox.xmax, det.bbox.ymax],
+                    "confidence": det.confidence,
+                    "track_id": int(time.time() * 1000) % 100000 + d_idx,
+                    "attributes": det.attributes,
+                    "missed_frames": 0,
+                    "seen_count": 1
+                }
+                tracks.append(new_track)
+
+        # 4. Clean up tracks (keep-alive/dropout bridging up to 10 frames)
+        max_missed_frames = 10
+        active_tracks = [t for t in tracks if t["missed_frames"] <= max_missed_frames]
+        self.tracks[camera_id] = active_tracks
+
+        # 5. Convert to DetectionResult objects
+        stabilized_results = []
+        for track in active_tracks:
+            if track["seen_count"] >= 1:
+                stabilized_results.append(
+                    DetectionResult(
+                        id=track["id"],
+                        label=track["label"],
+                        class_name=track["class_name"],
+                        confidence=round(track["confidence"], 2),
+                        bbox=BoundingBox(
+                            xmin=max(0.0, min(1.0, track["bbox"][0])),
+                            ymin=max(0.0, min(1.0, track["bbox"][1])),
+                            xmax=max(0.0, min(1.0, track["bbox"][2])),
+                            ymax=max(0.0, min(1.0, track["bbox"][3]))
+                        ),
+                        track_id=track["track_id"],
+                        attributes=track["attributes"]
+                    )
+                )
+
+        return stabilized_results
+
     # ─── Core Processing ───────────────────────────────────────────
     def process_camera_once(self, camera_id: str) -> Dict[str, Any]:
         """
-        On-demand: grab one frame, run AI models, draw annotations,
-        cache results, and return detections + zones immediately.
+        On-demand: grab one frame, run AI models, smooth/stabilize boxes,
+        draw annotations, cache results, and return detections + zones.
         """
         ingester = self.ingesters.get(camera_id)
         if not ingester:
@@ -227,6 +377,9 @@ class AIPipelineEngine:
                 detections.extend(v_dets)
             except Exception:
                 pass
+
+        # ─── Apply Bounding Box Tracking & Stabilization ──────────
+        detections = self.track_and_stabilize(camera_id, detections)
 
         # ─── Intrusion Zone Processing ─────────────────────────────
         zones = get_intrusion_zones(camera_id)
