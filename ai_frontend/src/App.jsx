@@ -1313,18 +1313,21 @@ export default function App() {
               ) : (
                 safeEvents.slice(0, 30).map((evt, idx) => {
                   const isIntrusion = String(evt.event_type || '').includes('intrusion');
+                  const isTripwire = String(evt.event_type || '').includes('tripwire');
+                  const details = evt.details || {};
+
                   return (
                     <div
                       key={evt.event_id || idx}
                       className="glass-card"
                       style={{
                         padding: '10px',
-                        borderLeft: isIntrusion ? '3px solid #f43f5e' : '3px solid #06b6d4',
-                        background: isIntrusion ? 'rgba(244,63,94,0.06)' : 'rgba(30,41,59,0.4)'
+                        borderLeft: isIntrusion ? '3px solid #f43f5e' : isTripwire ? '3px solid #fbbf24' : '3px solid #06b6d4',
+                        background: isIntrusion ? 'rgba(244,63,94,0.06)' : isTripwire ? 'rgba(251,191,36,0.06)' : 'rgba(30,41,59,0.4)'
                       }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <span style={{ fontSize: '11px', fontWeight: '700', color: isIntrusion ? '#fb7185' : '#38bdf8' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: isIntrusion ? '#fb7185' : isTripwire ? '#fbbf24' : '#38bdf8' }}>
                           {evt.label || 'AI Event'}
                         </span>
                         <span style={{ fontSize: '9px', color: '#64748b' }}>{String(evt.formatted_time || '').split(' ')[1] || '-'}</span>
@@ -1332,6 +1335,11 @@ export default function App() {
                       <p style={{ fontSize: '10px', color: '#94a3b8', marginTop: '3px' }}>
                         {evt.camera_name || evt.camera_id} • {((Number(evt.confidence) || 0.8) * 100).toFixed(0)}%
                       </p>
+                      {isTripwire && details.crossing_direction && (
+                        <p style={{ fontSize: '9px', color: '#fbbf24', marginTop: '4px', fontWeight: '600' }}>
+                          {details.zone_name || 'Line'}: {details.crossing_direction === 'A_to_B' ? 'A → B' : 'B → A'} (In: {details.in_count} | Out: {details.out_count})
+                        </p>
+                      )}
                     </div>
                   );
                 })
