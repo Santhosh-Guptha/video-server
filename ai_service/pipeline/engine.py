@@ -19,7 +19,7 @@ class AIPipelineEngine:
     def __init__(self):
         self.person_detector = PersonDetector(confidence_threshold=0.45)
         self.face_detector = FaceDetector(confidence_threshold=0.5)
-        self.vehicle_detector = VehicleDetector(confidence_threshold=0.5)
+        self.vehicle_detector = VehicleDetector(confidence_threshold=0.30)
         self.intrusion_detector = IntrusionDetector()
 
         self.ingesters: Dict[str, StreamIngester] = {}
@@ -166,7 +166,7 @@ class AIPipelineEngine:
                 xmin, ymin = int(det.bbox.xmin * w), int(det.bbox.ymin * h)
                 xmax, ymax = int(det.bbox.xmax * w), int(det.bbox.ymax * h)
 
-                color = (0, 255, 0) if det.label == "Person" else (255, 200, 0) if det.label == "Face" else (255, 100, 0)
+                color = (0, 255, 0) if det.label == "Person" else (255, 200, 0) if det.label == "Face" else (0, 165, 255) if "Vehicle" in det.label else (255, 100, 0)
                 cv2.rectangle(annotated, (xmin, ymin), (xmax, ymax), color, 2)
 
                 label_str = f"{det.label} {int(det.confidence * 100)}%"

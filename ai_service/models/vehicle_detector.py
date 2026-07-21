@@ -23,7 +23,7 @@ VEHICLE_CLASS_IDS = {
 }
 
 class VehicleDetector:
-    def __init__(self, confidence_threshold: float = 0.45):
+    def __init__(self, confidence_threshold: float = 0.30):
         self.confidence_threshold = confidence_threshold
         self.yolo_model = None
         self.car_cascade = None
