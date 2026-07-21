@@ -1119,13 +1119,21 @@ export default function App() {
                       <tr key={evt.event_id || idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                         <td style={{ padding: '10px', color: '#94a3b8' }}>{evt.formatted_time || '-'}</td>
                         <td style={{ padding: '10px' }}>
-                          <span style={{
-                            padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600',
-                            background: String(evt.event_type || '').includes('intrusion') ? 'rgba(244,63,94,0.2)' : 'rgba(16,185,129,0.2)',
-                            color: String(evt.event_type || '').includes('intrusion') ? '#fb7185' : '#34d399'
-                          }}>
-                            {evt.label || 'Event'}
-                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
+                            <span style={{
+                              padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600',
+                              background: String(evt.event_type || '').includes('intrusion') ? 'rgba(244,63,94,0.2)' : String(evt.event_type || '').includes('tripwire') ? 'rgba(251,191,36,0.2)' : 'rgba(16,185,129,0.2)',
+                              color: String(evt.event_type || '').includes('intrusion') ? '#fb7185' : String(evt.event_type || '').includes('tripwire') ? '#fbbf24' : '#34d399'
+                            }}>
+                              {evt.label || 'Event'}
+                            </span>
+                            {evt.details && evt.details.zone_name && (
+                              <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: '600', marginTop: '2px' }}>
+                                {String(evt.event_type || '').includes('tripwire') ? 'Line' : 'Zone'}: <span style={{ color: String(evt.event_type || '').includes('tripwire') ? '#fbbf24' : '#fb7185' }}>{evt.details.zone_name}</span>
+                                {evt.details.crossing_direction && ` (${evt.details.crossing_direction === 'A_to_B' ? 'A → B' : 'B → A'})`}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: '10px' }}>{evt.camera_name || evt.camera_id}</td>
                         <td style={{ padding: '10px', fontWeight: '600' }}>{((Number(evt.confidence) || 0.8) * 100).toFixed(0)}%</td>

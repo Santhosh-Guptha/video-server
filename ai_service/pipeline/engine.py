@@ -298,14 +298,29 @@ class AIPipelineEngine:
                 }
                 tracks.append(new_track)
 
-        # 4. Clean up tracks (keep-alive/dropout bridging up to 10 frames)
-        max_missed_frames = 10
+        # 4. Clean up tracks (keep-alive/dropout bridging up to 3 frames to avoid ghost trails)
+        max_missed_frames = 3
         active_tracks = [t for t in tracks if t["missed_frames"] <= max_missed_frames]
-        self.tracks[camera_id] = active_tracks
+
+        # 4b. Perform track-level NMS to eliminate overlapping duplicate boxes on the same person/vehicle
+        active_tracks = sorted(active_tracks, key=lambda x: (x["missed_frames"], -x["confidence"]))
+        kept_tracks = []
+        for t in active_tracks:
+            overlap = False
+            t_box = t["bbox"]
+            for kt in kept_tracks:
+                if kt["class_name"] == t["class_name"]:
+                    if compute_iou(kt["bbox"], t_box) > 0.40:
+                        overlap = True
+                        break
+            if not overlap:
+                kept_tracks.append(t)
+
+        self.tracks[camera_id] = kept_tracks
 
         # 5. Convert to DetectionResult objects
         stabilized_results = []
-        for track in active_tracks:
+        for track in kept_tracks:
             if track["seen_count"] >= 1:
                 stabilized_results.append(
                     DetectionResult(
