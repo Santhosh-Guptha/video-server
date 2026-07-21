@@ -15,7 +15,6 @@ class StreamIngester:
         self.cap: Optional[cv2.VideoCapture] = None
         self.current_source: Optional[str] = None
         self.lock = threading.Lock()
-        self.frame_counter = 0
         self.cached_files: List[str] = []
         self.last_glob_time = 0
 
@@ -49,10 +48,10 @@ class StreamIngester:
             self.last_glob_time = now
         return self.cached_files
 
-    def get_latest_frame(self) -> Tuple[np.ndarray, bool]:
-        """Reads camera video frames continuously without stalling or static image freezes."""
+    def get_latest_frame(self) -> Optional[Tuple[np.ndarray, bool]]:
+        """Reads camera video frames. Returns None if no source available."""
         if not self.is_running:
-            return self._generate_fallback_frame(), False
+            return None
 
         with self.lock:
             # 1. Read from open VideoCapture object continuously
@@ -61,7 +60,7 @@ class StreamIngester:
                 if ret and frame is not None and frame.size > 0:
                     return frame, True
                 else:
-                    # Video segment reached end -> Seek back to start for smooth continuous loop!
+                    # Video segment reached end -> Seek back to start for smooth continuous loop
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     ret, frame = self.cap.read()
                     if ret and frame is not None and frame.size > 0:
@@ -107,32 +106,5 @@ class StreamIngester:
                         self.cap.release()
                     self.cap = None
 
-            return self._generate_fallback_frame(), False
-
-    def _generate_fallback_frame(self) -> np.ndarray:
-        w, h = 640, 480
-        self.frame_counter += 1
-        frame = np.full((h, w, 3), (15, 23, 42), dtype=np.uint8)
-
-        # Draw room floor & perspective grid
-        cv2.rectangle(frame, (0, 360), (640, 480), (30, 41, 59), -1)
-        cv2.line(frame, (0, 360), (640, 360), (51, 65, 85), 2)
-
-        # Draw walking human figure silhouette moving continuously across frame
-        t = self.frame_counter * 0.1
-        px = int(180 + 200 * np.sin(t))
-        py = 220
-
-        # Human Head
-        cv2.circle(frame, (px, py), 18, (220, 225, 235), -1)
-        # Human Torso
-        cv2.ellipse(frame, (px, py + 65), (24, 45), 0, 0, 360, (200, 210, 225), -1)
-        # Animated Human Legs walking
-        leg_offset = int(15 * np.cos(t * 2))
-        cv2.line(frame, (px - 10, py + 110), (px - 15 + leg_offset, py + 160), (180, 190, 205), 6)
-        cv2.line(frame, (px + 10, py + 110), (px + 15 - leg_offset, py + 160), (180, 190, 205), 6)
-
-        timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
-        cv2.putText(frame, f"CAM: {self.camera_id} | {timestamp_str} | LIVE STREAM", (15, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1, cv2.LINE_AA)
-        return frame
+            # No source available — return None cleanly
+            return None
