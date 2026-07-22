@@ -376,7 +376,7 @@ async def startup():
 
     # Sync registered camera streams with Upstream API and MediaMTX on boot
     async def initial_sync():
-        await asyncio.sleep(2.0) # Wait for MediaMTX to boot up fully in Compose
+        await asyncio.sleep(0.5)  # Brief pause for MediaMTX to initialize
         use_upstream = await RedisManager.get_setting_use_upstream()
         if not use_upstream:
             print("[startup] Upstream sync disabled. Skipping startup sync.")
@@ -1490,7 +1490,17 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
     raw_cameras = await fetch_upstream_cameras()
     updated_count = 0
     received_source_ids = set()
-    
+
+    # ── Bulk pre-fetch all cameras and streams (3 queries instead of ~2000) ──
+    all_cams_res = await session.execute(select(Camera))
+    all_cameras = list(all_cams_res.scalars().all())
+    cam_by_source = {c.source_camera_id: c for c in all_cameras}
+    cam_by_server = {c.server_camera_id: c for c in all_cameras if c.server_camera_id}
+
+    all_streams_res = await session.execute(select(CameraStream))
+    all_streams = list(all_streams_res.scalars().all())
+    stream_by_id = {s.stream_id: s for s in all_streams}
+
     for raw in raw_cameras:
         source_id = int(raw.get("cameraId") or raw.get("id"))
         received_source_ids.add(source_id)
@@ -1503,17 +1513,9 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
         else:
             server_cam_id = str(server_cam_id).strip()
 
-        # 1. Sync Camera Parent Row
+        # 1. Sync Camera Parent Row (lookup from pre-fetched dicts)
         make = raw.get("make")
-        res = await session.execute(
-            select(Camera).where(Camera.source_camera_id == source_id)
-        )
-        camera = res.scalar_one_or_none()
-        if not camera:
-            res_server = await session.execute(
-                select(Camera).where(Camera.server_camera_id == server_cam_id)
-            )
-            camera = res_server.scalar_one_or_none()
+        camera = cam_by_source.get(source_id) or cam_by_server.get(server_cam_id)
         if not camera:
             camera = Camera(
                 source_camera_id=source_id,
@@ -1527,6 +1529,10 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             )
             session.add(camera)
             await session.flush()
+            # Update lookup dicts for subsequent iterations
+            cam_by_source[source_id] = camera
+            if server_cam_id:
+                cam_by_server[server_cam_id] = camera
         else:
             # Never overwrite a camera that was manually set to LOCAL
             if camera.camera_source == "LOCAL":
@@ -1538,7 +1544,6 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             camera.synced_from_api = True
             camera.camera_source = "UPSTREAM"
             camera.is_read_only = True
-            await session.flush()
 
         # 2. Sync CameraStream Child Row
         server_cam_id = raw.get("serverCameraId")
@@ -1565,10 +1570,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             except Exception:
                 pass
 
-        stream_res = await session.execute(
-            select(CameraStream).where(CameraStream.stream_id == stream_id)
-        )
-        stream = stream_res.scalar_one_or_none()
+        stream = stream_by_id.get(stream_id)
         
         profile = map_stream_profile(raw.get("streamType"))
         res_str = f"{raw.get('width', 1920)}x{raw.get('height', 1080)}"
@@ -1602,6 +1604,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             )
             session.add(stream)
             await session.flush()
+            stream_by_id[stream_id] = stream
         else:
             stream.stream_url = stream_url
             stream.resolution = res_str
@@ -1611,7 +1614,6 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             stream.bitrate = bitrate_val
             stream.always_on = always_on_val
             stream.status = StreamState.CONNECTING
-            await session.flush()
 
         # Register in MediaMTX config dynamically only if syncing a small batch
         if not skip_mediamtx_api and len(raw_cameras) <= 5:
@@ -2757,19 +2759,15 @@ async def get_edge_status(session: Annotated[AsyncSession, Depends(get_session)]
     # Retrieve active connections and their state
     from .edge_receiver import active_connections, metrics
     
-    stmt = select(CameraStream)
+    # Only fetch edge-push streams instead of loading all 932 streams
+    stmt = select(CameraStream.stream_id, CameraStream.status).where(
+        CameraStream.stream_source == "EDGE_PUSH"
+    )
     res = await session.execute(stmt)
-    streams = res.scalars().all()
+    rows = res.all()
     
-    online_streams = []
-    offline_streams = []
-    for s in streams:
-        is_push = "publisher" in s.stream_url.lower() or not s.stream_url.strip()
-        if is_push:
-            if s.status == StreamState.ONLINE:
-                online_streams.append(s.stream_id)
-            else:
-                offline_streams.append(s.stream_id)
+    online_streams = [r.stream_id for r in rows if r.status == StreamState.ONLINE]
+    offline_streams = [r.stream_id for r in rows if r.status != StreamState.ONLINE]
                 
     return {
         "active_edge_connections": metrics["active_edge_connections"],
@@ -2896,17 +2894,30 @@ async def get_unregistered_edge_cameras(session: Annotated[AsyncSession, Depends
     # Unregistered = pushed but not in DB
     unregistered = all_edge_cam_ids - registered_ids
 
-    result = []
-    for cam_id in unregistered:
-        # Get latest connection record
-        stmt3 = (
-            select(EdgeConnection)
-            .where(EdgeConnection.camera_id == cam_id)
-            .order_by(EdgeConnection.connected_at.desc())
-            .limit(1)
+    # Bulk fetch latest EdgeConnection for all unregistered cameras in one query
+    from sqlalchemy import func as sa_func
+    latest_map = {}
+    if unregistered:
+        subq = (
+            select(
+                EdgeConnection.camera_id,
+                sa_func.max(EdgeConnection.connected_at).label("max_at")
+            )
+            .where(EdgeConnection.camera_id.in_(list(unregistered)))
+            .group_by(EdgeConnection.camera_id)
+            .subquery()
+        )
+        stmt3 = select(EdgeConnection).join(
+            subq,
+            (EdgeConnection.camera_id == subq.c.camera_id) &
+            (EdgeConnection.connected_at == subq.c.max_at)
         )
         res3 = await session.execute(stmt3)
-        latest = res3.scalar_one_or_none()
+        latest_map = {r.camera_id: r for r in res3.scalars().all()}
+
+    result = []
+    for cam_id in unregistered:
+        latest = latest_map.get(cam_id)
 
         is_active = cam_id in active_connections
         mem = active_connections.get(cam_id, {})

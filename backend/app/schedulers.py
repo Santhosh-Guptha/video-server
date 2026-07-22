@@ -504,7 +504,7 @@ async def camera_gap_recovery_loop():
     Downloads the missing chunks from the camera's playback RTSP URL concurrently.
     """
     print("[recovery] Starting recording gap recovery loop...")
-    semaphore = asyncio.Semaphore(15) # Increased to 15 concurrent downloads
+    semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent downloads to prevent RAM exhaustion on 16GB server
 
     # Short delay on startup to allow backend initialization
     await asyncio.sleep(5.0)

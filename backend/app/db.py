@@ -12,8 +12,8 @@ if "sqlite" in settings.database_url:
 pool_args = {}
 if "sqlite" not in settings.database_url:
     pool_args = {
-        "pool_size": 50,
-        "max_overflow": 100,
+        "pool_size": 10,
+        "max_overflow": 20,
         "pool_timeout": 30
     }
 
@@ -43,8 +43,8 @@ def reset_db_engine(new_url: str):
     pool_args = {}
     if "sqlite" not in new_url:
         pool_args = {
-            "pool_size": 50,
-            "max_overflow": 100,
+            "pool_size": 10,
+            "max_overflow": 20,
             "pool_timeout": 30
         }
     engine = create_async_engine(new_url, future=True, echo=False, connect_args=connect_args, **pool_args)
