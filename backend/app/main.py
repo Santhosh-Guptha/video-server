@@ -1036,7 +1036,7 @@ async def get_recovered_stats(
 
 
 @app.get("/api/recordings/file")
-async def recording_file(path: str, range: Optional[str] = Header(None)):
+async def recording_file(path: str, range: Annotated[Optional[str], Header()] = None):
     p = Path(path)
     if not p.is_absolute() or not p.exists():
         # Fallback to resolving relative path dynamically
@@ -3012,10 +3012,10 @@ async def register_edge_camera(
 
 @app.post("/api/edge/upload")
 async def upload_edge_backlog(
-    stream_id: str = Form(...),
-    file: UploadFile = File(...),
-    start_ts: float = Form(None),
-    end_ts: float = Form(None),
+    stream_id: Annotated[str, Form()],
+    file: Annotated[UploadFile, File()],
+    start_ts: Annotated[Optional[float], Form()] = None,
+    end_ts: Annotated[Optional[float], Form()] = None,
     session: Annotated[AsyncSession, Depends(get_session)] = None,
 ):
     from datetime import datetime
@@ -3534,7 +3534,7 @@ async def playback_manifestdata(
 async def playback_reader_file(
     payload: ReaderFilePayload,
     videoType: str = "mp4",
-    range: Optional[str] = Header(None),
+    range: Annotated[Optional[str], Header()] = None,
     session: Annotated[AsyncSession, Depends(get_session)] = None
 ):
     try:
