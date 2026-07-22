@@ -69,26 +69,27 @@ systemctl stop vms-monitor.service || true
 # 4. Clone or Pull Latest Project Source
 INSTALL_DIR="/opt/video-server"
 REPO_URL="https://github.com/Santhosh-Guptha/video-server.git"
+DEPLOY_BRANCH="feature/vms-backend-compilation"
 
 if [ -d "$INSTALL_DIR" ]; then
     log_info "Directory $INSTALL_DIR exists. Performing clean git reset..."
     cd "$INSTALL_DIR"
     git fetch origin
-    git reset --hard origin/feature/vms-streaming-redesign
+    git reset --hard "origin/$DEPLOY_BRANCH"
     git clean -fd
 else
     log_info "Cloning fresh repository into $INSTALL_DIR..."
-    git clone -b feature/vms-streaming-redesign "$REPO_URL" "$INSTALL_DIR"
+    git clone -b "$DEPLOY_BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
 
 # 5. Inject the Provided .env File
 log_info "Copying user .env configuration into backend folder..."
 cp "$CURRENT_DIR/.env" "$INSTALL_DIR/backend/.env"
 
-# 6. Install Host OS Packages
+# 6. Install Host OS Packages (including build tools for compilation)
 log_info "Updating system repositories and installing dependencies..."
 apt-get update -y
-apt-get install -y git python3-pip python3-venv ffmpeg sqlite3 redis-server curl wget tar
+apt-get install -y git python3-pip python3-venv ffmpeg sqlite3 redis-server curl wget tar gcc python3-dev
 
 # 7. Setup Clean Python Virtual Environment
 VENV_PATH="/opt/video-backend-venv"
@@ -104,6 +105,17 @@ log_info "Upgrading pip and installing requirements (excluding AI/CUDA dependenc
 "$VENV_PATH/bin/pip" install -r "$INSTALL_DIR/backend/requirements.txt"
 # Telemetry daemon packages
 "$VENV_PATH/bin/pip" install fastapi uvicorn psutil websockets httpx
+
+# Install Cython for compilation
+log_info "Installing Cython inside virtual environment..."
+"$VENV_PATH/bin/pip" install cython
+
+# Compile backend code
+log_info "Compiling backend python source code using Cython..."
+cd "$INSTALL_DIR/backend"
+"$VENV_PATH/bin/python" compile.py
+# Remove compile.py script from deployment folder after compilation is complete
+rm -f "$INSTALL_DIR/backend/compile.py"
 
 # 8. Download and Configure MediaMTX Standalone
 log_info "Setting up MediaMTX standalone binary..."
