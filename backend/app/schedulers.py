@@ -1127,3 +1127,32 @@ async def sd_card_on_demand_cleanup_loop():
             print(f"[cleanup] Error in SD Card on-demand cleanup: {e}")
             
         await asyncio.sleep(300.0) # Run every 5 minutes
+
+
+async def metrics_history_cleanup_loop():
+    """
+    Periodically cleans up WebRTC stream metric history records older than 7 days
+    to prevent database table bloat.
+    """
+    print("[cleanup] Starting WebRTC metrics history cleanup loop (7-day retention)...")
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import delete
+    from .models import StreamMetricHistory
+    from .db import get_session
+    
+    await asyncio.sleep(30.0)
+    
+    while True:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            async for session in get_session():
+                stmt = delete(StreamMetricHistory).where(StreamMetricHistory.timestamp < cutoff)
+                res = await session.execute(stmt)
+                await session.commit()
+                if res.rowcount > 0:
+                    print(f"[cleanup] Pruned {res.rowcount} stream metric history records older than 7 days.")
+        except Exception as e:
+            print(f"[cleanup] Error in stream metrics history cleanup: {e}")
+            
+        await asyncio.sleep(3600.0) # Run hourly
+

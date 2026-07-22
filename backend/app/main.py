@@ -405,7 +405,8 @@ async def startup():
     from .schedulers import (
         camera_gap_recovery_loop,
         camera_archive_cleanup_loop,
-        sd_card_on_demand_cleanup_loop
+        sd_card_on_demand_cleanup_loop,
+        metrics_history_cleanup_loop
     )
     from .health_monitor import health_monitor_loop
 
@@ -421,6 +422,7 @@ async def startup():
     asyncio.create_task(camera_gap_recovery_loop())
     asyncio.create_task(camera_archive_cleanup_loop())
     asyncio.create_task(sd_card_on_demand_cleanup_loop())
+    asyncio.create_task(metrics_history_cleanup_loop())
     asyncio.create_task(health_monitor_loop())
 
     # Start redesign workers
