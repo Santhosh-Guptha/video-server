@@ -73,5 +73,7 @@ try:
 
     print("Cleanup complete!")
 except Exception as err:
+    import traceback
+    traceback.print_exc()
     print(f"Compilation/cleanup failed: {err}")
     sys.exit(1)
