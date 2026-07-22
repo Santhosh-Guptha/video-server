@@ -113,6 +113,7 @@ log_info "Installing Cython inside virtual environment..."
 # Compile backend code
 log_info "Compiling backend python source code using Cython..."
 cd "$INSTALL_DIR/backend"
+find . -name "*.so" -type f -delete
 "$VENV_PATH/bin/python" compile.py
 # Remove compile.py script from deployment folder after compilation is complete
 rm -f "$INSTALL_DIR/backend/compile.py"
