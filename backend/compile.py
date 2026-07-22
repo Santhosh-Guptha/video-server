@@ -11,7 +11,7 @@ app_dir = os.path.join(backend_dir, "app")
 py_files = []
 
 # Exclude entry point scripts or specific files we don't want to compile
-exclude_files = ["record_complete.py", "__init__.py"]
+exclude_files = ["record_complete.py", "__init__.py", "schemas.py", "config.py"]
 
 for root, dirs, files in os.walk(app_dir):
     # Exclude __pycache__
