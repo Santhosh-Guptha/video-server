@@ -60,6 +60,11 @@ async def should_record_stream(session: AsyncSession, stream: CameraStream) -> b
             
     return False
 
+def should_record(stream: CameraStream) -> bool:
+    from .config import should_record_profile
+    profile_val = stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type)
+    return should_record_profile(profile_val)
+
 def double_escape_rtsp_url(url: str) -> str:
     """Returns the RTSP URL directly since database values are already correctly single-escaped."""
     return url
