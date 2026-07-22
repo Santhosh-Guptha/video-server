@@ -65,6 +65,7 @@ async def stream_health_worker_loop():
                             # If it was left in WARM or CONNECTING, reset it to ONLINE so the camera stays healthy.
                             if s.status in ("WARM", "CONNECTING"):
                                 await StreamRegistry.update_stream_state(s.stream_id, "ONLINE", None, session)
+                break
 
         except Exception as e:
             print(f"[worker] Stream health worker error: {e}")

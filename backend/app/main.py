@@ -2342,6 +2342,15 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
     from datetime import datetime
     import re
     
+    class MockStream:
+        def __init__(self, url):
+            self.stream_url = url
+
+    make_val = None
+    camera_id = stream_id
+    is_hevc = False
+    stream_url = ""
+
     async for session in get_session():
         res = await session.execute(
             select(CameraStream)
@@ -2352,70 +2361,126 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
         if not stream:
             print(f"[recovery] [manual] Stream {stream_id} not found in database inside background task.")
             return
+        is_hevc = bool(stream.codec and stream.codec.lower() in ("hevc", "h265"))
+        stream_url = stream.stream_url.strip() if stream.stream_url else ""
+        if stream.camera:
+            make_val = stream.camera.make
+            camera_id = stream.camera.server_camera_id or stream.camera.name
+        break
 
-        semaphore = asyncio.Semaphore(3)
+    semaphore = asyncio.Semaphore(3)
 
-        async def download_chunk(chunk):
-            start_ts = chunk["start_ts"]
-            end_ts = chunk["end_ts"]
-            
-            # Use the exact second-level start and end timestamps of the gap
-            temp_start = start_ts
-            temp_end = end_ts
-            
-            make_val = stream.camera.make if stream.camera else None
-            provider = get_playback_recovery_provider(make_val)
-            recovery_url = provider.build_playback_url(stream, temp_start, temp_end)
-            
-            dt_start = datetime.fromtimestamp(temp_start)
-            day_str = dt_start.strftime("%Y-%m-%d")
-            camera_id = (stream.camera.server_camera_id or stream.camera.name) if stream.camera else stream_id
-            stream_record_dir = Path(settings.recording_dir) / camera_id / day_str
-            stream_record_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{datetime.fromtimestamp(temp_end).strftime('%H%M%S')}_recovered.mp4"
-            output_path = stream_record_dir / filename
+    async def download_chunk(chunk):
+        start_ts = chunk["start_ts"]
+        end_ts = chunk["end_ts"]
+        
+        # Use the exact second-level start and end timestamps of the gap
+        temp_start = start_ts
+        temp_end = end_ts
+        
+        provider = get_playback_recovery_provider(make_val)
+        mock_stream = MockStream(stream_url)
+        recovery_url = provider.build_playback_url(mock_stream, temp_start, temp_end)
+        
+        dt_start = datetime.fromtimestamp(temp_start)
+        day_str = dt_start.strftime("%Y-%m-%d")
+        stream_record_dir = Path(settings.recording_dir) / camera_id / day_str
+        stream_record_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{datetime.fromtimestamp(temp_end).strftime('%H%M%S')}_recovered.mp4"
+        output_path = stream_record_dir / filename
 
-            is_hevc = stream.codec and stream.codec.lower() in ("hevc", "h265")
+        chunk_is_hevc = is_hevc
 
-            if not is_hevc:
-                try:
-                    cmd_probe = [
-                        "ffprobe", "-v", "error",
-                        "-rtsp_transport", "tcp",
-                        "-select_streams", "v:0",
-                        "-show_entries", "stream=codec_name",
-                        "-of", "default=noprint_wrappers=1:nokey=1",
-                        recovery_url
-                    ]
-                    proc_probe = await asyncio.create_subprocess_exec(
-                        *cmd_probe,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
+        if not chunk_is_hevc:
+            try:
+                cmd_probe = [
+                    "ffprobe", "-v", "error",
+                    "-rtsp_transport", "tcp",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    recovery_url
+                ]
+                proc_probe = await asyncio.create_subprocess_exec(
+                    *cmd_probe,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                if proc_probe.returncode == 0:
+                    codec_name = stdout_probe.decode().strip()
+                    if codec_name.lower() in ("hevc", "h265"):
+                        chunk_is_hevc = True
+                        print(f"[recovery] [manual] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
+            except Exception as probe_err:
+                print(f"[recovery] [manual] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
+
+        codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-an"] if chunk_is_hevc else ["-c:v", "copy", "-an"]
+
+        if output_path.exists() and output_path.stat().st_size > 0:
+            is_complete = False
+            try:
+                dur = await get_file_duration_async(str(output_path), semaphore)
+                if dur >= settings.segment_time_seconds - 5.0:
+                    is_complete = True
+            except Exception:
+                pass
+
+            if is_complete:
+                print(f"[recovery] [manual] [{stream_id}] File already exists and is complete, skipping download: {filename}")
+                parts = Path(output_path).parts
+                relative_path = "/".join(parts[-3:])
+                async for insert_session in get_session():
+                    stmt_check = select(RecordingSegment).where(
+                        RecordingSegment.stream_id == stream_id,
+                        RecordingSegment.file_path == relative_path
                     )
-                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
-                    if proc_probe.returncode == 0:
-                        codec_name = stdout_probe.decode().strip()
-                        if codec_name.lower() in ("hevc", "h265"):
-                            is_hevc = True
-                            print(f"[recovery] [manual] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
-                except Exception as probe_err:
-                    print(f"[recovery] [manual] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
-
-            codec_args = ["-c:v", "libx264", "-preset", "superfast", "-crf", "23", "-an"] if is_hevc else ["-c:v", "copy", "-an"]
-
-            if output_path.exists() and output_path.stat().st_size > 0:
-                is_complete = False
+                    res_check = await insert_session.execute(stmt_check)
+                    existing_seg = res_check.scalar_one_or_none()
+                    if not existing_seg:
+                        new_seg = RecordingSegment(
+                            stream_id=stream_id,
+                            file_path=relative_path,
+                            start_ts=temp_start,
+                            end_ts=temp_end
+                        )
+                        insert_session.add(new_seg)
+                        await insert_session.commit()
+                        print(f"[recovery] [manual] [{stream_id}] Indexed existing segment: {filename}")
+                    break
+                return
+            else:
+                print(f"[recovery] [manual] [{stream_id}] File exists but is incomplete on disk, deleting to re-download: {filename}")
                 try:
-                    dur = await get_file_duration_async(str(output_path), semaphore)
-                    if dur >= settings.segment_time_seconds - 5.0:
-                        is_complete = True
+                    output_path.unlink()
                 except Exception:
                     pass
 
-                if is_complete:
-                    print(f"[recovery] [manual] [{stream_id}] File already exists and is complete, skipping download: {filename}")
+        async with semaphore:
+            print(f"[recovery] [manual] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {chunk_is_hevc})...")
+            cmd = [
+                settings.ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-rtsp_transport", "tcp",
+                "-stimeout", "15000000",
+                "-i", recovery_url,
+                "-t", str(temp_end - temp_start),
+            ] + codec_args + ["-movflags", "+faststart", str(output_path)]
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
+                if proc.returncode == 0:
+                    print(f"[recovery] [manual] [{stream_id}] Successfully recovered: {filename}")
                     parts = Path(output_path).parts
                     relative_path = "/".join(parts[-3:])
+                    
                     async for insert_session in get_session():
                         stmt_check = select(RecordingSegment).where(
                             RecordingSegment.stream_id == stream_id,
@@ -2432,125 +2497,76 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                             )
                             insert_session.add(new_seg)
                             await insert_session.commit()
-                            print(f"[recovery] [manual] [{stream_id}] Indexed existing segment: {filename}")
-                    return
-                else:
-                    print(f"[recovery] [manual] [{stream_id}] File exists but is incomplete on disk, deleting to re-download: {filename}")
-                    try:
-                        output_path.unlink()
-                    except Exception:
-                        pass
-
-            async with semaphore:
-                print(f"[recovery] [manual] [{stream_id}] Downloading gap segment: {filename} (HEVC Transcode: {is_hevc})...")
-                cmd = [
-                    settings.ffmpeg_path,
-                    "-y",
-                    "-hide_banner",
-                    "-loglevel", "warning",
-                    "-rtsp_transport", "tcp",
-                    "-stimeout", "15000000",
-                    "-i", recovery_url,
-                    "-t", str(temp_end - temp_start),
-                ] + codec_args + ["-movflags", "+faststart", str(output_path)]
-
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
-                    if proc.returncode == 0:
-                        print(f"[recovery] [manual] [{stream_id}] Successfully recovered: {filename}")
-                        parts = Path(output_path).parts
-                        relative_path = "/".join(parts[-3:])
+                            print(f"[recovery] [manual] [{stream_id}] Indexed segment: {filename}")
                         
-                        async for insert_session in get_session():
-                            stmt_check = select(RecordingSegment).where(
-                                RecordingSegment.stream_id == stream_id,
-                                RecordingSegment.file_path == relative_path
-                            )
-                            res_check = await insert_session.execute(stmt_check)
-                            existing_seg = res_check.scalar_one_or_none()
-                            if not existing_seg:
-                                new_seg = RecordingSegment(
-                                    stream_id=stream_id,
-                                    file_path=relative_path,
-                                    start_ts=temp_start,
-                                    end_ts=temp_end
-                                )
-                                insert_session.add(new_seg)
-                                await insert_session.commit()
-                                print(f"[recovery] [manual] [{stream_id}] Indexed segment: {filename}")
-                            
-                            # Consolidate timeline: delete overlapping short segments in this minute block
-                            stmt_overlap = select(RecordingSegment).where(
-                                RecordingSegment.stream_id == stream_id,
-                                RecordingSegment.start_ts >= temp_start,
-                                RecordingSegment.start_ts < temp_end,
-                                RecordingSegment.file_path != relative_path
-                            )
-                            res_overlap = await insert_session.execute(stmt_overlap)
-                            overlapping_segs = list(res_overlap.scalars().all())
-                            
-                            for ov_seg in overlapping_segs:
-                                ov_path = Path(settings.recording_dir) / ov_seg.file_path
-                                try:
-                                    if ov_path.exists():
-                                        ov_dur = ov_seg.end_ts - ov_seg.start_ts
-                                        if ov_dur < settings.segment_time_seconds - 5.0:
-                                            print(f"[recovery] [manual] [{stream_id}] Consolidating timeline: deleting overlapping short segment file {ov_seg.file_path} (duration {ov_dur}s)")
-                                            ov_path.unlink()
-                                except Exception as delete_err:
-                                    print(f"[recovery] [manual] [{stream_id}] Failed to delete consolidated file: {delete_err}")
-                                await insert_session.delete(ov_seg)
-                            
-                            if overlapping_segs:
-                                await insert_session.commit()
-                                print(f"[recovery] [manual] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
-                            
-                            # Try to merge any multiple files in this minute block
-                            from .schedulers import merge_minute_segments
-                            minute_start = float(int(temp_start // 60) * 60)
-                            await merge_minute_segments(insert_session, stream_id, minute_start)
+                        # Consolidate timeline: delete overlapping short segments in this minute block
+                        stmt_overlap = select(RecordingSegment).where(
+                            RecordingSegment.stream_id == stream_id,
+                            RecordingSegment.start_ts >= temp_start,
+                            RecordingSegment.start_ts < temp_end,
+                            RecordingSegment.file_path != relative_path
+                        )
+                        res_overlap = await insert_session.execute(stmt_overlap)
+                        overlapping_segs = list(res_overlap.scalars().all())
+                        
+                        for ov_seg in overlapping_segs:
+                            ov_path = Path(settings.recording_dir) / ov_seg.file_path
+                            try:
+                                if ov_path.exists():
+                                    ov_dur = ov_seg.end_ts - ov_seg.start_ts
+                                    if ov_dur < settings.segment_time_seconds - 5.0:
+                                        print(f"[recovery] [manual] [{stream_id}] Consolidating timeline: deleting overlapping short segment file {ov_seg.file_path} (duration {ov_dur}s)")
+                                        ov_path.unlink()
+                            except Exception as delete_err:
+                                print(f"[recovery] [manual] [{stream_id}] Failed to delete consolidated file: {delete_err}")
+                            await insert_session.delete(ov_seg)
+                        
+                        if overlapping_segs:
+                            await insert_session.commit()
+                            print(f"[recovery] [manual] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
+                        
+                        # Try to merge any multiple files in this minute block
+                        from .schedulers import merge_minute_segments
+                        minute_start = float(int(temp_start // 60) * 60)
+                        await merge_minute_segments(insert_session, stream_id, minute_start)
+                        break
 
-                    else:
-                        print(f"[recovery] [manual] [{stream_id}] FFmpeg exit code {proc.returncode} for: {filename}")
-                        if output_path.exists():
-                            output_path.unlink()
-                except asyncio.TimeoutError:
-                    print(f"[recovery] [manual] [{stream_id}] Timeout downloading: {filename}")
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                else:
+                    print(f"[recovery] [manual] [{stream_id}] FFmpeg exit code {proc.returncode} for: {filename}")
                     if output_path.exists():
                         output_path.unlink()
-                except Exception as e:
-                    print(f"[recovery] [manual] [{stream_id}] Error running FFmpeg: {e}")
-                    if output_path.exists():
-                        output_path.unlink()
+            except asyncio.TimeoutError:
+                print(f"[recovery] [manual] [{stream_id}] Timeout downloading: {filename}")
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                if output_path.exists():
+                    output_path.unlink()
+            except Exception as e:
+                print(f"[recovery] [manual] [{stream_id}] Error running FFmpeg: {e}")
+                if output_path.exists():
+                    output_path.unlink()
 
-        # Split any large gap chunks into max segment_time_seconds pieces
-        split_chunks = []
-        for chunk in gap_chunks:
-            start_ts = chunk["start_ts"]
-            end_ts = chunk["end_ts"]
-            curr = start_ts
-            seg_time = float(settings.segment_time_seconds)
-            while curr < end_ts:
-                chunk_end = min(curr + seg_time, end_ts)
-                if end_ts - chunk_end <= 5.0:
-                    chunk_end = end_ts
-                split_chunks.append({
-                    "start_ts": curr,
-                    "end_ts": chunk_end
-                })
-                curr = chunk_end
+    # Split any large gap chunks into max segment_time_seconds pieces
+    split_chunks = []
+    for chunk in gap_chunks:
+        start_ts = chunk["start_ts"]
+        end_ts = chunk["end_ts"]
+        curr = start_ts
+        seg_time = float(settings.segment_time_seconds)
+        while curr < end_ts:
+            chunk_end = min(curr + seg_time, end_ts)
+            if end_ts - chunk_end <= 5.0:
+                chunk_end = end_ts
+            split_chunks.append({
+                "start_ts": curr,
+                "end_ts": chunk_end
+            })
+            curr = chunk_end
 
-        for chunk in split_chunks:
-            await download_chunk(chunk)
+    for chunk in split_chunks:
+        await download_chunk(chunk)
 
 @app.post("/api/recordings/{stream_id}/recover")
 async def recover_recording_gaps(

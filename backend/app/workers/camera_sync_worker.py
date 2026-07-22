@@ -49,6 +49,7 @@ async def camera_sync_worker_loop():
                             await stream_manager._delete(f"/v3/config/paths/delete/{path}")
                         except Exception as e:
                             print(f"[worker] Failed to delete path configuration {path}: {e}")
+                break
 
         except Exception as e:
             print(f"[worker] Camera sync worker error: {e}")
