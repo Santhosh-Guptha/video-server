@@ -74,11 +74,11 @@ if [ -d "$INSTALL_DIR" ]; then
     log_info "Directory $INSTALL_DIR exists. Performing clean git reset..."
     cd "$INSTALL_DIR"
     git fetch origin
-    git reset --hard origin/feature/vms-streaming-redesign
+    git reset --hard origin/develop
     git clean -fd
 else
     log_info "Cloning fresh repository into $INSTALL_DIR..."
-    git clone -b feature/vms-streaming-redesign "$REPO_URL" "$INSTALL_DIR"
+    git clone -b develop "$REPO_URL" "$INSTALL_DIR"
 fi
 
 # 5. Inject the Provided .env File
