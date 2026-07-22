@@ -1698,18 +1698,18 @@ async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
     
     # Serialize to JSON via Pydantic schema to ensure all computed fields (rtsp_url, stream_id, etc.) are included
     from .schemas import CameraOut
-    from fastapi.encoders import jsonable_encoder
-    import json
-    cameras_out = [CameraOut.model_validate(c) for c in cameras]
-    serialized = json.dumps(jsonable_encoder(cameras_out))
+    from pydantic import TypeAdapter
+    
+    ta = TypeAdapter(list[CameraOut])
+    serialized_bytes = ta.dump_json(cameras)
     if redis_client:
         try:
-            await redis_client.set(cache_key, serialized, ex=120)
+            await redis_client.set(cache_key, serialized_bytes, ex=120)
         except Exception as e:
             print(f"[main] Failed to set cameras cache: {e}")
             
     from fastapi.responses import Response
-    return Response(content=serialized, media_type="application/json")
+    return Response(content=serialized_bytes, media_type="application/json")
 
 @app.get("/api/cameras/active", response_model=list[CameraOut])
 async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_session)]):
