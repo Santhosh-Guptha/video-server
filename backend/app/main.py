@@ -1507,12 +1507,14 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
         # 1. Sync Camera Parent Row
         make = raw.get("make")
         res = await session.execute(
-            select(Camera).where(
-                (Camera.source_camera_id == source_id) |
-                (Camera.server_camera_id == server_cam_id)
-            )
+            select(Camera).where(Camera.source_camera_id == source_id)
         )
         camera = res.scalar_one_or_none()
+        if not camera:
+            res_server = await session.execute(
+                select(Camera).where(Camera.server_camera_id == server_cam_id)
+            )
+            camera = res_server.scalar_one_or_none()
         if not camera:
             camera = Camera(
                 source_camera_id=source_id,
@@ -3445,39 +3447,8 @@ class PlaybackDownloadPayload(BaseModel):
     end_date: str
 
 async def get_stream_by_camera_id(camera_id_str: str, db: AsyncSession):
-    try:
-        cam_id_int = int(camera_id_str)
-        stmt = select(CameraStream).join(Camera).where(Camera.source_camera_id == cam_id_int)
-        res = await db.execute(stmt)
-        stream = res.scalar_one_or_none()
-        if stream:
-            return stream
-    except ValueError:
-        pass
-
-    stmt = select(CameraStream).where(CameraStream.stream_id == camera_id_str)
-    res = await db.execute(stmt)
-    stream = res.scalar_one_or_none()
-    if stream:
-        return stream
-
-    stmt = select(CameraStream).where(CameraStream.stream_id == f"cam_{camera_id_str}_main")
-    res = await db.execute(stmt)
-    stream = res.scalar_one_or_none()
-    if stream:
-        return stream
-
-    try:
-        cam_uuid = uuid.UUID(camera_id_str)
-        stmt = select(CameraStream).where(CameraStream.camera_id == cam_uuid)
-        res = await db.execute(stmt)
-        stream = res.scalar_one_or_none()
-        if stream:
-            return stream
-    except ValueError:
-        pass
-
-    return None
+    from .webrtc import resolve_stream_by_identifier
+    return await resolve_stream_by_identifier(camera_id_str, db)
 
 @app.post("/api/playback/manifestdata")
 async def playback_manifestdata(
