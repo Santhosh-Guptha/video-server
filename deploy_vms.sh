@@ -97,7 +97,7 @@ SD_CARD_ON_DEMAND_RETENTION_SECONDS=3600
 
 # --- [ 2. DEPLOYMENT & RESET TOGGLES ] ---------------------------------------
 ENABLE_ADMIN_PASSWORD_PROTECTION=true     # Set true to enforce hashed password authentication
-ADMIN_PASSWORD_HASH=""                    # SHA-256 hash of your admin password (auto-set on first run)
+ADMIN_PASSWORD_HASH="db6ee5c697bf136e02c5f72edd58ad94fdf907f168b953f9d89d87b889e46c7f"                    # SHA-256 hash of Shanmuk@vms@2001
 CLEAN_DATABASE=true                      # Wipe SQLite database on deploy
 CLEAN_RECORDINGS=true                    # Wipe video recordings & HLS on deploy
 FLUSH_REDIS=true                         # Flush Redis cache on deploy
