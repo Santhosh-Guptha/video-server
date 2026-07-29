@@ -143,27 +143,10 @@ fi
 # 1b. Admin Password Security Authentication Gate (Stored directly in script)
 if [ "$ENABLE_ADMIN_PASSWORD_PROTECTION" = true ]; then
     if [ -z "$ADMIN_PASSWORD_HASH" ]; then
-        log_warn "No ADMIN_PASSWORD_HASH configured inside deploy_vms.sh. Initializing Admin Security Password..."
-        read -s -p "Set New VMS Admin Deployment Password: " PASS1
-        echo ""
-        read -s -p "Confirm New VMS Admin Deployment Password: " PASS2
-        echo ""
-
-        if [ "$PASS1" != "$PASS2" ] || [ -z "$PASS1" ]; then
-            log_error "Passwords do not match or are empty. Aborting deployment."
-            exit 1
-        fi
-
-        COMPUTED_HASH=$(echo -n "$PASS1" | sha256sum | awk '{print $1}')
-        ADMIN_PASSWORD_HASH="$COMPUTED_HASH"
-        
-        # Self-update ADMIN_PASSWORD_HASH in deploy_vms.sh if file is writable
-        SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-        if [ -w "$SCRIPT_PATH" ]; then
-            sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH=\"$COMPUTED_HASH\"|g" "$SCRIPT_PATH" 2>/dev/null || true
-            log_success "Admin Password SHA-256 hash successfully embedded into deploy_vms.sh!"
-        fi
-        log_info "ADMIN_PASSWORD_HASH=$COMPUTED_HASH"
+        log_error "Security Enforcement: ADMIN_PASSWORD_HASH is missing or empty in deploy_vms.sh. Execution blocked."
+        log_warn "Generate your SHA-256 hash using: echo -n 'YourPassword' | sha256sum"
+        log_warn "Then set ADMIN_PASSWORD_HASH='your_hash' in deploy_vms.sh before running."
+        exit 1
     fi
 
     read -s -p "Enter VMS Deployment Admin Password: " ENTERED_PASS
