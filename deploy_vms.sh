@@ -4,27 +4,102 @@
 # VMS ALL-IN-ONE STANDALONE DEPLOYER & CONFIGURATOR
 # ==============================================================================
 # Usage:
-#   1. Edit the CONFIGURATION PROPERTIES below in this single file.
+#   1. Configure parameters in Section 1 & 2 below in this single file.
 #   2. Run: sudo bash deploy_vms.sh
 # ==============================================================================
 
 # --- [ 1. CONFIGURATION PROPERTIES ] -----------------------------------------
-UPSTREAM_CAMERA_API_URL="https://iportal.iviscloud.net/api/cameras/camera-videoserver"
+APP_NAME="camera-video-platform"
 DATABASE_URL="sqlite+aiosqlite:///./data/app.db"
-REDIS_URL="redis://localhost:6379/0"
-MEDIAMTX_API_URL="http://localhost:9997"
-MEDIAMTX_WEBRTC_URL="http://localhost:8889"
-RECORDING_DIR="./data/recordings"        # Set custom path e.g. "/mnt/storage" if needed
+REDIS_URL="redis://127.0.0.1:6379/0"
 
-TURN_SERVER_URL=""                       # Leave empty to auto-detect system IP (turn:IP:3478)
+UPSTREAM_CAMERA_API_URL="https://iportal.iviscloud.net/api/cameras/camera-videoserver"
+UPSTREAM_TIMEOUT_SECONDS=10.0
+UPSTREAM_SYNC_INTERVAL_MINUTES=5
+
+MEDIAMTX_API_URL="http://127.0.0.1:9997"
+MEDIAMTX_WEBRTC_URL="http://127.0.0.1:8889"
+STUN_SERVERS='["stun:stun.l.google.com:19302"]'
+TURN_SERVER_URL=""                       # Auto-detects system IP if blank (turn:IP:3478)
 TURN_SERVER_USERNAME="admin"
 TURN_SERVER_CREDENTIAL="admin123"
+MEDIAMTX_PATCH_ONLY=true
+ALLOW_DELETE_ADD_RECONFIGURATION=false
+
+FFMPEG_PATH="ffmpeg"
+RECORDING_DIR="./data/recordings"        # Set custom path e.g. "/mnt/storage"
+HLS_DIR="./data/hls"
+SEGMENT_TIME_SECONDS=60
+
+MAX_SUBSCRIBERS_PER_STREAM=200
+MAX_WEBRTC_SESSIONS_PER_CAMERA=100
+ENABLE_WEBRTC=true
+ENABLE_HLS_FALLBACK=true
+WEBRTC_CONNECTION_TIMEOUT_SECONDS=10
+
+UI_POLL_SECONDS=5
+SCHEDULER_INTERVAL_SECONDS=10
+RECOVERY_INTERVAL_SECONDS=300
+CLEANUP_INTERVAL_SECONDS=600
+INDEXER_INTERVAL_SECONDS=600
+
+EDGE_RECEIVER_HOST="0.0.0.0"
+EDGE_RECEIVER_PORT=9999
+EDGE_RECEIVER_ENABLED=true
+ALLOW_UNKNOWN_EDGE_DEVICES=false
+STRICT_CAMERA_VALIDATION=true
+ENABLE_EDGE_PUSH=true
+EDGE_PUSH_PRIORITY=true
+EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS=120
+EDGE_PUSH_CHECK_INTERVAL_SECONDS=30
+
+ENABLE_RTSP_HEALTH_CHECK=true
+CAMERA_PING_INTERVAL_SECONDS=120
+CAMERA_PING_TIMEOUT_SECONDS=5
+CAMERA_PING_MAX_CONCURRENT=10
+
+ENABLE_H265_TRANSCODING=true
+MAX_ACTIVE_TRANSCODERS=10
+TRANSCODER_VCODEC="libx264"
+TRANSCODER_PRESET="ultrafast"
+TRANSCODER_TUNE="zerolatency"
+TRANSCODER_GRACE_PERIOD_SECONDS=60
+
+ENABLE_RECORDING=true
+RECORD_FALLBACK_TO_NORMAL=true
+RECORD_MOBILE=false
+
+PREFERRED_PROFILE="HD"
+LIVE_STREAM_FALLBACK=true
+ENABLE_ADAPTIVE_PROFILE=true
+FOCUS_VIEW_PROFILE="HD"
+GRID_VIEW_PROFILE="NORMAL"
+MOBILE_VIEW_PROFILE="MOBILE"
+
+PLAYBACK_ALLOW_NORMAL_FALLBACK=true
+PLAYBACK_ALLOW_MOBILE_FALLBACK=false
+PLAYBACK_SPEEDS='[0.5, 1.0, 2.0, 4.0, 8.0]'
+ENABLE_RETENTION=true
+DEFAULT_RETENTION_DAYS=30
+ENABLE_LOW_DISK_EVICTION=true
+LOW_DISK_SPACE_THRESHOLD_GB=5.0
+TARGET_FREE_SPACE_GB=10.0
+
+TIMELINE_CACHE_SECONDS=60
+TIMELINE_MERGE_THRESHOLD_SECONDS=5
+TIMELINE_DEFAULT_ZOOM="24h"
+
+ENABLE_DEVICE_CONFIG=false
+ENABLE_LOCAL_TRANSCODE=false
+
+ENABLE_SD_CARD_ON_DEMAND=true
+SD_CARD_ON_DEMAND_RETENTION_SECONDS=3600
 
 # --- [ 2. DEPLOYMENT & RESET TOGGLES ] ---------------------------------------
-CLEAN_DATABASE=true                      # Set true to wipe SQLite database on deploy
-CLEAN_RECORDINGS=true                    # Set true to wipe video recordings/HLS on deploy
-FLUSH_REDIS=true                         # Set true to flush Redis cache on deploy
-REINSTALL_VENV=true                      # Set true to recreate Python venv
+CLEAN_DATABASE=true                      # Wipe SQLite database on deploy
+CLEAN_RECORDINGS=true                    # Wipe video recordings & HLS on deploy
+FLUSH_REDIS=true                         # Flush Redis cache on deploy
+REINSTALL_VENV=true                      # Recreate Python venv
 BRANCH_NAME="develop"                    # Git branch to clone/pull
 
 # ==============================================================================
@@ -71,20 +146,145 @@ if [ -z "$TURN_SERVER_URL" ]; then
     TURN_SERVER_URL="turn:$PRIMARY_IP:3478"
 fi
 
-# 2. Generate .env File from Single-File Configuration Properties
-log_info "Generating configuration (.env) from top-level script properties..."
+# 2. Generate Complete 15-Section .env File from Script Properties
+log_info "Generating 15-section .env configuration from script properties..."
 cat <<EOF > "$CURRENT_DIR/.env"
+# ==============================================================================
+# Camera Video Platform - Active Environment Configurations
+# ==============================================================================
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. CORE SYSTEM PARAMETERS
+# ──────────────────────────────────────────────────────────────────────────────
+APP_NAME=$APP_NAME
 DATABASE_URL=$DATABASE_URL
 REDIS_URL=$REDIS_URL
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. UPSTREAM CAMERA CONFIGURATION REGISTRY
+# ──────────────────────────────────────────────────────────────────────────────
+UPSTREAM_CAMERA_API_URL=$UPSTREAM_CAMERA_API_URL
+UPSTREAM_TIMEOUT_SECONDS=$UPSTREAM_TIMEOUT_SECONDS
+UPSTREAM_SYNC_INTERVAL_MINUTES=$UPSTREAM_SYNC_INTERVAL_MINUTES
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. MEDIAMTX PROXY & SIGNALING ENGINE
+# ──────────────────────────────────────────────────────────────────────────────
 MEDIAMTX_API_URL=$MEDIAMTX_API_URL
 MEDIAMTX_WEBRTC_URL=$MEDIAMTX_WEBRTC_URL
-UPSTREAM_CAMERA_API_URL=$UPSTREAM_CAMERA_API_URL
+STUN_SERVERS=$STUN_SERVERS
 TURN_SERVER_URL=$TURN_SERVER_URL
 TURN_SERVER_USERNAME=$TURN_SERVER_USERNAME
 TURN_SERVER_CREDENTIAL=$TURN_SERVER_CREDENTIAL
+MEDIAMTX_PATCH_ONLY=$MEDIAMTX_PATCH_ONLY
+ALLOW_DELETE_ADD_RECONFIGURATION=$ALLOW_DELETE_ADD_RECONFIGURATION
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. PATHS AND FILE SYSTEM DIRECTORIES
+# ──────────────────────────────────────────────────────────────────────────────
+FFMPEG_PATH=$FFMPEG_PATH
 RECORDING_DIR=$RECORDING_DIR
+HLS_DIR=$HLS_DIR
+SEGMENT_TIME_SECONDS=$SEGMENT_TIME_SECONDS
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. LIVE EGRESS SESSION LIMITS
+# ──────────────────────────────────────────────────────────────────────────────
+MAX_SUBSCRIBERS_PER_STREAM=$MAX_SUBSCRIBERS_PER_STREAM
+MAX_WEBRTC_SESSIONS_PER_CAMERA=$MAX_WEBRTC_SESSIONS_PER_CAMERA
+ENABLE_WEBRTC=$ENABLE_WEBRTC
+ENABLE_HLS_FALLBACK=$ENABLE_HLS_FALLBACK
+WEBRTC_CONNECTION_TIMEOUT_SECONDS=$WEBRTC_CONNECTION_TIMEOUT_SECONDS
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. WATCHDOG AND SCHEDULER INTERVALS
+# ──────────────────────────────────────────────────────────────────────────────
+UI_POLL_SECONDS=$UI_POLL_SECONDS
+SCHEDULER_INTERVAL_SECONDS=$SCHEDULER_INTERVAL_SECONDS
+RECOVERY_INTERVAL_SECONDS=$RECOVERY_INTERVAL_SECONDS
+CLEANUP_INTERVAL_SECONDS=$CLEANUP_INTERVAL_SECONDS
+INDEXER_INTERVAL_SECONDS=$INDEXER_INTERVAL_SECONDS
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7. EDGE PUSH & AUTO-MODE CONFIGURATIONS
+# ──────────────────────────────────────────────────────────────────────────────
+EDGE_RECEIVER_HOST=$EDGE_RECEIVER_HOST
+EDGE_RECEIVER_PORT=$EDGE_RECEIVER_PORT
+EDGE_RECEIVER_ENABLED=$EDGE_RECEIVER_ENABLED
+ALLOW_UNKNOWN_EDGE_DEVICES=$ALLOW_UNKNOWN_EDGE_DEVICES
+STRICT_CAMERA_VALIDATION=$STRICT_CAMERA_VALIDATION
+ENABLE_EDGE_PUSH=$ENABLE_EDGE_PUSH
+EDGE_PUSH_PRIORITY=$EDGE_PUSH_PRIORITY
+EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS=$EDGE_PUSH_HEARTBEAT_TIMEOUT_SECONDS
+EDGE_PUSH_CHECK_INTERVAL_SECONDS=$EDGE_PUSH_CHECK_INTERVAL_SECONDS
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 8. HEALTH AND TELEMETRY WATCHDOGS
+# ──────────────────────────────────────────────────────────────────────────────
+ENABLE_RTSP_HEALTH_CHECK=$ENABLE_RTSP_HEALTH_CHECK
+CAMERA_PING_INTERVAL_SECONDS=$CAMERA_PING_INTERVAL_SECONDS
+CAMERA_PING_TIMEOUT_SECONDS=$CAMERA_PING_TIMEOUT_SECONDS
+CAMERA_PING_MAX_CONCURRENT=$CAMERA_PING_MAX_CONCURRENT
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 9. H.265 ON-DEMAND TRANSCODER (HEVC COMPATIBILITY LAYER)
+# ──────────────────────────────────────────────────────────────────────────────
+ENABLE_H265_TRANSCODING=$ENABLE_H265_TRANSCODING
+MAX_ACTIVE_TRANSCODERS=$MAX_ACTIVE_TRANSCODERS
+TRANSCODER_VCODEC=$TRANSCODER_VCODEC
+TRANSCODER_PRESET=$TRANSCODER_PRESET
+TRANSCODER_TUNE=$TRANSCODER_TUNE
+TRANSCODER_GRACE_PERIOD_SECONDS=$TRANSCODER_GRACE_PERIOD_SECONDS
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 10. STORAGE AND ARCHIVING POLICY
+# ──────────────────────────────────────────────────────────────────────────────
+ENABLE_RECORDING=$ENABLE_RECORDING
+RECORD_FALLBACK_TO_NORMAL=$RECORD_FALLBACK_TO_NORMAL
+RECORD_MOBILE=$RECORD_MOBILE
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 11. STREAM SELECTION POLICY
+# ──────────────────────────────────────────────────────────────────────────────
+PREFERRED_PROFILE=$PREFERRED_PROFILE
+LIVE_STREAM_FALLBACK=$LIVE_STREAM_FALLBACK
+ENABLE_ADAPTIVE_PROFILE=$ENABLE_ADAPTIVE_PROFILE
+FOCUS_VIEW_PROFILE=$FOCUS_VIEW_PROFILE
+GRID_VIEW_PROFILE=$GRID_VIEW_PROFILE
+MOBILE_VIEW_PROFILE=$MOBILE_VIEW_PROFILE
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 12. PLAYBACK & STORAGE RETENTION POLICY
+# ──────────────────────────────────────────────────────────────────────────────
+PLAYBACK_ALLOW_NORMAL_FALLBACK=$PLAYBACK_ALLOW_NORMAL_FALLBACK
+PLAYBACK_ALLOW_MOBILE_FALLBACK=$PLAYBACK_ALLOW_MOBILE_FALLBACK
+PLAYBACK_SPEEDS=$PLAYBACK_SPEEDS
+ENABLE_RETENTION=$ENABLE_RETENTION
+DEFAULT_RETENTION_DAYS=$DEFAULT_RETENTION_DAYS
+ENABLE_LOW_DISK_EVICTION=$ENABLE_LOW_DISK_EVICTION
+LOW_DISK_SPACE_THRESHOLD_GB=$LOW_DISK_SPACE_THRESHOLD_GB
+TARGET_FREE_SPACE_GB=$TARGET_FREE_SPACE_GB
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 13. PLAYBACK TIMELINE POLICY
+# ──────────────────────────────────────────────────────────────────────────────
+TIMELINE_CACHE_SECONDS=$TIMELINE_CACHE_SECONDS
+TIMELINE_MERGE_THRESHOLD_SECONDS=$TIMELINE_MERGE_THRESHOLD_SECONDS
+TIMELINE_DEFAULT_ZOOM=$TIMELINE_DEFAULT_ZOOM
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 14. DEVICE CONFIGURATION & LOCAL TRANSCODE TOGGLES
+# ──────────────────────────────────────────────────────────────────────────────
+ENABLE_DEVICE_CONFIG=$ENABLE_DEVICE_CONFIG
+ENABLE_LOCAL_TRANSCODE=$ENABLE_LOCAL_TRANSCODE
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 15. SD CARD ON-DEMAND RETRIEVAL POLICY
+# ──────────────────────────────────────────────────────────────────────────────
+ENABLE_SD_CARD_ON_DEMAND=$ENABLE_SD_CARD_ON_DEMAND
+SD_CARD_ON_DEMAND_RETENTION_SECONDS=$SD_CARD_ON_DEMAND_RETENTION_SECONDS
 EOF
-log_info "Generated configuration file successfully."
+log_info "Generated complete 15-section .env configuration file successfully."
 
 # 3. Stop Existing Services (if any)
 log_info "Stopping active VMS services..."
