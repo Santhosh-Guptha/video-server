@@ -10,15 +10,26 @@
 
 # --- [ 1. CONFIGURATION PROPERTIES ] -----------------------------------------
 APP_NAME="camera-video-platform"
+
+# ── SYSTEM PORT CONFIGURATIONS ────────────────────────────────────────────────
+BACKEND_PORT=8005                        # Core FastAPI Backend Port
+TELEMETRY_PORT=8010                      # Standalone Observability Portal Port
+EDGE_RECEIVER_PORT=9999                  # TCP Edge Push Receiver Port
+MEDIAMTX_RTSP_PORT=8554                  # MediaMTX RTSP Server Port
+MEDIAMTX_API_PORT=9997                   # MediaMTX HTTP REST API Port
+MEDIAMTX_WEBRTC_PORT=8889                # MediaMTX WebRTC / WHIP Port
+MEDIAMTX_ICE_PORT=8189                   # MediaMTX WebRTC UDP Multiplexer Port
+REDIS_PORT=6379                          # Redis Cache Server Port
+
 DATABASE_URL="sqlite+aiosqlite:///./data/app.db"
-REDIS_URL="redis://127.0.0.1:6379/0"
+REDIS_URL="redis://127.0.0.1:$REDIS_PORT/0"
 
 UPSTREAM_CAMERA_API_URL="https://iportal.iviscloud.net/api/cameras/camera-videoserver"
 UPSTREAM_TIMEOUT_SECONDS=10.0
 UPSTREAM_SYNC_INTERVAL_MINUTES=5
 
-MEDIAMTX_API_URL="http://127.0.0.1:9997"
-MEDIAMTX_WEBRTC_URL="http://127.0.0.1:8889"
+MEDIAMTX_API_URL="http://127.0.0.1:$MEDIAMTX_API_PORT"
+MEDIAMTX_WEBRTC_URL="http://127.0.0.1:$MEDIAMTX_WEBRTC_PORT"
 STUN_SERVERS='["stun:stun.l.google.com:19302"]'
 TURN_SERVER_URL=""                       # Auto-detects system IP if blank (turn:IP:3478)
 TURN_SERVER_USERNAME="admin"
@@ -97,7 +108,7 @@ SD_CARD_ON_DEMAND_RETENTION_SECONDS=3600
 
 # --- [ 2. DEPLOYMENT & RESET TOGGLES ] ---------------------------------------
 ENABLE_ADMIN_PASSWORD_PROTECTION=true     # Set true to enforce hashed password authentication
-ADMIN_PASSWORD_HASH="db6ee5c697bf136e02c5f72edd58ad94fdf907f168b953f9d89d87b889e46c7f"                    # SHA-256 hash of Shanmuk@vms@2001
+ADMIN_PASSWORD_HASH="db6ee5c697bf136e02c5f72edd58ad94fdf907f168b953f9d89d87b889e46c7f"                    
 CLEAN_DATABASE=true                      # Wipe SQLite database on deploy
 CLEAN_RECORDINGS=true                    # Wipe video recordings & HLS on deploy
 FLUSH_REDIS=true                         # Flush Redis cache on deploy
@@ -179,9 +190,17 @@ cat <<EOF > "$CURRENT_DIR/.env"
 # ==============================================================================
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. CORE SYSTEM PARAMETERS
+# 1. CORE SYSTEM PARAMETERS & PORT CONFIGURATIONS
 # ──────────────────────────────────────────────────────────────────────────────
 APP_NAME=$APP_NAME
+BACKEND_PORT=$BACKEND_PORT
+TELEMETRY_PORT=$TELEMETRY_PORT
+EDGE_RECEIVER_PORT=$EDGE_RECEIVER_PORT
+MEDIAMTX_RTSP_PORT=$MEDIAMTX_RTSP_PORT
+MEDIAMTX_API_PORT=$MEDIAMTX_API_PORT
+MEDIAMTX_WEBRTC_PORT=$MEDIAMTX_WEBRTC_PORT
+MEDIAMTX_ICE_PORT=$MEDIAMTX_ICE_PORT
+REDIS_PORT=$REDIS_PORT
 DATABASE_URL=$DATABASE_URL
 REDIS_URL=$REDIS_URL
 
@@ -389,6 +408,15 @@ elif [ -f "$INSTALL_DIR/backend/app/mediamtx.yml" ]; then
     cp "$INSTALL_DIR/backend/app/mediamtx.yml" /opt/mediamtx/mediamtx.yml
 fi
 
+# Dynamically patch MediaMTX ports in /opt/mediamtx/mediamtx.yml
+if [ -f /opt/mediamtx/mediamtx.yml ]; then
+    log_info "Injecting configured MediaMTX ports (RTSP: $MEDIAMTX_RTSP_PORT, API: $MEDIAMTX_API_PORT, WebRTC: $MEDIAMTX_WEBRTC_PORT, ICE: $MEDIAMTX_ICE_PORT)..."
+    sed -i "s|^rtspAddress:.*|rtspAddress: :$MEDIAMTX_RTSP_PORT|g" /opt/mediamtx/mediamtx.yml 2>/dev/null || true
+    sed -i "s|^apiAddress:.*|apiAddress: :$MEDIAMTX_API_PORT|g" /opt/mediamtx/mediamtx.yml 2>/dev/null || true
+    sed -i "s|^webrtcAddress:.*|webrtcAddress: :$MEDIAMTX_WEBRTC_PORT|g" /opt/mediamtx/mediamtx.yml 2>/dev/null || true
+    sed -i "s|^webrtcLocalUDPAddress:.*|webrtcLocalUDPAddress: :$MEDIAMTX_ICE_PORT|g" /opt/mediamtx/mediamtx.yml 2>/dev/null || true
+fi
+
 # 9. Perform Optional Cleanup Actions
 if [ "$CLEAN_DATABASE" = true ]; then
     log_info "[CLEANUP] Removing SQLite database and backup camera cache..."
@@ -423,7 +451,7 @@ After=network.target redis-server.service
 [Service]
 User=root
 WorkingDirectory=$INSTALL_DIR/backend
-ExecStart=$VENV_PATH/bin/uvicorn app.main:app --host 0.0.0.0 --port 8005
+ExecStart=$VENV_PATH/bin/uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT
 Restart=always
 RestartSec=5
 Environment=PATH=$VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -456,10 +484,11 @@ After=network.target redis-server.service video-backend.service
 [Service]
 User=root
 WorkingDirectory=$INSTALL_DIR/monitoring-app
-ExecStart=$VENV_PATH/bin/python app.py
+ExecStart=$VENV_PATH/bin/uvicorn app:app --host 0.0.0.0 --port $TELEMETRY_PORT
 Restart=always
 RestartSec=5
 Environment=PATH=$VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PORT=$TELEMETRY_PORT
 
 [Install]
 WantedBy=multi-user.target

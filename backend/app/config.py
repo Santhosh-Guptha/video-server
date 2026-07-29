@@ -15,6 +15,13 @@ except Exception as e:
 
 class Settings(BaseSettings):
     app_name: str = defaults.get("app_name", "camera-video-platform")
+    backend_port: int = defaults.get("backend_port", 8005)
+    telemetry_port: int = defaults.get("telemetry_port", 8010)
+    mediamtx_rtsp_port: int = defaults.get("mediamtx_rtsp_port", 8554)
+    mediamtx_api_port: int = defaults.get("mediamtx_api_port", 9997)
+    mediamtx_webrtc_port: int = defaults.get("mediamtx_webrtc_port", 8889)
+    mediamtx_ice_port: int = defaults.get("mediamtx_ice_port", 8189)
+    redis_port: int = defaults.get("redis_port", 6379)
     enable_webrtc: bool = defaults.get("enable_webrtc", True)
     database_url: str = defaults.get("database_url", "postgresql+asyncpg://vms_admin:vms_secure_password@localhost:5432/vms_db")
     redis_url: str = defaults.get("redis_url", "redis://127.0.0.1:6379/0")
