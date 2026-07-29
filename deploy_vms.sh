@@ -97,6 +97,7 @@ SD_CARD_ON_DEMAND_RETENTION_SECONDS=3600
 
 # --- [ 2. DEPLOYMENT & RESET TOGGLES ] ---------------------------------------
 ENABLE_ADMIN_PASSWORD_PROTECTION=true     # Set true to enforce hashed password authentication
+ADMIN_PASSWORD_HASH=""                    # SHA-256 hash of your admin password (auto-set on first run)
 CLEAN_DATABASE=true                      # Wipe SQLite database on deploy
 CLEAN_RECORDINGS=true                    # Wipe video recordings & HLS on deploy
 FLUSH_REDIS=true                         # Flush Redis cache on deploy
@@ -139,11 +140,10 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 1b. Admin Password Security Authentication Gate
-HASH_FILE="/etc/vms_admin.hash"
+# 1b. Admin Password Security Authentication Gate (Stored directly in script)
 if [ "$ENABLE_ADMIN_PASSWORD_PROTECTION" = true ]; then
-    if [ ! -f "$HASH_FILE" ]; then
-        log_warn "No Admin Password configured. Initializing Admin Security Password..."
+    if [ -z "$ADMIN_PASSWORD_HASH" ]; then
+        log_warn "No ADMIN_PASSWORD_HASH configured inside deploy_vms.sh. Initializing Admin Security Password..."
         read -s -p "Set New VMS Admin Deployment Password: " PASS1
         echo ""
         read -s -p "Confirm New VMS Admin Deployment Password: " PASS2
@@ -154,18 +154,24 @@ if [ "$ENABLE_ADMIN_PASSWORD_PROTECTION" = true ]; then
             exit 1
         fi
 
-        echo -n "$PASS1" | sha256sum | awk '{print $1}' > "$HASH_FILE"
-        chmod 600 "$HASH_FILE"
-        log_success "Admin Password successfully initialized and stored as SHA-256 in $HASH_FILE."
+        COMPUTED_HASH=$(echo -n "$PASS1" | sha256sum | awk '{print $1}')
+        ADMIN_PASSWORD_HASH="$COMPUTED_HASH"
+        
+        # Self-update ADMIN_PASSWORD_HASH in deploy_vms.sh if file is writable
+        SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+        if [ -w "$SCRIPT_PATH" ]; then
+            sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH=\"$COMPUTED_HASH\"|g" "$SCRIPT_PATH" 2>/dev/null || true
+            log_success "Admin Password SHA-256 hash successfully embedded into deploy_vms.sh!"
+        fi
+        log_info "ADMIN_PASSWORD_HASH=$COMPUTED_HASH"
     fi
 
     read -s -p "Enter VMS Deployment Admin Password: " ENTERED_PASS
     echo ""
 
     ENTERED_HASH=$(echo -n "$ENTERED_PASS" | sha256sum | awk '{print $1}')
-    STORED_HASH=$(cat "$HASH_FILE" | tr -d ' \n\r')
 
-    if [ "$ENTERED_HASH" != "$STORED_HASH" ]; then
+    if [ "$ENTERED_HASH" != "$ADMIN_PASSWORD_HASH" ]; then
         log_error "Access Denied: Incorrect Admin Password."
         exit 1
     fi
