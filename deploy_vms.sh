@@ -1,10 +1,34 @@
 #!/bin/bash
 
 # ==============================================================================
-# VMS Observability & Core Video Platform - Unified Standalone Deployer Script
+# VMS ALL-IN-ONE STANDALONE DEPLOYER & CONFIGURATOR
 # ==============================================================================
-# Usage: Place this script and your custom '.env' file in the same directory.
-#        Run with: sudo bash deploy_vms.sh
+# Usage:
+#   1. Edit the CONFIGURATION PROPERTIES below in this single file.
+#   2. Run: sudo bash deploy_vms.sh
+# ==============================================================================
+
+# --- [ 1. CONFIGURATION PROPERTIES ] -----------------------------------------
+UPSTREAM_CAMERA_API_URL="https://iportal.iviscloud.net/api/cameras/camera-videoserver"
+DATABASE_URL="sqlite+aiosqlite:///./data/app.db"
+REDIS_URL="redis://localhost:6379/0"
+MEDIAMTX_API_URL="http://localhost:9997"
+MEDIAMTX_WEBRTC_URL="http://localhost:8889"
+RECORDING_DIR="./data/recordings"        # Set custom path e.g. "/mnt/storage" if needed
+
+TURN_SERVER_URL=""                       # Leave empty to auto-detect system IP (turn:IP:3478)
+TURN_SERVER_USERNAME="admin"
+TURN_SERVER_CREDENTIAL="admin123"
+
+# --- [ 2. DEPLOYMENT & RESET TOGGLES ] ---------------------------------------
+CLEAN_DATABASE=true                      # Set true to wipe SQLite database on deploy
+CLEAN_RECORDINGS=true                    # Set true to wipe video recordings/HLS on deploy
+FLUSH_REDIS=true                         # Set true to flush Redis cache on deploy
+REINSTALL_VENV=true                      # Set true to recreate Python venv
+BRANCH_NAME="develop"                    # Git branch to clone/pull
+
+# ==============================================================================
+# DO NOT EDIT BELOW THIS LINE UNLESS WRITING CUSTOM SCRIPT LOGIC
 # ==============================================================================
 
 set -e
@@ -14,7 +38,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 log_info() {
     echo -e "${BLUE}[INFO] $(date +'%H:%M:%S')${NC} $1"
@@ -41,27 +65,29 @@ fi
 CURRENT_DIR="$(pwd)"
 log_info "Deployment initiated from: $CURRENT_DIR"
 
-# 2. Check for Provided .env File
-if [ ! -f "$CURRENT_DIR/.env" ]; then
-    log_warn "No .env file found in current directory ($CURRENT_DIR)."
-    log_warn "Creating a default template configuration..."
-    
+# Auto-detect TURN server URL if not explicitly set
+if [ -z "$TURN_SERVER_URL" ]; then
     PRIMARY_IP=$(hostname -I | awk '{print $1}')
-    cat <<EOF > "$CURRENT_DIR/.env"
-DATABASE_URL=sqlite+aiosqlite:///./data/app.db
-REDIS_URL=redis://localhost:6379/0
-MEDIAMTX_API_URL=http://localhost:9997
-MEDIAMTX_WEBRTC_URL=http://localhost:8889
-UPSTREAM_CAMERA_API_URL=https://iportal.iviscloud.net/api/cameras/camera-videoserver
-TURN_SERVER_URL=turn:$PRIMARY_IP:3478
-TURN_SERVER_USERNAME=admin
-TURN_SERVER_CREDENTIAL=admin123
-EOF
-    log_info "Created default template .env successfully."
+    TURN_SERVER_URL="turn:$PRIMARY_IP:3478"
 fi
 
-# 3. Stop Existing Services (if any) to prevent lockouts
-log_info "Stopping any active VMS services..."
+# 2. Generate .env File from Single-File Configuration Properties
+log_info "Generating configuration (.env) from top-level script properties..."
+cat <<EOF > "$CURRENT_DIR/.env"
+DATABASE_URL=$DATABASE_URL
+REDIS_URL=$REDIS_URL
+MEDIAMTX_API_URL=$MEDIAMTX_API_URL
+MEDIAMTX_WEBRTC_URL=$MEDIAMTX_WEBRTC_URL
+UPSTREAM_CAMERA_API_URL=$UPSTREAM_CAMERA_API_URL
+TURN_SERVER_URL=$TURN_SERVER_URL
+TURN_SERVER_USERNAME=$TURN_SERVER_USERNAME
+TURN_SERVER_CREDENTIAL=$TURN_SERVER_CREDENTIAL
+RECORDING_DIR=$RECORDING_DIR
+EOF
+log_info "Generated configuration file successfully."
+
+# 3. Stop Existing Services (if any)
+log_info "Stopping active VMS services..."
 systemctl stop video-backend.service || true
 systemctl stop mediamtx.service || true
 systemctl stop vms-monitor.service || true
@@ -78,79 +104,89 @@ elif [ -d "$INSTALL_DIR/.git" ]; then
     log_info "Directory $INSTALL_DIR exists and is a git repository. Performing clean git reset..."
     cd "$INSTALL_DIR"
     git fetch origin || true
-    git reset --hard origin/develop || true
+    git reset --hard "origin/$BRANCH_NAME" || true
     git clean -fd || true
 else
     log_info "Cloning fresh repository into $INSTALL_DIR..."
     rm -rf "$INSTALL_DIR"
-    git clone -b develop "$REPO_URL" "$INSTALL_DIR"
+    git clone -b "$BRANCH_NAME" "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# 5. Inject the Provided .env File
-log_info "Copying user .env configuration into backend folder..."
+# 5. Inject Generated .env Configuration
+log_info "Injecting .env configuration into backend folder..."
 cp "$CURRENT_DIR/.env" "$INSTALL_DIR/backend/.env"
 
-# 6. Install Host OS Packages
-log_info "Updating system repositories and installing dependencies..."
+# 6. Install Host OS Dependencies
+log_info "Updating system repositories and installing OS dependencies..."
 apt-get update -y
-apt-get install -y git python3-pip python3-venv ffmpeg sqlite3 redis-server curl wget tar
+apt-get install -y git python3-pip python3-venv ffmpeg sqlite3 redis-server curl wget tar rsync
 
-# 7. Setup Clean Python Virtual Environment
+# 7. Setup Python Virtual Environment
 VENV_PATH="/opt/video-backend-venv"
 log_info "Setting up Python virtual environment at $VENV_PATH..."
-if [ -d "$VENV_PATH" ]; then
-    log_info "Cleaning up previous environment data..."
+if [ "$REINSTALL_VENV" = true ] && [ -d "$VENV_PATH" ]; then
+    log_info "Wiping previous Python virtual environment..."
     rm -rf "$VENV_PATH"
 fi
-python3 -m venv "$VENV_PATH"
+if [ ! -d "$VENV_PATH" ]; then
+    python3 -m venv "$VENV_PATH"
+fi
 
-log_info "Upgrading pip and installing requirements (excluding AI/CUDA dependencies)..."
+log_info "Installing Python backend requirements..."
 "$VENV_PATH/bin/pip" install --upgrade pip
 "$VENV_PATH/bin/pip" install -r "$INSTALL_DIR/backend/requirements.txt"
-# Telemetry daemon packages
 "$VENV_PATH/bin/pip" install fastapi uvicorn psutil websockets httpx
 
-# 8. Download and Configure MediaMTX Standalone
+# 8. Setup MediaMTX Standalone Server
 log_info "Setting up MediaMTX standalone binary..."
 mkdir -p /opt/mediamtx
 
-log_info "Detecting latest MediaMTX version..."
-LATEST_TAG=$(curl -s https://api.github.com/repos/bluenviron/mediamtx/releases/latest | grep -oP '"tag_name": "\K[^"]+')
-if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
-    LATEST_TAG="v1.9.0"
+if [ ! -f /opt/mediamtx/mediamtx ]; then
+    log_info "Detecting latest MediaMTX version..."
+    LATEST_TAG=$(curl -s https://api.github.com/repos/bluenviron/mediamtx/releases/latest | grep -oP '"tag_name": "\K[^"]+' || echo "v1.9.0")
+    if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
+        LATEST_TAG="v1.9.0"
+    fi
+
+    log_info "Downloading MediaMTX release $LATEST_TAG..."
+    wget -q "https://github.com/bluenviron/mediamtx/releases/download/${LATEST_TAG}/mediamtx_${LATEST_TAG}_linux_amd64.tar.gz" -O /opt/mediamtx/mediamtx.tar.gz
+    tar -xzf /opt/mediamtx/mediamtx.tar.gz -C /opt/mediamtx/
+    rm -f /opt/mediamtx/mediamtx.tar.gz
 fi
 
-log_info "Downloading MediaMTX release $LATEST_TAG..."
-wget -q "https://github.com/bluenviron/mediamtx/releases/download/${LATEST_TAG}/mediamtx_${LATEST_TAG}_linux_amd64.tar.gz" -O /opt/mediamtx/mediamtx.tar.gz
-
-log_info "Extracting tarball..."
-tar -xzf /opt/mediamtx/mediamtx.tar.gz -C /opt/mediamtx/
-rm -f /opt/mediamtx/mediamtx.tar.gz
-
-log_info "Applying configurations to MediaMTX..."
+log_info "Applying MediaMTX configuration..."
 if [ -f "$INSTALL_DIR/mediamtx_linux.yml" ]; then
     cp "$INSTALL_DIR/mediamtx_linux.yml" /opt/mediamtx/mediamtx.yml
 elif [ -f "$INSTALL_DIR/backend/app/mediamtx.yml" ]; then
     cp "$INSTALL_DIR/backend/app/mediamtx.yml" /opt/mediamtx/mediamtx.yml
-else
-    log_warn "No custom mediamtx config file found. Running with default configs..."
 fi
 
-# 9. Setup Clean Storage Directories (ROM data)
-log_info "Wiping out previous databases, logs, and video fragments..."
-rm -rf "$INSTALL_DIR/backend/data"
+# 9. Perform Optional Cleanup Actions
+if [ "$CLEAN_DATABASE" = true ]; then
+    log_info "[CLEANUP] Removing SQLite database and backup camera cache..."
+    rm -f "$INSTALL_DIR/backend/data/app.db"*
+    rm -f "$INSTALL_DIR/backend/app/backup_cameras.json"
+fi
+
+if [ "$CLEAN_RECORDINGS" = true ]; then
+    log_info "[CLEANUP] Removing recorded video files and HLS segments..."
+    rm -rf "$INSTALL_DIR/backend/data/recordings/"*
+    rm -rf "$INSTALL_DIR/backend/data/hls/"*
+fi
+
 mkdir -p "$INSTALL_DIR/backend/data/recordings"
 mkdir -p "$INSTALL_DIR/backend/data/hls"
 
-log_info "Flushing Redis caches..."
-if command -v redis-cli &> /dev/null; then
-    redis-cli flushall || true
+if [ "$FLUSH_REDIS" = true ]; then
+    log_info "[CLEANUP] Flushing Redis cache..."
+    if command -v redis-cli &> /dev/null; then
+        redis-cli flushall || true
+    fi
 fi
 
-# 10. Register systemd Units
+# 10. Register systemd Service Units
 log_info "Registering systemd unit configuration files..."
 
-# backend service unit
 cat <<EOF > /etc/systemd/system/video-backend.service
 [Unit]
 Description=Camera Video Platform Backend FastAPI
@@ -168,7 +204,6 @@ Environment=PATH=$VENV_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bi
 WantedBy=multi-user.target
 EOF
 
-# mediamtx service unit
 cat <<EOF > /etc/systemd/system/mediamtx.service
 [Unit]
 Description=MediaMTX RTSP/WebRTC Server
@@ -185,7 +220,6 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# system observability portal service unit
 cat <<EOF > /etc/systemd/system/vms-monitor.service
 [Unit]
 Description=VMS Standalone Telemetry and Operations Portal
@@ -204,7 +238,7 @@ WantedBy=multi-user.target
 EOF
 
 # 11. Enable & Launch Services
-log_info "Reloading systemd daemons and launching services..."
+log_info "Reloading systemd daemons and starting VMS services..."
 systemctl daemon-reload
 
 systemctl enable video-backend.service
@@ -215,12 +249,12 @@ systemctl restart mediamtx.service
 systemctl restart video-backend.service
 systemctl restart vms-monitor.service
 
-log_success "Deployment completed successfully!"
+log_success "VMS deployment and configuration completed successfully!"
 log_info "--------------------------------------------------------"
-log_info "Core Backend port: http://(your-ip):8005"
-log_info "Observability Portal port: http://(your-ip):8010"
+log_info "Core Backend API   : http://(your-ip):8005"
+log_info "Telemetry Portal   : http://(your-ip):8010"
 log_info "--------------------------------------------------------"
-log_info "System Status Indicators:"
+log_info "Active Service Status:"
 systemctl is-active mediamtx.service
 systemctl is-active video-backend.service
 systemctl is-active vms-monitor.service
