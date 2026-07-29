@@ -96,6 +96,7 @@ ENABLE_SD_CARD_ON_DEMAND=true
 SD_CARD_ON_DEMAND_RETENTION_SECONDS=3600
 
 # --- [ 2. DEPLOYMENT & RESET TOGGLES ] ---------------------------------------
+ENABLE_ADMIN_PASSWORD_PROTECTION=true     # Set true to enforce hashed password authentication
 CLEAN_DATABASE=true                      # Wipe SQLite database on deploy
 CLEAN_RECORDINGS=true                    # Wipe video recordings & HLS on deploy
 FLUSH_REDIS=true                         # Flush Redis cache on deploy
@@ -136,6 +137,40 @@ log_error() {
 if [ "$EUID" -ne 0 ]; then
     log_error "Please run this script as root (using sudo)."
     exit 1
+fi
+
+# 1b. Admin Password Security Authentication Gate
+HASH_FILE="/etc/vms_admin.hash"
+if [ "$ENABLE_ADMIN_PASSWORD_PROTECTION" = true ]; then
+    if [ ! -f "$HASH_FILE" ]; then
+        log_warn "No Admin Password configured. Initializing Admin Security Password..."
+        read -s -p "Set New VMS Admin Deployment Password: " PASS1
+        echo ""
+        read -s -p "Confirm New VMS Admin Deployment Password: " PASS2
+        echo ""
+
+        if [ "$PASS1" != "$PASS2" ] || [ -z "$PASS1" ]; then
+            log_error "Passwords do not match or are empty. Aborting deployment."
+            exit 1
+        fi
+
+        echo -n "$PASS1" | sha256sum | awk '{print $1}' > "$HASH_FILE"
+        chmod 600 "$HASH_FILE"
+        log_success "Admin Password successfully initialized and stored as SHA-256 in $HASH_FILE."
+    fi
+
+    read -s -p "Enter VMS Deployment Admin Password: " ENTERED_PASS
+    echo ""
+
+    ENTERED_HASH=$(echo -n "$ENTERED_PASS" | sha256sum | awk '{print $1}')
+    STORED_HASH=$(cat "$HASH_FILE" | tr -d ' \n\r')
+
+    if [ "$ENTERED_HASH" != "$STORED_HASH" ]; then
+        log_error "Access Denied: Incorrect Admin Password."
+        exit 1
+    fi
+
+    log_success "Admin Password verified successfully."
 fi
 
 CURRENT_DIR="$(pwd)"
