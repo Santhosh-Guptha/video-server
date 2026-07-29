@@ -52,7 +52,7 @@ DATABASE_URL=sqlite+aiosqlite:///./data/app.db
 REDIS_URL=redis://localhost:6379/0
 MEDIAMTX_API_URL=http://localhost:9997
 MEDIAMTX_WEBRTC_URL=http://localhost:8889
-UPSTREAM_CAMERA_API_URL=https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver
+UPSTREAM_CAMERA_API_URL=https://iportal.iviscloud.net/api/cameras/camera-videoserver
 TURN_SERVER_URL=turn:$PRIMARY_IP:3478
 TURN_SERVER_USERNAME=admin
 TURN_SERVER_CREDENTIAL=admin123
@@ -70,14 +70,19 @@ systemctl stop vms-monitor.service || true
 INSTALL_DIR="/opt/video-server"
 REPO_URL="https://github.com/Santhosh-Guptha/video-server.git"
 
-if [ -d "$INSTALL_DIR" ]; then
-    log_info "Directory $INSTALL_DIR exists. Performing clean git reset..."
+if [ -d "$CURRENT_DIR/backend" ]; then
+    log_info "Deploying directly from local source folder ($CURRENT_DIR) into $INSTALL_DIR..."
+    mkdir -p "$INSTALL_DIR"
+    rsync -a --exclude='node_modules' --exclude='.git' --exclude='*.db' --exclude='.venv' "$CURRENT_DIR/" "$INSTALL_DIR/" 2>/dev/null || true
+elif [ -d "$INSTALL_DIR/.git" ]; then
+    log_info "Directory $INSTALL_DIR exists and is a git repository. Performing clean git reset..."
     cd "$INSTALL_DIR"
-    git fetch origin
-    git reset --hard origin/develop
-    git clean -fd
+    git fetch origin || true
+    git reset --hard origin/develop || true
+    git clean -fd || true
 else
     log_info "Cloning fresh repository into $INSTALL_DIR..."
+    rm -rf "$INSTALL_DIR"
     git clone -b develop "$REPO_URL" "$INSTALL_DIR"
 fi
 

@@ -3,11 +3,13 @@
 # Run this script as Administrator to forward WSL ports to LAN
 # ============================================================
 
-$WSL_IP = "172.27.154.190"
-$WIN_IP  = "172.22.1.151"
+# Fetch current WSL IP dynamically
+$WSL_IP = (wsl -d Ubuntu-22.04 hostname -I).Trim().Split()[0]
+$WIN_IP  = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Wi-Fi*", "Ethernet*" | Select-Object -First 1).IPAddress
 
 $ports = @(
-    @{ Port = 8000; Desc = "FastAPI Backend" },
+    @{ Port = 8005; Desc = "FastAPI Backend" },
+    @{ Port = 8010; Desc = "Observability Portal" },
     @{ Port = 5173; Desc = "Web UI (Vite)" },
     @{ Port = 9999; Desc = "Edge TCP Push Receiver" },
     @{ Port = 8554; Desc = "MediaMTX RTSP" },

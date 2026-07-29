@@ -390,7 +390,7 @@ fi
 "$VENV_DIR/bin/pip" install -r "$INSTALL_DIR/backend/requirements.txt"
 
 # Read existing .env values if they exist to maintain configuration across runs
-UPSTREAM_URL="https://iportal-poc.iviscloud.net/api/cameras/camera-videoserver"
+UPSTREAM_URL="https://iportal.iviscloud.net/api/cameras/camera-videoserver"
 TURN_SERVER_URL_VAL=""
 if [[ -f "$INSTALL_DIR/backend/.env" ]]; then
     EXISTING_UPSTREAM=$(grep -E "^UPSTREAM_CAMERA_API_URL=" "$INSTALL_DIR/backend/.env" | cut -d'=' -f2- || true)

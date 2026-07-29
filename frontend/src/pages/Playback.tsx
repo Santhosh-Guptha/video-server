@@ -121,6 +121,13 @@ export function Playback({ streamId, cameraName, cameras, onSelectCamera }: Prop
     setHasSearched(false)
   }, [streamId])
 
+  // Automatically fetch timeline data and segments when selectedDate updates
+  useEffect(() => {
+    if (streamId && selectedDate) {
+      loadTimelineData()
+    }
+  }, [streamId, selectedDate])
+
   // Get start/end timestamps of the selected day in local timezone
   const dayBoundaries = useMemo(() => {
     if (!selectedDate) return { start: 0, end: 0 }
