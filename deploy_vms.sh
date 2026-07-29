@@ -101,6 +101,7 @@ CLEAN_RECORDINGS=true                    # Wipe video recordings & HLS on deploy
 FLUSH_REDIS=true                         # Flush Redis cache on deploy
 REINSTALL_VENV=true                      # Recreate Python venv
 BRANCH_NAME="develop"                    # Git branch to clone/pull
+GITHUB_TOKEN=""                          # (Optional) GitHub Personal Access Token for private repos
 
 # ==============================================================================
 # DO NOT EDIT BELOW THIS LINE UNLESS WRITING CUSTOM SCRIPT LOGIC
@@ -295,6 +296,9 @@ systemctl stop vms-monitor.service || true
 # 4. Clone or Pull Latest Project Source
 INSTALL_DIR="/opt/video-server"
 REPO_URL="https://github.com/Santhosh-Guptha/video-server.git"
+if [ -n "$GITHUB_TOKEN" ]; then
+    REPO_URL="https://${GITHUB_TOKEN}@github.com/Santhosh-Guptha/video-server.git"
+fi
 
 if [ -d "$CURRENT_DIR/backend" ]; then
     log_info "Deploying directly from local source folder ($CURRENT_DIR) into $INSTALL_DIR..."
