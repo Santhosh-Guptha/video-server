@@ -82,5 +82,9 @@
     "enable_device_config": false,
     "enable_local_transcode": false,
     "enable_sd_card_on_demand": true,
-    "sd_card_on_demand_retention_seconds": 3600
+    "sd_card_on_demand_retention_seconds": 3600,
+    "cloud_retention_days": 30,
+    "nvr_edge_fallback_enabled": true,
+    "nvr_edge_max_days": 120,
+    "passthrough_live_enabled": true
 }

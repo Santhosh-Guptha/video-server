@@ -1981,27 +1981,25 @@ async def playback(stream_id: str, start_ts: float, end_ts: float, session: Anno
     )
     segments = list(res.scalars().all())
 
-    if not segments:
-        stmt = (
-            select(RecordingSegment)
-            .where(RecordingSegment.stream_id == stream_id)
-            .where(RecordingSegment.start_ts >= start_ts)
-            .order_by(RecordingSegment.start_ts.asc())
-            .limit(1)
-        )
-        fallback_res = await session.execute(stmt)
-        nearest = fallback_res.scalar_one_or_none()
-        if nearest:
-            new_start_ts = nearest.start_ts
-            new_end_ts = new_start_ts + 3600
-            res = await session.execute(
-                select(RecordingSegment)
-                .where(RecordingSegment.stream_id == stream_id)
-                .where(RecordingSegment.end_ts >= new_start_ts)
-                .where(RecordingSegment.start_ts <= new_end_ts)
-                .order_by(RecordingSegment.start_ts.asc())
-            )
-            segments = list(res.scalars().all())
+    if not segments and settings.nvr_edge_fallback_enabled and stream:
+        # Fallback to NVR On-Demand RTSP Playback for dates older than cloud retention or missing local segments
+        try:
+            from .providers import get_playback_recovery_provider
+            camera_res = await session.execute(select(Camera).where(Camera.id == stream.camera_id))
+            camera = camera_res.scalar_one_or_none()
+            make = camera.make if camera else None
+            provider = get_playback_recovery_provider(make)
+            rtsp_url = provider.build_playback_url(stream, start_ts, end_ts)
+            segments = [
+                RecordingSegmentOut(
+                    stream_id=stream_id,
+                    file_path=rtsp_url,
+                    start_ts=start_ts,
+                    end_ts=end_ts
+                )
+            ]
+        except Exception as e:
+            print(f"[playback] NVR edge fallback failed: {e}")
 
     return segments
 
@@ -2100,7 +2098,16 @@ async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depen
         .where(RecordingSegment.stream_id == stream_id)
         .order_by(RecordingSegment.start_ts.asc())
     )
-    timestamps = res.scalars().all()
+    timestamps = list(res.scalars().all())
+    
+    if settings.nvr_edge_fallback_enabled:
+        # Include past calendar dates up to nvr_edge_max_days (120 days) from NVR storage
+        import datetime
+        now = datetime.datetime.now()
+        for d in range(settings.nvr_edge_max_days):
+            past_dt = now - datetime.timedelta(days=d)
+            timestamps.append(past_dt.timestamp())
+
     dates = sorted(list(set(
         time.strftime("%Y-%m-%d", time.localtime(ts))
         for ts in timestamps

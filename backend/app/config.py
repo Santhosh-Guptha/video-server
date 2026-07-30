@@ -95,6 +95,10 @@ class Settings(BaseSettings):
 
     enable_retention: bool = defaults.get("enable_retention", True)
     default_retention_days: int = defaults.get("default_retention_days", 30)
+    cloud_retention_days: int = defaults.get("cloud_retention_days", 30)
+    nvr_edge_fallback_enabled: bool = defaults.get("nvr_edge_fallback_enabled", True)
+    nvr_edge_max_days: int = defaults.get("nvr_edge_max_days", 120)
+    passthrough_live_enabled: bool = defaults.get("passthrough_live_enabled", True)
     enable_low_disk_eviction: bool = defaults.get("enable_low_disk_eviction", True)
     low_disk_space_threshold_gb: float = defaults.get("low_disk_space_threshold_gb", 5.0)
     target_free_space_gb: float = defaults.get("target_free_space_gb", 10.0)
