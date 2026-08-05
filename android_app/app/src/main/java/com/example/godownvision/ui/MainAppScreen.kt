@@ -736,9 +736,16 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                     activeTab = "PLAYBACK"
                                     Toast.makeText(context, "Jumped to ${targetCam.name} @ $timestamp", Toast.LENGTH_SHORT).show()
                                 },
+                                onUpdateBookmarkStatus = { bookmarkId, newStatus ->
+                                    viewModel.updateBookmarkStatus(bookmarkId, newStatus)
+                                },
                                 onDeleteBookmark = { bookmarkId ->
-                                    viewModel.deleteBookmark(bookmarkId)
-                                    Toast.makeText(context, "Bookmark removed", Toast.LENGTH_SHORT).show()
+                                    val deleted = viewModel.deleteBookmark(bookmarkId)
+                                    if (deleted) {
+                                        Toast.makeText(context, "Bookmark deleted", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "Unreviewed events cannot be deleted. Mark as reviewed first.", Toast.LENGTH_LONG).show()
+                                    }
                                 }
                             )
                         }

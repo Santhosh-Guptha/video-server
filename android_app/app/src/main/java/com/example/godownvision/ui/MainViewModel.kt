@@ -146,7 +146,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         vaultRepo.addBookmark(bookmark)
     }
 
-    fun deleteBookmark(bookmarkId: String) {
-        vaultRepo.deleteBookmark(bookmarkId)
+    fun updateBookmarkStatus(bookmarkId: String, newStatus: String, reviewedBy: String = "admin") {
+        vaultRepo.updateBookmarkStatus(bookmarkId, newStatus, reviewedBy)
+    }
+
+    fun deleteBookmark(bookmarkId: String): Boolean {
+        return vaultRepo.deleteBookmark(bookmarkId)
     }
 }

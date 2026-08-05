@@ -63,6 +63,9 @@ dependencies {
   // LibVLC for Native In-App RTSP H.265/H.264 Playback (same engine as VLC player app)
   implementation("org.videolan.android:libvlc-all:3.5.1")
 
+  // Android WorkManager for Background Health Polling
+  implementation("androidx.work:work-runtime-ktx:2.9.0")
+
   // Unit Test Dependencies
   testImplementation("junit:junit:4.13.2")
 }

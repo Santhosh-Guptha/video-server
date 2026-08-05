@@ -1,5 +1,6 @@
 package com.example.godownvision.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -8,15 +9,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,8 +33,11 @@ fun BookmarksTabScreen(
     bookmarks: List<BookmarkIncident>,
     cameraList: List<CameraEntity>,
     onJumpToPlayback: (CameraEntity, String) -> Unit,
+    onUpdateBookmarkStatus: (String, String) -> Unit,
     onDeleteBookmark: (String) -> Unit
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -111,6 +119,8 @@ fun BookmarksTabScreen(
             ) {
                 items(bookmarks.sortedByDescending { it.createdAt }) { bookmark ->
                     val matchedCam = cameraList.find { it.id == bookmark.cameraId }
+                    val isOfflineIncident = bookmark.type == "CAMERA_OFFLINE_INCIDENT"
+                    val isReviewed = bookmark.status == "REVIEWED"
 
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
@@ -118,7 +128,66 @@ fun BookmarksTabScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            // Top Row: Camera Name & Timestamp
+                            // Top Badges Row: Type & Status
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Incident Type Pill
+                                Surface(
+                                    color = if (isOfflineIncident) Color(0xFFEF4444).copy(alpha = 0.2f) else Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isOfflineIncident) Icons.Default.Warning else Icons.Default.Bookmark,
+                                            contentDescription = null,
+                                            tint = if (isOfflineIncident) Color(0xFFEF4444) else Color(0xFFF59E0B),
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = if (isOfflineIncident) "🚨 OFFLINE INCIDENT" else "📌 MANUAL BOOKMARK",
+                                            color = if (isOfflineIncident) Color(0xFFEF4444) else Color(0xFFF59E0B),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        )
+                                    }
+                                }
+
+                                // Status Pill
+                                Surface(
+                                    color = if (isReviewed) Color(0xFF10B981).copy(alpha = 0.2f) else Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isReviewed) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = if (isReviewed) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = if (isReviewed) "✓ REVIEWED & VERIFIED" else "⚠️ UNREVIEWED",
+                                            color = if (isReviewed) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Camera Name & Timestamp
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -175,7 +244,7 @@ fun BookmarksTabScreen(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            // Action Buttons
+                            // Bottom Row: Created By & Action Buttons
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -187,16 +256,44 @@ fun BookmarksTabScreen(
                                     fontSize = 10.sp
                                 )
 
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    // Delete Bookmark Button
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    // Mark as Reviewed Button (if unreviewed)
+                                    if (!isReviewed) {
+                                        IconButton(
+                                            onClick = {
+                                                onUpdateBookmarkStatus(bookmark.id, "REVIEWED")
+                                                Toast.makeText(context, "Incident marked as Reviewed & Verified", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Verified,
+                                                contentDescription = "Mark as Reviewed",
+                                                tint = Color(0xFF38BDF8),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+
+                                    // Delete Bookmark Button (Protected: Allowed ONLY if REVIEWED)
                                     IconButton(
-                                        onClick = { onDeleteBookmark(bookmark.id) },
+                                        onClick = {
+                                            if (!isReviewed) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "Unreviewed events cannot be deleted. Mark as reviewed first.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            } else {
+                                                onDeleteBookmark(bookmark.id)
+                                            }
+                                        },
                                         modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Delete,
                                             contentDescription = "Delete",
-                                            tint = Color(0xFFEF4444),
+                                            tint = if (isReviewed) Color(0xFFEF4444) else Color(0xFF475569),
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }

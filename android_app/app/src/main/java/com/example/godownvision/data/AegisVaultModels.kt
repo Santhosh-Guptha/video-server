@@ -40,7 +40,11 @@ data class BookmarkIncident(
     val note: String,
     val snapshotBase64: String = "",
     val createdBy: String = "admin",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val type: String = "MANUAL_INCIDENT", // "MANUAL_INCIDENT" or "CAMERA_OFFLINE_INCIDENT"
+    val status: String = "UNREVIEWED", // "UNREVIEWED" or "REVIEWED"
+    val reviewedBy: String = "",
+    val reviewedAt: Long = 0L
 )
 
 data class AegisVaultData(

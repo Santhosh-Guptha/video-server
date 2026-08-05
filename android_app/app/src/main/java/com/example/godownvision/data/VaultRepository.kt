@@ -176,7 +176,11 @@ class VaultRepository(private val context: Context) {
                         note = bObj.optString("note", ""),
                         snapshotBase64 = bObj.optString("snapshot_base64", ""),
                         createdBy = bObj.optString("created_by", "admin"),
-                        createdAt = bObj.optLong("created_at", System.currentTimeMillis())
+                        createdAt = bObj.optLong("created_at", System.currentTimeMillis()),
+                        type = bObj.optString("type", "MANUAL_INCIDENT"),
+                        status = bObj.optString("status", "UNREVIEWED"),
+                        reviewedBy = bObj.optString("reviewed_by", ""),
+                        reviewedAt = bObj.optLong("reviewed_at", 0L)
                     )
                 )
             }
@@ -282,6 +286,10 @@ class VaultRepository(private val context: Context) {
                     put("snapshot_base64", b.snapshotBase64)
                     put("created_by", b.createdBy)
                     put("created_at", b.createdAt)
+                    put("type", b.type)
+                    put("status", b.status)
+                    put("reviewed_by", b.reviewedBy)
+                    put("reviewed_at", b.reviewedAt)
                 }
                 bookmarksArr.put(bObj)
             }
@@ -301,10 +309,30 @@ class VaultRepository(private val context: Context) {
         saveVault(current.copy(bookmarks = updated))
     }
 
-    fun deleteBookmark(bookmarkId: String) {
+    fun updateBookmarkStatus(bookmarkId: String, newStatus: String, reviewedBy: String = "admin") {
         val current = _vaultData.value
+        val updated = current.bookmarks.map { b ->
+            if (b.id == bookmarkId) {
+                b.copy(
+                    status = newStatus,
+                    reviewedBy = reviewedBy,
+                    reviewedAt = System.currentTimeMillis()
+                )
+            } else b
+        }
+        saveVault(current.copy(bookmarks = updated))
+    }
+
+    fun deleteBookmark(bookmarkId: String): Boolean {
+        val current = _vaultData.value
+        val target = current.bookmarks.find { it.id == bookmarkId }
+        // Deletion rule: UNREVIEWED events cannot be deleted! Only REVIEWED events can be deleted!
+        if (target != null && target.status != "REVIEWED") {
+            return false
+        }
         val updated = current.bookmarks.filterNot { it.id == bookmarkId }
         saveVault(current.copy(bookmarks = updated))
+        return true
     }
 
     fun updateAdminPassword(newPasswordHash: String, clearForceFlag: Boolean = true) {
