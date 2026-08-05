@@ -1433,153 +1433,200 @@ fun HourlyTimelineScrubber(
     clipStartSec: Long,
     clipEndSec: Long,
     playbackSpeed: Float,
+    isPlaybackActive: Boolean = false,
     isDownloadMode: Boolean,
+    onPlayPauseToggle: () -> Unit = {},
     onSeekPositionChanged: (Long) -> Unit,
     onClipRangeChanged: (Long, Long) -> Unit,
     onSpeedChanged: (Float) -> Unit,
     onToggleDownloadMode: () -> Unit
 ) {
-    val hourPrefix = remember(startHourStr) {
-        if (startHourStr.contains(":")) startHourStr.split(":")[0] else "12"
+    val baseHour = remember(startHourStr) {
+        if (startHourStr.contains(":")) startHourStr.split(":")[0].toIntOrNull() ?: 12 else 12
     }
 
     var sliderValue by remember(currentPositionSec) { mutableFloatStateOf(currentPositionSec.coerceIn(0L, 3599L).toFloat()) }
     var showSpeedDropdown by remember { mutableStateOf(false) }
-    var rangeValues by remember(clipStartSec, clipEndSec) {
-        mutableStateOf(clipStartSec.toFloat()..clipEndSec.toFloat())
-    }
 
-    val formattedCurrentTime by remember {
+    // Dynamic Tooltip String e.g. "10:30:21 AM"
+    val tooltipTimeStr by remember {
         derivedStateOf {
             val totalSec = sliderValue.toInt()
             val mm = totalSec / 60
             val ss = totalSec % 60
-            String.format(Locale.getDefault(), "%s:%02d:%02d", hourPrefix, mm, ss)
+            val amPm = if (baseHour < 12) "AM" else "PM"
+            val displayHour = when {
+                baseHour == 0 -> 12
+                baseHour > 12 -> baseHour - 12
+                else -> baseHour
+            }
+            String.format(Locale.getDefault(), "%02d:%02d:%02d %s", displayHour, mm, ss, amPm)
         }
     }
 
-    val clipDurationSec by remember {
-        derivedStateOf { (rangeValues.endInclusive - rangeValues.start).toLong() }
+    // 15-Minute Interval Time Ticks Labels
+    val tickLabels = remember(baseHour) {
+        val nextHour = (baseHour + 1) % 24
+        val formatAmPm = { h: Int, m: Int ->
+            val amPm = if (h < 12) "AM" else "PM"
+            val displayH = when {
+                h == 0 -> 12
+                h > 12 -> h - 12
+                else -> h
+            }
+            String.format(Locale.getDefault(), "%02d:%02d %s", displayH, m, amPm)
+        }
+        listOf(
+            formatAmPm(baseHour, 0),
+            formatAmPm(baseHour, 15),
+            formatAmPm(baseHour, 30),
+            formatAmPm(baseHour, 45),
+            formatAmPm(nextHour, 0)
+        )
     }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFFFAFAFA), RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .background(Color(0xFF1E293B), RoundedCornerShape(14.dp))
+            .border(BorderStroke(1.dp, Color(0xFF334155)), RoundedCornerShape(14.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
     ) {
+        // Main Single Control Bar
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .background(Color(0xFF262626), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
-            ) {
-                Text(
-                    text = "Seek: $formattedCurrentTime",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp
-                )
+            // Play / Pause Button Group (Left side)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = onPlayPauseToggle,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(
+                            if (isPlaybackActive) Color(0xFF0284C7) else Color(0xFF38BDF8),
+                            CircleShape
+                        )
+                ) {
+                    Icon(
+                        imageVector = if (isPlaybackActive) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = "Play/Pause",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (isDownloadMode) {
+            // Timeline Slider Box with Floating Time Pin & Ticks (Center)
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                // Tooltip Pin aligned over thumb position
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val progressFraction = (sliderValue / 3599f).coerceIn(0f, 1f)
+                    val boxWidth = maxWidth
+
                     Box(
                         modifier = Modifier
-                            .background(Color(0xFF8B5CF6), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                            .fillMaxWidth()
+                            .height(20.dp)
                     ) {
-                        val clipStartFormatted = String.format(Locale.getDefault(), "%s:%02d:%02d", hourPrefix, (rangeValues.start / 60).toInt(), (rangeValues.start % 60).toInt())
-                        val clipEndFormatted = String.format(Locale.getDefault(), "%s:%02d:%02d", hourPrefix, (rangeValues.endInclusive / 60).toInt(), (rangeValues.endInclusive % 60).toInt())
-                        Text(
-                            text = "Clip: $clipStartFormatted - $clipEndFormatted (${clipDurationSec}s)",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 10.sp
-                        )
+                        Surface(
+                            color = Color(0xFF38BDF8),
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .offset(x = (boxWidth * progressFraction) - 36.dp)
+                        ) {
+                            Text(
+                                text = tooltipTimeStr,
+                                color = Color(0xFF0F172A),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
 
-                Surface(
-                    color = if (isDownloadMode) Color(0xFF8B5CF6) else Color(0xFF1E293B),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.clickable { onToggleDownloadMode() }
+                // Slider Track
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { pos -> sliderValue = pos },
+                    onValueChangeFinished = { onSeekPositionChanged(sliderValue.toLong()) },
+                    valueRange = 0f..3599f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF38BDF8),
+                        activeTrackColor = Color(0xFF38BDF8),
+                        inactiveTrackColor = Color(0xFF334155)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                )
+
+                // 15-Minute Interval Time Ticks Below Track
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = "Download Mode", tint = Color.White, modifier = Modifier.size(12.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
+                    tickLabels.forEach { label ->
                         Text(
-                            text = if (isDownloadMode) "Close Clip" else "Download Clip",
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            text = label,
+                            color = Color(0xFF94A3B8),
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(4.dp))
+            // Download Icon Button (Right side)
+            Surface(
+                color = if (isDownloadMode) Color(0xFF8B5CF6) else Color(0xFF0F172A),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, if (isDownloadMode) Color(0xFF8B5CF6) else Color(0xFF334155)),
+                modifier = Modifier.clickable { onToggleDownloadMode() }
+            ) {
+                Box(
+                    modifier = Modifier.size(34.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Download Clip",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = "Start",
-                tint = Color(0xFFE67E22),
-                modifier = Modifier.size(16.dp)
-            )
-
-            Spacer(modifier = Modifier.width(4.dp))
-
-            Slider(
-                value = sliderValue,
-                onValueChange = { pos ->
-                    sliderValue = pos
-                },
-                onValueChangeFinished = {
-                    onSeekPositionChanged(sliderValue.toLong())
-                },
-                valueRange = 0f..3599f,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFFE67E22),
-                    activeTrackColor = Color(0xFFE67E22),
-                    inactiveTrackColor = Color(0xFFE2E8F0)
-                ),
-                modifier = Modifier.weight(1f)
-            )
-
-            Spacer(modifier = Modifier.width(6.dp))
-
+            // Speed Selector Dropdown Pill (Far Right: e.g. 1.0x ▾)
             Box {
                 Surface(
-                    color = Color(0xFFF1F5F9),
-                    shape = RoundedCornerShape(12.dp),
-                    border = CardDefaults.outlinedCardBorder(),
+                    color = Color(0xFF0F172A),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
                     modifier = Modifier.clickable { showSpeedDropdown = true }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.AccessTime, contentDescription = "Speed", tint = Color.Black, modifier = Modifier.size(12.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (playbackSpeed == 1.0f) "Normal" else "${playbackSpeed}x",
-                            color = Color.Black,
-                            fontSize = 10.sp,
+                            text = "${playbackSpeed}x",
+                            color = Color.White,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = Color.Black, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = "Speed",
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
                     }
                 }
 
@@ -1587,24 +1634,20 @@ fun HourlyTimelineScrubber(
                     expanded = showSpeedDropdown,
                     onDismissRequest = { showSpeedDropdown = false },
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 200.dp)
-                        .background(Color.White)
+                        .background(Color(0xFF1E293B))
+                        .width(90.dp)
                 ) {
-                    listOf(1.0f to "1.0x (Normal)", 1.25f to "1.25x", 1.5f to "1.5x", 1.75f to "1.75x", 2.0f to "2.0x", 4.0f to "4.0x").forEach { (speed, label) ->
-                        val isSelected = playbackSpeed == speed
+                    listOf(0.5f, 1.0f, 2.0f, 4.0f).forEach { speed ->
+                        val isSelected = speed == playbackSpeed
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    text = label,
+                                    text = "${speed}x",
                                     fontSize = 12.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) Color(0xFF0284C7) else Color(0xFF1E293B)
+                                    color = if (isSelected) Color(0xFF38BDF8) else Color.White
                                 )
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(if (isSelected) Color(0xFFE0F2FE) else Color.Transparent),
                             onClick = {
                                 onSpeedChanged(speed)
                                 showSpeedDropdown = false
@@ -1615,43 +1658,37 @@ fun HourlyTimelineScrubber(
             }
         }
 
+        // Clip Range Selector (Shown when Download Clip is activated)
         if (isDownloadMode) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+            Spacer(modifier = Modifier.height(8.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0F172A), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
             ) {
-                Text("Select Range:", color = Color(0xFF8B5CF6), fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("CLIP RANGE EXPORT", color = Color(0xFFC084FC), fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                    val clipDurationSec = (clipEndSec - clipStartSec)
+                    Text("Duration: ${clipDurationSec}s", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                }
+
                 RangeSlider(
-                    value = rangeValues,
+                    value = clipStartSec.toFloat()..clipEndSec.toFloat(),
                     onValueChange = { range ->
-                        rangeValues = range
-                    },
-                    onValueChangeFinished = {
-                        onClipRangeChanged(rangeValues.start.toLong(), rangeValues.endInclusive.toLong())
+                        onClipRangeChanged(range.start.toLong(), range.endInclusive.toLong())
                     },
                     valueRange = 0f..3599f,
                     colors = SliderDefaults.colors(
                         thumbColor = Color(0xFF8B5CF6),
                         activeTrackColor = Color(0xFF8B5CF6),
-                        inactiveTrackColor = Color(0xFFE2E8F0)
+                        inactiveTrackColor = Color(0xFF334155)
                     ),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            listOf("00", "10", "20", "30", "40", "50", "60").forEach { min ->
-                Text(
-                    text = "$hourPrefix:$min",
-                    color = Color(0xFFA1A1AA),
-                    fontSize = 9.sp
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
@@ -2474,7 +2511,24 @@ fun ScreenD_Playback(
                     clipStartSec = clipStartSec,
                     clipEndSec = clipEndSec,
                     playbackSpeed = playbackSpeed,
+                    isPlaybackActive = isPlaybackActive,
                     isDownloadMode = isDownloadMode,
+                    onPlayPauseToggle = {
+                        if (isMultiSyncMode) {
+                            syncedPlayersMap.values.forEach { p ->
+                                try {
+                                    if (p.isPlaying) p.pause() else { p.play(); setMediaPlayerRate(p, playbackSpeed) }
+                                } catch (e: Exception) {}
+                            }
+                            isPlaybackActive = syncedPlayersMap.values.any { it.isPlaying }
+                        } else {
+                            val player = playerInstance
+                            if (player != null) {
+                                if (player.isPlaying) player.pause() else { player.play(); setMediaPlayerRate(player, playbackSpeed) }
+                                isPlaybackActive = player.isPlaying
+                            }
+                        }
+                    },
                     onSeekPositionChanged = { sec ->
                         currentSeekSec = sec
                         val baseHour = if (startTime.contains(":")) startTime.split(":")[0].toIntOrNull() ?: 12 else 12
