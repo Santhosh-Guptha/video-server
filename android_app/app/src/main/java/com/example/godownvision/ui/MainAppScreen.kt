@@ -19,6 +19,7 @@ import android.view.WindowInsetsController
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,10 +32,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CameraAlt
@@ -46,6 +49,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Domain
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.GridView
@@ -57,6 +61,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
@@ -374,17 +379,34 @@ fun RtspVideoPlayer(
 fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val activity = context as? Activity
-    val cameraList by viewModel.cameraList.collectAsState()
 
-    var activeTab by remember { mutableStateOf("CHANNELS") }
+    val sessionState by viewModel.sessionState.collectAsState()
+    val cameraList by viewModel.filteredCameraList.collectAsState()
+    val vaultData by viewModel.vaultData.collectAsState()
+    val activeUserFeatures by viewModel.activeUserFeatures.collectAsState()
+    val canConfigureCameras by viewModel.canConfigureCameras.collectAsState()
+
+    var showSplash by remember { mutableStateOf(true) }
+    var activeTab by remember { mutableStateOf("GRID") }
     var isRemoteMode by remember { mutableStateOf(true) }
     var selectedCamIds by remember { mutableStateOf(setOf<Long>()) }
     var singleViewCam by remember { mutableStateOf<CameraEntity?>(null) }
     var playbackCam by remember { mutableStateOf<CameraEntity?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingCamera by remember { mutableStateOf<CameraEntity?>(null) }
+    var showLogoutConfirm by remember { mutableStateOf(false) }
 
     var activeFullscreen by remember { mutableStateOf<FullscreenData?>(null) }
+
+    // Pitch Black Splash Screen Animation
+    if (showSplash) {
+        SplashScreen(
+            onSplashFinished = {
+                showSplash = false
+            }
+        )
+        return
+    }
 
     // Lock portrait on initial app launch (since we handle orientation programmatically)
     LaunchedEffect(Unit) {
@@ -433,56 +455,104 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
         }
     }
 
+    // Unauthenticated State -> Show Login Screen
+    if (sessionState is ActiveSession.Unauthenticated) {
+        LoginScreen(
+            vaultData = vaultData,
+            onLoginSubmit = { username, password ->
+                viewModel.login(username, password)
+            },
+            onVerifyMasterKey = { key ->
+                viewModel.verifyMasterKey(key)
+            },
+            onVerifySecurityAnswers = { username, answers ->
+                viewModel.verifySecurityAnswers(username, answers)
+            },
+            onResetPassword = { username, newPass ->
+                viewModel.resetPasswordWithRecovery(username, newPass)
+            },
+            onEmergencyReset = {
+                viewModel.emergencyResetVault()
+            }
+        )
+        return
+    }
+
+    // Check for Force Password Change
+    val currentUsername = when (val s = sessionState) {
+        is ActiveSession.Admin -> s.username
+        is ActiveSession.User -> s.profile.username
+        else -> ""
+    }
+    val requiresPassChange = when (val s = sessionState) {
+        is ActiveSession.Admin -> s.forcePasswordChange
+        is ActiveSession.User -> s.forcePasswordChange
+        else -> false
+    }
+    val masterKey = when (val s = sessionState) {
+        is ActiveSession.Admin -> s.masterRecoveryKey
+        else -> ""
+    }
+
+    if (requiresPassChange) {
+        ForcePasswordChangeDialog(
+            username = currentUsername,
+            masterKey = masterKey,
+            onPasswordUpdated = { newPass ->
+                viewModel.updatePassword(newPass)
+            }
+        )
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
                 TopAppBar(
                     title = {
                         Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "AegisStream",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 17.sp,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = if (sessionState is ActiveSession.Admin) Color(0xFF10B981).copy(alpha = 0.2f) else Color(0xFF3B82F6).copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = if (sessionState is ActiveSession.Admin) "ADMIN" else currentUsername.uppercase(),
+                                        color = if (sessionState is ActiveSession.Admin) Color(0xFF34D399) else Color(0xFF60A5FA),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                             Text(
-                                text = "VisionConnect Pro",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "${cameraList.size} Active Cameras • ${if (isRemoteMode) "Remote WAN" else "Local Wi-Fi"}",
+                                text = "${cameraList.size} Active Cameras",
                                 fontSize = 11.sp,
                                 color = Color(0xFF94A3B8)
                             )
                         }
                     },
                     actions = {
-                        Row(
-                            modifier = Modifier
-                                .background(Color(0xFF1E293B), CircleShape)
-                                .padding(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Button(
-                                onClick = { isRemoteMode = false },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (!isRemoteMode) Color(0xFF2563EB) else Color.Transparent,
-                                    contentColor = Color.White
-                                ),
-                                shape = CircleShape,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                modifier = Modifier.height(28.dp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { showLogoutConfirm = true },
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .background(Color(0xFFEF4444).copy(alpha = 0.15f), CircleShape)
+                                    .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.4f), CircleShape)
                             ) {
-                                Text("Wi-Fi", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = { isRemoteMode = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isRemoteMode) Color(0xFF059669) else Color.Transparent,
-                                    contentColor = Color.White
-                                ),
-                                shape = CircleShape,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                modifier = Modifier.height(28.dp)
-                            ) {
-                                Text("Remote", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Icon(
+                                    Icons.Default.ExitToApp,
+                                    contentDescription = "Logout",
+                                    tint = Color(0xFFEF4444),
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     },
@@ -508,28 +578,37 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                         label = { Text("Grid View", fontSize = 9.sp) },
                         icon = { Icon(Icons.Default.GridView, contentDescription = "Grid") }
                     )
-                    NavigationBarItem(
-                        selected = activeTab == "SINGLE",
-                        onClick = { activeTab = "SINGLE" },
-                        label = { Text("Single HD", fontSize = 9.sp) },
-                        icon = { Icon(Icons.Default.Videocam, contentDescription = "Single") }
-                    )
-                    NavigationBarItem(
-                        selected = activeTab == "PLAYBACK",
-                        onClick = { activeTab = "PLAYBACK" },
-                        label = { Text("Playback", fontSize = 9.sp) },
-                        icon = { Icon(Icons.Default.Movie, contentDescription = "Playback") }
-                    )
-                    NavigationBarItem(
-                        selected = activeTab == "CONFIG",
-                        onClick = { activeTab = "CONFIG" },
-                        label = { Text("Manage", fontSize = 9.sp) },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = "Manage") }
-                    )
+
+                    if (activeUserFeatures.playback) {
+                        NavigationBarItem(
+                            selected = activeTab == "PLAYBACK",
+                            onClick = { activeTab = "PLAYBACK" },
+                            label = { Text("Playback", fontSize = 9.sp) },
+                            icon = { Icon(Icons.Default.Movie, contentDescription = "Playback") }
+                        )
+                    }
+
+                    if (sessionState is ActiveSession.Admin) {
+                        NavigationBarItem(
+                            selected = activeTab == "USERS",
+                            onClick = { activeTab = "USERS" },
+                            label = { Text("Users", fontSize = 9.sp) },
+                            icon = { Icon(Icons.Default.Domain, contentDescription = "Users") }
+                        )
+                    }
+
+                    if (canConfigureCameras) {
+                        NavigationBarItem(
+                            selected = activeTab == "CONFIG",
+                            onClick = { activeTab = "CONFIG" },
+                            label = { Text("Cameras", fontSize = 9.sp) },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = "Cameras") }
+                        )
+                    }
                 }
             },
             floatingActionButton = {
-                if (activeTab == "CONFIG") {
+                if (activeTab == "CONFIG" && canConfigureCameras) {
                     FloatingActionButton(
                         onClick = {
                             editingCamera = null
@@ -550,76 +629,112 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     .padding(innerPadding)
                     .padding(12.dp)
             ) {
-                key(activeTab) {
-                    when (activeTab) {
-                        "CHANNELS" -> ScreenA_ChannelTree(
-                            cameraList = cameraList,
-                            selectedCamIds = selectedCamIds,
-                            onSelectionChanged = { selectedCamIds = it },
-                            onLaunchLiveView = {
-                                activeTab = "GRID"
-                            },
-                            onOpenPlayback = { targetCam ->
-                                playbackCam = targetCam
-                                activeTab = "PLAYBACK"
-                            }
-                        )
-                        "GRID" -> ScreenB_LiveGrid(
-                            cameraList = cameraList.filter { selectedCamIds.isEmpty() || selectedCamIds.contains(it.id) },
-                            isRemoteMode = isRemoteMode,
-                            onDoubleTapTile = { cam ->
-                                singleViewCam = cam
-                                activeTab = "SINGLE"
-                            },
-                            onRequestFullscreen = { data ->
-                                activeFullscreen = data
-                            }
-                        )
-                        "SINGLE" -> ScreenC_SingleView(
+                key(activeTab, singleViewCam) {
+                    if (singleViewCam != null || activeTab == "SINGLE") {
+                        ScreenC_SingleView(
                             camera = singleViewCam ?: cameraList.firstOrNull(),
                             isRemoteMode = isRemoteMode,
+                            onBackToGrid = {
+                                singleViewCam = null
+                                activeTab = "GRID"
+                            },
                             onOpenPlayback = { cam ->
-                                playbackCam = cam
-                                activeTab = "PLAYBACK"
+                                if (activeUserFeatures.playback) {
+                                    playbackCam = cam
+                                    activeTab = "PLAYBACK"
+                                } else {
+                                    Toast.makeText(context, "Playback disabled for your user account", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             onRequestFullscreen = { data ->
                                 activeFullscreen = data
                             }
                         )
-                        "PLAYBACK" -> ScreenD_Playback(
-                            activeCam = playbackCam ?: cameraList.firstOrNull(),
-                            cameraList = cameraList,
-                            isRemoteMode = isRemoteMode,
-                            onSelectCam = { playbackCam = it },
-                            onRequestFullscreen = { data ->
-                                activeFullscreen = data
+                    } else {
+                        when (activeTab) {
+                            "CHANNELS" -> ScreenA_ChannelTree(
+                                cameraList = cameraList,
+                                selectedCamIds = selectedCamIds,
+                                onSelectionChanged = { selectedCamIds = it },
+                                onLaunchLiveView = {
+                                    activeTab = "GRID"
+                                },
+                                onOpenPlayback = { targetCam ->
+                                    if (activeUserFeatures.playback) {
+                                        playbackCam = targetCam
+                                        activeTab = "PLAYBACK"
+                                    } else {
+                                        Toast.makeText(context, "Playback disabled for your user account", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                            "GRID" -> ScreenB_LiveGrid(
+                                cameraList = cameraList.filter { selectedCamIds.isEmpty() || selectedCamIds.contains(it.id) },
+                                isRemoteMode = isRemoteMode,
+                                onDoubleTapTile = { cam ->
+                                    singleViewCam = cam
+                                },
+                                onRequestFullscreen = { data ->
+                                    activeFullscreen = data
+                                }
+                            )
+                        "PLAYBACK" -> {
+                            if (activeUserFeatures.playback) {
+                                ScreenD_Playback(
+                                    activeCam = playbackCam ?: cameraList.firstOrNull(),
+                                    cameraList = cameraList,
+                                    isRemoteMode = isRemoteMode,
+                                    onSelectCam = { playbackCam = it },
+                                    onRequestFullscreen = { data ->
+                                        activeFullscreen = data
+                                    }
+                                )
+                            } else {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("Playback feature is disabled for your user account.", color = Color.White)
+                                }
                             }
-                        )
-                        "CONFIG" -> CamerasTabScreen(
-                            cameraList = cameraList,
-                            isRemoteMode = isRemoteMode,
-                            onEditCamera = {
-                                editingCamera = it
-                                showAddDialog = true
-                            },
-                            onDeleteCamera = { camera ->
-                                viewModel.deleteCamera(camera)
-                                Toast.makeText(context, "Camera deleted", Toast.LENGTH_SHORT).show()
-                            },
-                            onSelectLive = {
-                                singleViewCam = it
-                                activeTab = "SINGLE"
+                        }
+                        "USERS" -> {
+                            if (sessionState is ActiveSession.Admin) {
+                                UserManagementPanel(
+                                    usersList = vaultData.users,
+                                    cameraList = vaultData.cameras,
+                                    onSaveUser = { viewModel.saveUser(it) },
+                                    onDeleteUser = { viewModel.deleteUser(it) }
+                                )
                             }
-                        )
+                        }
+                        "CONFIG" -> {
+                            if (canConfigureCameras) {
+                                CamerasTabScreen(
+                                    cameraList = cameraList,
+                                    isRemoteMode = isRemoteMode,
+                                    onEditCamera = {
+                                        editingCamera = it
+                                        showAddDialog = true
+                                    },
+                                    onDeleteCamera = { camera ->
+                                        viewModel.deleteCamera(camera)
+                                        Toast.makeText(context, "Camera deleted", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onSelectLive = {
+                                        singleViewCam = it
+                                        activeTab = "SINGLE"
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
+            }
 
-                if (showAddDialog) {
+                if (showAddDialog && canConfigureCameras) {
                     CameraConfigDialog(
                         initialCamera = editingCamera,
                         onDismiss = { showAddDialog = false },
-                        onSave = { cameraToSave ->
-                            viewModel.insertCamera(cameraToSave)
+                        onSave = { camera ->
+                            viewModel.insertCamera(camera)
                             showAddDialog = false
                             Toast.makeText(context, "Camera saved!", Toast.LENGTH_SHORT).show()
                         }
@@ -632,6 +747,45 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
             FullScreenMovieViewer(
                 data = activeFullscreen!!,
                 onDismiss = { activeFullscreen = null }
+            )
+        }
+
+        if (showLogoutConfirm) {
+            AlertDialog(
+                onDismissRequest = { showLogoutConfirm = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.ExitToApp, contentDescription = null, tint = Color(0xFFEF4444))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Confirm Logout", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                },
+                text = {
+                    Text(
+                        text = "Are you sure you want to log out?",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 13.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showLogoutConfirm = false
+                            viewModel.logout()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Logout", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showLogoutConfirm = false }) {
+                        Text("Cancel", color = Color.White)
+                    }
+                },
+                containerColor = Color(0xFF1E293B),
+                shape = RoundedCornerShape(16.dp)
             )
         }
     }
@@ -799,6 +953,7 @@ fun ScreenB_LiveGrid(
 ) {
     var matrixMode by remember { mutableIntStateOf(2) }
     var currentPage by remember { mutableIntStateOf(0) }
+    var isListView by remember { mutableStateOf(false) }
 
     if (cameraList.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -826,32 +981,63 @@ fun ScreenB_LiveGrid(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(1 to "1x1", 2 to "2x2", 3 to "3x3", 4 to "4x4").forEach { (mode, label) ->
-                    Button(
-                        onClick = {
-                            matrixMode = mode
-                            currentPage = 0
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (matrixMode == mode) Color(0xFF3B82F6) else Color(0xFF1E293B),
-                            contentColor = Color.White
-                        ),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(30.dp)
-                    ) {
-                        Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            if (!isListView) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(1 to "1x1", 2 to "2x2", 3 to "3x3", 4 to "4x4").forEach { (mode, label) ->
+                        Button(
+                            onClick = {
+                                matrixMode = mode
+                                currentPage = 0
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (matrixMode == mode) Color(0xFF3B82F6) else Color(0xFF1E293B),
+                                contentColor = Color.White
+                            ),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
+            } else {
+                Text(
+                    text = "LIST VIEW MODE (${cameraList.size} FEEDS)",
+                    color = Color(0xFF38BDF8),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp
+                )
             }
 
-            Text(
-                text = if (matrixMode == 1) "MAIN STREAM (HD)" else "AUTO STREAM",
-                color = Color(0xFF10B981),
-                fontWeight = FontWeight.Bold,
-                fontSize = 10.sp
-            )
+            // Grid vs List View Mode Toggle Button
+            Surface(
+                color = Color(0xFF1E293B),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, Color(0xFF334155)),
+                modifier = Modifier
+                    .clickable { isListView = !isListView }
+                    .padding(start = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (isListView) Icons.Default.GridView else Icons.Default.ViewList,
+                        contentDescription = "Toggle View Mode",
+                        tint = Color.White,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isListView) "GRID" else "LIST",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
 
         val gridColumns = matrixMode
@@ -863,67 +1049,143 @@ fun ScreenB_LiveGrid(
         }
 
         Box(modifier = Modifier.weight(1f)) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(gridColumns),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(pageCameras) { cam ->
-                    val qualityToUse = if (matrixMode == 1) "MAIN" else cam.streamQuality
-                    val streamUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = qualityToUse)
+            if (isListView) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(cameraList) { cam ->
+                        val streamUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = cam.streamQuality)
 
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(cardHeight)
-                            .clickable { onDoubleTapTile(cam) },
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            RtspVideoPlayer(
-                                rtspUrl = streamUrl,
-                                modifier = Modifier.fillMaxSize()
-                            )
-
-                            // Top Info Bar
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.6f))
-                                    .padding(4.dp)
-                                    .align(Alignment.TopCenter),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(cam.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 9.sp)
-                                Text(if (qualityToUse == "MAIN") "HD" else "LIVE", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 8.sp)
-                            }
-
-                            // Translucent Fullscreen Symbol Overlay directly on top of video feed
-                            IconButton(
-                                onClick = {
-                                    onRequestFullscreen(
-                                        FullscreenData(
-                                            titleText = "LIVE FULLSCREEN • ${cam.name} (Ch ${cam.channel})",
-                                            cameraName = cam.name,
-                                            rtspUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = "MAIN"),
-                                            isPlayback = false
-                                        )
-                                    )
-                                },
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(4.dp)
-                                    .size(28.dp)
-                                    .background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Fullscreen,
-                                    contentDescription = "Fullscreen",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(210.dp)
+                                .clickable { onDoubleTapTile(cam) },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                RtspVideoPlayer(
+                                    rtspUrl = streamUrl,
+                                    modifier = Modifier.fillMaxSize()
                                 )
+
+                                // Top Info Bar
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color.Black.copy(alpha = 0.65f))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                        .align(Alignment.TopCenter),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${cam.name} (Ch ${cam.channel})",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        text = "LIVE • DOUBLE-TAP FOR HD",
+                                        color = Color(0xFF10B981),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        onRequestFullscreen(
+                                            FullscreenData(
+                                                titleText = "LIVE FULLSCREEN • ${cam.name} (Ch ${cam.channel})",
+                                                cameraName = cam.name,
+                                                rtspUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = "MAIN"),
+                                                isPlayback = false
+                                            )
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(8.dp)
+                                        .size(32.dp)
+                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Fullscreen,
+                                        contentDescription = "Fullscreen",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(gridColumns),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(pageCameras) { cam ->
+                        val qualityToUse = if (matrixMode == 1) "MAIN" else cam.streamQuality
+                        val streamUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = qualityToUse)
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(cardHeight)
+                                .clickable { onDoubleTapTile(cam) },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                RtspVideoPlayer(
+                                    rtspUrl = streamUrl,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+
+                                // Top Info Bar
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color.Black.copy(alpha = 0.6f))
+                                        .padding(4.dp)
+                                        .align(Alignment.TopCenter),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(cam.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                    Text(if (qualityToUse == "MAIN") "HD" else "LIVE", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 8.sp)
+                                }
+
+                                // Translucent Fullscreen Symbol Overlay directly on top of video feed
+                                IconButton(
+                                    onClick = {
+                                        onRequestFullscreen(
+                                            FullscreenData(
+                                                titleText = "LIVE FULLSCREEN • ${cam.name} (Ch ${cam.channel})",
+                                                cameraName = cam.name,
+                                                rtspUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = "MAIN"),
+                                                isPlayback = false
+                                            )
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(4.dp)
+                                        .size(28.dp)
+                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Fullscreen,
+                                        contentDescription = "Fullscreen",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -970,6 +1232,7 @@ fun ScreenB_LiveGrid(
 fun ScreenC_SingleView(
     camera: CameraEntity?,
     isRemoteMode: Boolean,
+    onBackToGrid: () -> Unit = {},
     onOpenPlayback: (CameraEntity) -> Unit,
     onRequestFullscreen: (FullscreenData) -> Unit
 ) {
@@ -978,6 +1241,11 @@ fun ScreenC_SingleView(
     var isMuted by remember { mutableStateOf(false) }
     var playerInstance by remember { mutableStateOf<MediaPlayer?>(null) }
     var vlcLayoutInstance by remember { mutableStateOf<VLCVideoLayout?>(null) }
+
+    // Intercept System Back Button & Edge-Swipe Gestures to pop back to Grid View cleanly
+    BackHandler {
+        onBackToGrid()
+    }
 
     if (camera == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -990,7 +1258,11 @@ fun ScreenC_SingleView(
         RtspUrlBuilder.buildLiveRtspUrl(camera, isRemoteMode, overrideQuality = qualityMode)
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 4.dp) // Edge margin dead-zone for system back gestures
+    ) {
         // Main Video Card with ALL controls as overlays
         Card(
             modifier = Modifier
@@ -1012,22 +1284,41 @@ fun ScreenC_SingleView(
                     }
                 )
 
-                // Top info bar overlay
+                // Top info bar overlay with Back (←) button
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
-                        .background(Color.Black.copy(alpha = 0.6f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "${camera.name} (Ch ${camera.channel})",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = onBackToGrid,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .background(Color.White.copy(alpha = 0.18f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back to Grid",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Text(
+                            text = "${camera.name} (Ch ${camera.channel})",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+
                     Text(
                         text = if (qualityMode == "MAIN") "HD MAIN" else "SUB",
                         color = if (qualityMode == "MAIN") Color(0xFF10B981) else Color(0xFFF59E0B),
