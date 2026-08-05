@@ -23,6 +23,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -2206,6 +2207,17 @@ fun ScreenD_Playback(
                 if (isMultiSyncMode) {
                     val activeSyncCams = cameraList.filter { selectedSyncCamIds.contains(it.id) }.take(4)
 
+                    val effectiveStartTimeStr = remember(startTime, currentSeekSec) {
+                        if (currentSeekSec > 0) {
+                            val baseHour = if (startTime.contains(":")) startTime.split(":")[0].toIntOrNull() ?: 12 else 12
+                            val mm = ((currentSeekSec % 3600) / 60).toInt()
+                            val ss = (currentSeekSec % 60).toInt()
+                            String.format(Locale.getDefault(), "%02d%02d%02d", baseHour, mm, ss)
+                        } else {
+                            cleanStartTime
+                        }
+                    }
+
                     if (isListView) {
                         LazyColumn(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2216,7 +2228,7 @@ fun ScreenD_Playback(
                                     camera = cam,
                                     isRemoteMode = isRemoteMode,
                                     startDateStr = cleanStartDate,
-                                    startTimeStr = cleanStartTime,
+                                    startTimeStr = effectiveStartTimeStr,
                                     endDateStr = cleanEndDate,
                                     endTimeStr = cleanEndTime
                                 )
@@ -2235,6 +2247,9 @@ fun ScreenD_Playback(
                                             onMediaPlayerReady = { player ->
                                                 syncedPlayersMap[cam.id] = player
                                                 setMediaPlayerRate(player, playbackSpeed)
+                                                if (currentSeekSec > 0) {
+                                                    try { player.time = currentSeekSec * 1000L } catch (e: Exception) {}
+                                                }
                                             },
                                             onLayoutCreated = { layout ->
                                                 syncedLayoutsMap[cam.id] = layout
@@ -2290,7 +2305,7 @@ fun ScreenD_Playback(
                                     camera = cam,
                                     isRemoteMode = isRemoteMode,
                                     startDateStr = cleanStartDate,
-                                    startTimeStr = cleanStartTime,
+                                    startTimeStr = effectiveStartTimeStr,
                                     endDateStr = cleanEndDate,
                                     endTimeStr = cleanEndTime
                                 )
@@ -2309,6 +2324,9 @@ fun ScreenD_Playback(
                                             onMediaPlayerReady = { player ->
                                                 syncedPlayersMap[cam.id] = player
                                                 setMediaPlayerRate(player, playbackSpeed)
+                                                if (currentSeekSec > 0) {
+                                                    try { player.time = currentSeekSec * 1000L } catch (e: Exception) {}
+                                                }
                                             },
                                             onLayoutCreated = { layout ->
                                                 syncedLayoutsMap[cam.id] = layout
@@ -2755,63 +2773,143 @@ fun ScreenD_Playback(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Date & Time Picker Card
+                // Date & Simplified Time Selection Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
-                        // Date Selector Row
+                        Text("DATE & TIME PERIOD", color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Date Picker Button
                         Card(
-                            modifier = Modifier.fillMaxWidth().height(42.dp).clickable { showCalendarPicker = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .clickable { showCalendarPicker = true },
                             colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 12.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Date: $selectedDate", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                Icon(Icons.Default.CalendarToday, contentDescription = "Calendar", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CalendarToday, contentDescription = "Calendar", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Date: $selectedDate", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                                Text("Change", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        val nowHour = remember {
+                            try { SimpleDateFormat("H", Locale.getDefault()).format(Date()).toInt() } catch (e: Exception) { 23 }
+                        }
+                        val isToday = selectedDate == todayDateStr
+
+                        Text("SELECT HOUR SLOT (${startTime.take(2)}:00 - ${endTime.take(2)}:59)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Quick Preset Pills (Morning, Afternoon, Evening, Night)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            val presets = listOf(
+                                "Morning" to (8 to "08:00 AM - 08:59 AM (08:00 - 08:59)"),
+                                "Afternoon" to (13 to "01:00 PM - 01:59 PM (13:00 - 13:59)"),
+                                "Evening" to (17 to "05:00 PM - 05:59 PM (17:00 - 17:59)"),
+                                "Night" to (21 to "09:00 PM - 09:59 PM (21:00 - 21:59)")
+                            )
+                            presets.forEach { (label, data) ->
+                                val (h, fullLabel) = data
+                                val isFuture = isToday && h > nowHour
+                                Surface(
+                                    color = if (isFuture) Color(0xFF0F172A).copy(alpha = 0.4f) else Color(0xFF0F172A),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, if (isFuture) Color(0xFF334155).copy(alpha = 0.3f) else Color(0xFF334155)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable(enabled = !isFuture) {
+                                            val hourStr = String.format(Locale.getDefault(), "%02d", h)
+                                            startTime = "$hourStr:00:00"
+                                            endTime = "$hourStr:59:59"
+                                            selectedTimeSlot = fullLabel
+                                        }
+                                ) {
+                                    Text(
+                                        text = label,
+                                        color = if (isFuture) Color(0xFF64748B) else Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(vertical = 5.dp)
+                                    )
+                                }
                             }
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Time Slot Selector
-                        Card(
-                            modifier = Modifier.fillMaxWidth().height(42.dp).clickable { showTimeSlotDropdown = true },
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                            shape = RoundedCornerShape(8.dp)
+                        // Scrollable 24-Hour Chips Matrix
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(selectedTimeSlot, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = Color.White)
-                            }
-                        }
+                            items((0..23).toList()) { h ->
+                                val hourStr = String.format(Locale.getDefault(), "%02d", h)
+                                val isSelected = startTime.startsWith(hourStr)
+                                val isFuture = isToday && (h > nowHour)
 
-                        DropdownMenu(
-                            expanded = showTimeSlotDropdown,
-                            onDismissRequest = { showTimeSlotDropdown = false },
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).background(Color.White)
-                        ) {
-                            timeSlots.forEach { (slotLabel, times) ->
-                                val isSelected = slotLabel == selectedTimeSlot
-                                DropdownMenuItem(
-                                    text = { Text(slotLabel, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = if (isSelected) Color(0xFF0F172A) else Color(0xFF334155)) },
-                                    onClick = {
-                                        selectedTimeSlot = slotLabel
-                                        startTime = times.first
-                                        endTime = times.second
-                                        showTimeSlotDropdown = false
+                                val displayAmPm = when {
+                                    h == 0 -> "12 AM"
+                                    h < 12 -> "$h AM"
+                                    h == 12 -> "12 PM"
+                                    else -> "${h - 12} PM"
+                                }
+
+                                Surface(
+                                    color = when {
+                                        isFuture -> Color(0xFF0F172A).copy(alpha = 0.3f)
+                                        isSelected -> Color(0xFF38BDF8)
+                                        else -> Color(0xFF0F172A)
+                                    },
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        when {
+                                            isFuture -> Color(0xFF334155).copy(alpha = 0.2f)
+                                            isSelected -> Color(0xFF38BDF8)
+                                            else -> Color(0xFF334155)
+                                        }
+                                    ),
+                                    modifier = Modifier.clickable(enabled = !isFuture) {
+                                        startTime = "$hourStr:00:00"
+                                        endTime = "$hourStr:59:59"
+                                        val amPmStr = if (h < 12) String.format(Locale.getDefault(), "%02d:00 AM", if (h == 0) 12 else h) else String.format(Locale.getDefault(), "%02d:00 PM", if (h == 12) 12 else h - 12)
+                                        selectedTimeSlot = "$amPmStr ($hourStr:00 - $hourStr:59)"
                                     }
-                                )
+                                ) {
+                                    Text(
+                                        text = displayAmPm,
+                                        color = when {
+                                            isFuture -> Color(0xFF475569)
+                                            isSelected -> Color(0xFF0F172A)
+                                            else -> Color.White
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -2822,6 +2920,18 @@ fun ScreenD_Playback(
                 // Primary CTA Button: Start Sync Playback
                 Button(
                     onClick = {
+                        val nowHour = try { SimpleDateFormat("H", Locale.getDefault()).format(Date()).toInt() } catch (e: Exception) { 23 }
+                        val startH = try { startTime.take(2).toInt() } catch (e: Exception) { 0 }
+
+                        if (selectedDate.compareTo(todayDateStr) > 0) {
+                            Toast.makeText(context, "Future dates cannot be selected for recorded NVR playback.", Toast.LENGTH_LONG).show()
+                            return@Button
+                        }
+                        if (selectedDate == todayDateStr && startH > nowHour) {
+                            Toast.makeText(context, "Future time slots cannot be selected for recorded NVR playback.", Toast.LENGTH_LONG).show()
+                            return@Button
+                        }
+
                         if (!isMultiSyncMode) {
                             activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
                                 camera = currentCam!!,
@@ -2837,7 +2947,9 @@ fun ScreenD_Playback(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = if (isMultiSyncMode) Color(0xFF8B5CF6) else Color(0xFF10B981)),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = "Start Playback", tint = Color.White)
                     Spacer(modifier = Modifier.width(6.dp))
@@ -2928,13 +3040,45 @@ fun CalendarDatePickerDialog(
     onDateSelected: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val todayDay = remember {
-        try {
-            SimpleDateFormat("d", Locale.getDefault()).format(Date()).toInt()
-        } catch (e: Exception) { 4 }
+    val todayCal = remember { java.util.Calendar.getInstance() }
+    val displayCal = remember {
+        java.util.Calendar.getInstance().apply {
+            try {
+                val parts = initialDateStr.split("-")
+                if (parts.size == 3) {
+                    set(java.util.Calendar.YEAR, parts[0].toInt())
+                    set(java.util.Calendar.MONTH, parts[1].toInt() - 1)
+                    set(java.util.Calendar.DAY_OF_MONTH, parts[2].toInt())
+                }
+            } catch (e: Exception) {}
+        }
     }
-    var selectedDay by remember { mutableIntStateOf(todayDay) }
-    val currentMonthStr = remember { SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date()) }
+
+    var displayedYear by remember { mutableIntStateOf(displayCal.get(java.util.Calendar.YEAR)) }
+    var displayedMonth by remember { mutableIntStateOf(displayCal.get(java.util.Calendar.MONTH)) }
+    var selectedDay by remember { mutableIntStateOf(displayCal.get(java.util.Calendar.DAY_OF_MONTH)) }
+
+    val monthFormat = remember { SimpleDateFormat("MMMM yyyy", Locale.getDefault()) }
+
+    val isCurrentMonth = remember(displayedYear, displayedMonth) {
+        displayedYear == todayCal.get(java.util.Calendar.YEAR) && displayedMonth == todayCal.get(java.util.Calendar.MONTH)
+    }
+    val minCal = remember {
+        java.util.Calendar.getInstance().apply { add(java.util.Calendar.MONTH, -6) }
+    }
+    val isMinMonth = remember(displayedYear, displayedMonth) {
+        (displayedYear < minCal.get(java.util.Calendar.YEAR)) ||
+        (displayedYear == minCal.get(java.util.Calendar.YEAR) && displayedMonth <= minCal.get(java.util.Calendar.MONTH))
+    }
+
+    val monthText = remember(displayedYear, displayedMonth) {
+        val cal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.YEAR, displayedYear)
+            set(java.util.Calendar.MONTH, displayedMonth)
+            set(java.util.Calendar.DAY_OF_MONTH, 1)
+        }
+        monthFormat.format(cal.time)
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -2953,24 +3097,53 @@ fun CalendarDatePickerDialog(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = currentMonthStr,
+                            text = monthText,
                             color = Color(0xFF1E293B),
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp
                         )
-                        Icon(
-                            imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = "Dropdown",
-                            tint = Color(0xFF1E293B)
-                        )
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        IconButton(onClick = { }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.ChevronLeft, contentDescription = "Prev", tint = Color.Black)
+                        IconButton(
+                            onClick = {
+                                if (!isMinMonth) {
+                                    if (displayedMonth == 0) {
+                                        displayedMonth = 11
+                                        displayedYear -= 1
+                                    } else {
+                                        displayedMonth -= 1
+                                    }
+                                }
+                            },
+                            enabled = !isMinMonth,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ChevronLeft,
+                                contentDescription = "Prev",
+                                tint = if (!isMinMonth) Color.Black else Color.LightGray
+                            )
                         }
-                        IconButton(onClick = { }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.ChevronRight, contentDescription = "Next", tint = Color.Black)
+                        IconButton(
+                            onClick = {
+                                if (!isCurrentMonth) {
+                                    if (displayedMonth == 11) {
+                                        displayedMonth = 0
+                                        displayedYear += 1
+                                    } else {
+                                        displayedMonth += 1
+                                    }
+                                }
+                            },
+                            enabled = !isCurrentMonth,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = "Next",
+                                tint = if (!isCurrentMonth) Color.Black else Color.LightGray
+                            )
                         }
                     }
                 }
@@ -2993,32 +3166,38 @@ fun CalendarDatePickerDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                val daysList = (1..31).toList()
-                val offset = 6
+                val calForMonth = java.util.Calendar.getInstance().apply {
+                    set(java.util.Calendar.YEAR, displayedYear)
+                    set(java.util.Calendar.MONTH, displayedMonth)
+                    set(java.util.Calendar.DAY_OF_MONTH, 1)
+                }
+                val daysInMonth = calForMonth.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+                val firstDayOfWeekOffset = calForMonth.get(java.util.Calendar.DAY_OF_WEEK) - 1
+
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(7),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp)
+                        .height(210.dp)
                 ) {
-                    items(offset) {
+                    items(firstDayOfWeekOffset) {
                         Box(modifier = Modifier.size(36.dp))
                     }
-                    items(daysList.size) { index ->
-                        val dayNum = daysList[index]
-                        val isSelected = dayNum == selectedDay
+                    items(daysInMonth) { index ->
+                        val dayNum = index + 1
+                        val isSelected = (dayNum == selectedDay) && (displayedMonth == displayCal.get(java.util.Calendar.MONTH)) && (displayedYear == displayCal.get(java.util.Calendar.YEAR))
+                        val isFutureDay = isCurrentMonth && (dayNum > todayCal.get(java.util.Calendar.DAY_OF_MONTH))
 
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
                                 .background(
-                                    color = if (isSelected) Color(0xFFCBD5E1) else Color.Transparent,
+                                    color = if (isSelected) Color(0xFF38BDF8) else Color.Transparent,
                                     shape = CircleShape
                                 )
-                                .clickable {
+                                .clickable(enabled = !isFutureDay) {
                                     selectedDay = dayNum
-                                    val currentYearMonth = SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date())
-                                    val formatted = String.format(Locale.getDefault(), "%s-%02d", currentYearMonth, dayNum)
+                                    val formatted = String.format(Locale.getDefault(), "%04d-%02d-%02d", displayedYear, displayedMonth + 1, dayNum)
                                     onDateSelected(formatted)
                                     onDismiss()
                                 },
@@ -3026,7 +3205,11 @@ fun CalendarDatePickerDialog(
                         ) {
                             Text(
                                 text = dayNum.toString(),
-                                color = if (isSelected) Color(0xFF0F172A) else Color(0xFF334155),
+                                color = when {
+                                    isFutureDay -> Color(0xFFCBD5E1)
+                                    isSelected -> Color.White
+                                    else -> Color(0xFF334155)
+                                },
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                 fontSize = 12.sp
                             )
