@@ -2125,7 +2125,7 @@ fun ScreenD_Playback(
     var currentCam by remember { mutableStateOf(activeCam ?: cameraList.firstOrNull()) }
 
     var showSetupBottomSheet by remember { mutableStateOf(true) }
-    var isListView by remember { mutableStateOf(false) }
+    var isListView by remember { mutableStateOf(true) }
 
     val canMultiSync = userFeatures?.multiSyncPlayback != false
     var isMultiSyncMode by remember { mutableStateOf(canMultiSync) }
@@ -2619,119 +2619,6 @@ fun ScreenD_Playback(
                     },
                     onToggleDownloadMode = { isDownloadMode = !isDownloadMode }
                 )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Floating Action Control Bar (-10s, Play/Pause, +10s, Speed Rate Pills)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Quick Jump -10s, Play/Pause, +10s
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // -10s Button
-                        Button(
-                            onClick = {
-                                val targetSec = maxOf(0L, currentSeekSec - 10L)
-                                currentSeekSec = targetSec
-                                val targetMs = targetSec * 1000L
-                                if (isMultiSyncMode) {
-                                    syncedPlayersMap.values.forEach { p -> try { p.time = targetMs } catch (e: Exception) {} }
-                                } else {
-                                    playerInstance?.let { try { it.time = targetMs } catch (e: Exception) {} }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Text("-10s", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-
-                        // Play/Pause Button
-                        IconButton(
-                            onClick = {
-                                if (isMultiSyncMode) {
-                                    syncedPlayersMap.values.forEach { p ->
-                                        try {
-                                            if (p.isPlaying) p.pause() else { p.play(); setMediaPlayerRate(p, playbackSpeed) }
-                                        } catch (e: Exception) {}
-                                    }
-                                    isPlaybackActive = syncedPlayersMap.values.any { it.isPlaying }
-                                } else {
-                                    val player = playerInstance
-                                    if (player != null) {
-                                        if (player.isPlaying) player.pause() else { player.play(); setMediaPlayerRate(player, playbackSpeed) }
-                                        isPlaybackActive = player.isPlaying
-                                    }
-                                }
-                            },
-                            modifier = Modifier
-                                .size(32.dp)
-                                .background(if (isPlaybackActive) Color(0xFFEF4444) else Color(0xFF10B981), CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = if (isPlaybackActive) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = "Play/Pause",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-
-                        // +10s Button
-                        Button(
-                            onClick = {
-                                val targetSec = currentSeekSec + 10L
-                                currentSeekSec = targetSec
-                                val targetMs = targetSec * 1000L
-                                if (isMultiSyncMode) {
-                                    syncedPlayersMap.values.forEach { p -> try { p.time = targetMs } catch (e: Exception) {} }
-                                } else {
-                                    playerInstance?.let { try { it.time = targetMs } catch (e: Exception) {} }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Text("+10s", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                    }
-
-                    // Speed Rate Selector Pills: 0.5x, 1.0x, 2.0x, 4.0x
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf(0.5f, 1.0f, 2.0f, 4.0f).forEach { speed ->
-                            val isSelected = playbackSpeed == speed
-                            Surface(
-                                color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF334155),
-                                shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier
-                                    .clickable {
-                                        playbackSpeed = speed
-                                        if (isMultiSyncMode) {
-                                            syncedPlayersMap.values.forEach { p -> setMediaPlayerRate(p, speed) }
-                                        } else {
-                                            setMediaPlayerRate(playerInstance, speed)
-                                        }
-                                    }
-                            ) {
-                                Text(
-                                    text = "${speed}x",
-                                    color = if (isSelected) Color(0xFF0F172A) else Color.White,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                                )
-                            }
-                        }
-                    }
-                }
             }
         }
     }
