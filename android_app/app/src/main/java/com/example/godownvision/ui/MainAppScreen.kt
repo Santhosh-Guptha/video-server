@@ -392,7 +392,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     val canConfigureCameras by viewModel.canConfigureCameras.collectAsState()
 
     var showSplash by remember { mutableStateOf(true) }
-    var activeTab by remember { mutableStateOf("GRID") }
+    var activeTab by remember { mutableStateOf("LIVE") }
     var isRemoteMode by remember { mutableStateOf(true) }
     var selectedCamIds by remember { mutableStateOf(setOf<Long>()) }
     var singleViewCam by remember { mutableStateOf<CameraEntity?>(null) }
@@ -578,10 +578,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                         icon = { Icon(Icons.Default.AccountTree, contentDescription = "Tree") }
                     )
                     NavigationBarItem(
-                        selected = activeTab == "GRID",
-                        onClick = { activeTab = "GRID" },
-                        label = { Text("Grid View", fontSize = 9.sp) },
-                        icon = { Icon(Icons.Default.GridView, contentDescription = "Grid") }
+                        selected = activeTab == "LIVE",
+                        onClick = { activeTab = "LIVE" },
+                        label = { Text("Live View", fontSize = 9.sp) },
+                        icon = { Icon(Icons.Default.Videocam, contentDescription = "Live View") }
                     )
 
                     if (activeUserFeatures.playback) {
@@ -641,7 +641,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                             isRemoteMode = isRemoteMode,
                             onBackToGrid = {
                                 singleViewCam = null
-                                activeTab = "GRID"
+                                activeTab = "LIVE"
                             },
                             onOpenPlayback = { cam ->
                                 if (activeUserFeatures.playback) {
@@ -662,7 +662,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                 selectedCamIds = selectedCamIds,
                                 onSelectionChanged = { selectedCamIds = it },
                                 onLaunchLiveView = {
-                                    activeTab = "GRID"
+                                    activeTab = "LIVE"
                                 },
                                 onOpenPlayback = { targetCam ->
                                     if (activeUserFeatures.playback) {
@@ -673,7 +673,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                     }
                                 }
                             )
-                            "GRID" -> ScreenB_LiveGrid(
+                            "LIVE" -> ScreenB_LiveGrid(
                                 cameraList = cameraList.filter { selectedCamIds.isEmpty() || selectedCamIds.contains(it.id) },
                                 isRemoteMode = isRemoteMode,
                                 onDoubleTapTile = { cam ->
@@ -959,7 +959,7 @@ fun ScreenB_LiveGrid(
 ) {
     var matrixMode by remember { mutableIntStateOf(2) }
     var currentPage by remember { mutableIntStateOf(0) }
-    var isListView by remember { mutableStateOf(false) }
+    var isListView by remember { mutableStateOf(true) }
 
     if (cameraList.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
