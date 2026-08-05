@@ -594,7 +594,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     if (activeUserFeatures.playback) {
                         NavigationBarItem(
                             selected = activeTab == "PLAYBACK",
-                            onClick = { activeTab = "PLAYBACK" },
+                            onClick = {
+                                playbackTimestamp = ""
+                                activeTab = "PLAYBACK"
+                            },
                             label = { Text("Playback", fontSize = 9.sp) },
                             icon = { Icon(Icons.Default.Movie, contentDescription = "Playback") }
                         )
@@ -718,6 +721,9 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                         bookmarkTargetCam = cam
                                         bookmarkTargetTimestamp = ts
                                         showBookmarkDialog = true
+                                    },
+                                    onConsumeInitialTimestamp = {
+                                        playbackTimestamp = ""
                                     }
                                 )
                             } else {
@@ -1520,7 +1526,8 @@ fun HourlyTimelineScrubber(
     onClipRangeChanged: (Long, Long) -> Unit,
     onSpeedChanged: (Float) -> Unit,
     onToggleDownloadMode: () -> Unit,
-    onOpenBookmark: () -> Unit = {}
+    onOpenBookmark: () -> Unit = {},
+    onTriggerDownloadClip: () -> Unit = {}
 ) {
     val baseHour = remember(startHourStr) {
         if (startHourStr.contains(":")) startHourStr.split(":")[0].toIntOrNull() ?: 12 else 12
@@ -1791,6 +1798,33 @@ fun HourlyTimelineScrubber(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                val clipDurationSec = (clipEndSec - clipStartSec)
+                Button(
+                    onClick = { onTriggerDownloadClip() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Download Clip",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "DOWNLOAD SELECTED CLIP NOW (${clipDurationSec}s)",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                }
             }
         }
     }
@@ -2166,7 +2200,8 @@ fun ScreenD_Playback(
     userFeatures: UserFeatures? = null,
     onSelectCam: (CameraEntity) -> Unit,
     onRequestFullscreen: (FullscreenData) -> Unit,
-    onOpenBookmark: (CameraEntity, String) -> Unit = { _, _ -> }
+    onOpenBookmark: (CameraEntity, String) -> Unit = { _, _ -> },
+    onConsumeInitialTimestamp: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var currentCam by remember { mutableStateOf(activeCam ?: cameraList.firstOrNull()) }
@@ -2218,6 +2253,7 @@ fun ScreenD_Playback(
                 }
                 showSetupBottomSheet = false
                 isPlaybackActive = true
+                onConsumeInitialTimestamp()
             } catch (e: Exception) {}
         }
     }
@@ -2697,7 +2733,8 @@ fun ScreenD_Playback(
                         if (currentCam != null) {
                             onOpenBookmark(currentCam!!, "$selectedDate $startTime")
                         }
-                    }
+                    },
+                    onTriggerDownloadClip = { handleDownloadClipTrigger() }
                 )
             }
         }
