@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
@@ -400,6 +401,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     var editingCamera by remember { mutableStateOf<CameraEntity?>(null) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
 
+    var showCastModal by remember { mutableStateOf(false) }
+    var castCameraName by remember { mutableStateOf("Live Camera") }
+    var castRtspUrl by remember { mutableStateOf("") }
+
     var activeFullscreen by remember { mutableStateOf<FullscreenData?>(null) }
 
     // Pitch Black Splash Screen Animation
@@ -545,6 +550,28 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     actions = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
+                                onClick = {
+                                    val firstCam = cameraList.firstOrNull()
+                                    castCameraName = firstCam?.name ?: "Live Camera"
+                                    castRtspUrl = if (firstCam != null) RtspUrlBuilder.buildLiveRtspUrl(firstCam, isRemoteMode, "MAIN") else ""
+                                    showCastModal = true
+                                },
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .background(Color(0xFFC084FC).copy(alpha = 0.15f), CircleShape)
+                                    .border(1.dp, Color(0xFFC084FC).copy(alpha = 0.4f), CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Default.Cast,
+                                    contentDescription = "Cast Engine",
+                                    tint = Color(0xFFC084FC),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            IconButton(
                                 onClick = { showLogoutConfirm = true },
                                 modifier = Modifier
                                     .size(32.dp)
@@ -652,6 +679,11 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                             },
                             onRequestFullscreen = { data ->
                                 activeFullscreen = data
+                            },
+                            onOpenCast = { camName, url ->
+                                castCameraName = camName
+                                castRtspUrl = url
+                                showCastModal = true
                             }
                         )
                     } else {
@@ -791,6 +823,14 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                 },
                 containerColor = Color(0xFF1E293B),
                 shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        if (showCastModal) {
+            CastBottomSheetModal(
+                activeCameraName = castCameraName,
+                activeRtspUrl = castRtspUrl,
+                onDismiss = { showCastModal = false }
             )
         }
     }
@@ -1239,7 +1279,8 @@ fun ScreenC_SingleView(
     isRemoteMode: Boolean,
     onBackToGrid: () -> Unit = {},
     onOpenPlayback: (CameraEntity) -> Unit,
-    onRequestFullscreen: (FullscreenData) -> Unit
+    onRequestFullscreen: (FullscreenData) -> Unit,
+    onOpenCast: (String, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     var qualityMode by remember { mutableStateOf("MAIN") }
@@ -1390,6 +1431,21 @@ fun ScreenC_SingleView(
                         Icon(
                             Icons.Default.CameraAlt,
                             contentDescription = "Snapshot",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    // Cast Stream
+                    IconButton(
+                        onClick = { onOpenCast(camera.name, liveUrl) },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(Color(0xFFC084FC).copy(alpha = 0.85f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Cast,
+                            contentDescription = "Cast Stream",
                             tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
