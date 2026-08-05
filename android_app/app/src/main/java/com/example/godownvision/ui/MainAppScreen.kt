@@ -2024,6 +2024,11 @@ fun ScreenD_Playback(
     val context = LocalContext.current
     var currentCam by remember { mutableStateOf(activeCam ?: cameraList.firstOrNull()) }
 
+    var isMultiSyncMode by remember { mutableStateOf(false) }
+    var selectedSyncCamIds by remember { mutableStateOf(cameraList.take(4).map { it.id }.toSet()) }
+    val syncedPlayersMap = remember { mutableStateMapOf<Long, MediaPlayer>() }
+    val syncedLayoutsMap = remember { mutableStateMapOf<Long, VLCVideoLayout>() }
+
     var activeRtspUrl by remember { mutableStateOf("") }
     var isPlaybackActive by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
@@ -2105,150 +2110,364 @@ fun ScreenD_Playback(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Camera Selection Bar with Matching Dropdown Width & Highlight
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Card(
+        // Playback Mode Toggle: Single Camera vs Multi-Camera Sync
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF1E293B), RoundedCornerShape(10.dp))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Surface(
+                color = if (!isMultiSyncMode) Color(0xFF3B82F6) else Color.Transparent,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable {
+                        isMultiSyncMode = false
+                        isPlaybackActive = false
+                    }
+            ) {
+                Text(
+                    text = "SINGLE CAMERA",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+            Surface(
+                color = if (isMultiSyncMode) Color(0xFF8B5CF6) else Color.Transparent,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable {
+                        isMultiSyncMode = true
+                        isPlaybackActive = false
+                        if (selectedSyncCamIds.isEmpty()) {
+                            selectedSyncCamIds = cameraList.take(4).map { it.id }.toSet()
+                        }
+                    }
+            ) {
+                Text(
+                    text = "MULTI-SYNC (2-4 FEEDS)",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (isMultiSyncMode) {
+            // Multi-Camera Selection Chips
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { showCameraDropdown = true },
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-                shape = RoundedCornerShape(10.dp)
+                    .background(Color(0xFF1E293B), RoundedCornerShape(10.dp))
+                    .padding(8.dp)
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Videocam, contentDescription = "Camera", tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Select Camera: ${currentCam!!.name} (Ch ${currentCam!!.channel})",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
+                    Text(
+                        text = "SELECT SYNCED FEEDS (${selectedSyncCamIds.size}/4)",
+                        color = Color(0xFFC084FC),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "Incident timestamp sync",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 10.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    cameraList.forEach { cam ->
+                        val isChecked = selectedSyncCamIds.contains(cam.id)
+                        Surface(
+                            color = if (isChecked) Color(0xFF8B5CF6).copy(alpha = 0.25f) else Color(0xFF0F172A),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, if (isChecked) Color(0xFF8B5CF6) else Color(0xFF334155)),
+                            modifier = Modifier.clickable {
+                                val current = selectedSyncCamIds.toMutableSet()
+                                if (isChecked) {
+                                    if (current.size > 1) current.remove(cam.id)
+                                } else {
+                                    if (current.size < 4) current.add(cam.id)
+                                }
+                                selectedSyncCamIds = current
+                                isPlaybackActive = false
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (isChecked) "✓ ${cam.name}" else cam.name,
+                                    color = if (isChecked) Color.White else Color(0xFF94A3B8),
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
                     }
-                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Select", tint = Color.White)
                 }
             }
-
-            DropdownMenu(
-                expanded = showCameraDropdown,
-                onDismissRequest = { showCameraDropdown = false },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 240.dp)
-                    .background(Color(0xFF1E293B))
-            ) {
-                cameraList.forEach { cam ->
-                    val isSelected = cam.id == currentCam?.id
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = "${cam.name} (Ch ${cam.channel})",
-                                fontSize = 13.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isSelected) Color(0xFF38BDF8) else Color.White
-                            )
-                        },
+        } else {
+            // Camera Selection Bar with Matching Dropdown Width & Highlight
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showCameraDropdown = true },
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(if (isSelected) Color(0xFF0F172A) else Color.Transparent),
-                        onClick = {
-                            currentCam = cam
-                            onSelectCam(cam)
-                            activeRtspUrl = "" // Reset to Idle
-                            isPlaybackActive = false
-                            showCameraDropdown = false
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Videocam, contentDescription = "Camera", tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Select Camera: ${currentCam!!.name} (Ch ${currentCam!!.channel})",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
                         }
-                    )
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Select", tint = Color.White)
+                    }
+                }
+
+                DropdownMenu(
+                    expanded = showCameraDropdown,
+                    onDismissRequest = { showCameraDropdown = false },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 240.dp)
+                        .background(Color(0xFF1E293B))
+                ) {
+                    cameraList.forEach { cam ->
+                        val isSelected = cam.id == currentCam?.id
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "${cam.name} (Ch ${cam.channel})",
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) Color(0xFF38BDF8) else Color.White
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (isSelected) Color(0xFF0F172A) else Color.Transparent),
+                            onClick = {
+                                currentCam = cam
+                                onSelectCam(cam)
+                                activeRtspUrl = "" // Reset to Idle
+                                isPlaybackActive = false
+                                showCameraDropdown = false
+                            }
+                        )
+                    }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Playback Video Card (Idle State vs Active Stream with Overlay Fullscreen Icon)
+        // Playback Video Card / Grid (Single Stream vs Multi-Camera Synced Grid)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp),
+                .height(if (isMultiSyncMode) 230.dp else 200.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
             shape = RoundedCornerShape(12.dp)
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (activeRtspUrl.isNotBlank()) {
-                    RtspVideoPlayer(
-                        rtspUrl = activeRtspUrl,
-                        playbackRate = playbackSpeed,
-                        modifier = Modifier.fillMaxSize(),
-                        onMediaPlayerReady = { player ->
-                            playerInstance = player
-                            setMediaPlayerRate(player, playbackSpeed)
-                        },
-                        onLayoutCreated = { layout ->
-                            vlcLayoutInstance = layout
-                        },
-                        onPlayingStateChanged = { playing ->
-                            isPlaybackActive = playing
-                        }
-                    )
+                if (isPlaybackActive) {
+                    if (isMultiSyncMode) {
+                        val activeSyncCams = cameraList.filter { selectedSyncCamIds.contains(it.id) }.take(4)
+                        val gridCols = if (activeSyncCams.size <= 2) activeSyncCams.size else 2
 
-                    // Bottom controls overlay bar on playback video
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .background(Color.Black.copy(alpha = 0.7f))
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Snapshot
-                        IconButton(
-                            onClick = { takeCameraSnapshot(context, playerInstance, currentCam!!.name, vlcLayoutInstance) },
-                            modifier = Modifier
-                                .size(34.dp)
-                                .background(Color(0xFF3B82F6).copy(alpha = 0.8f), CircleShape)
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(gridCols),
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Icon(
-                                Icons.Default.CameraAlt,
-                                contentDescription = "Snapshot",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
-                        // Fullscreen
-                        IconButton(
-                            onClick = {
-                                onRequestFullscreen(
-                                    FullscreenData(
-                                        titleText = "NVR PLAYBACK \u2022 ${currentCam!!.name} (Ch ${currentCam!!.channel})",
-                                        cameraName = "${currentCam!!.name}_Playback",
-                                        rtspUrl = activeRtspUrl,
-                                        isPlayback = true,
-                                        onDownloadClipClick = { handleDownloadClipTrigger() }
-                                    )
+                            items(activeSyncCams) { cam ->
+                                val streamUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
+                                    camera = cam,
+                                    isRemoteMode = isRemoteMode,
+                                    startDateStr = cleanStartDate,
+                                    startTimeStr = cleanStartTime,
+                                    endDateStr = cleanEndDate,
+                                    endTimeStr = cleanEndTime
                                 )
+
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(if (activeSyncCams.size <= 2) 220.dp else 110.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        RtspVideoPlayer(
+                                            rtspUrl = streamUrl,
+                                            playbackRate = playbackSpeed,
+                                            modifier = Modifier.fillMaxSize(),
+                                            onMediaPlayerReady = { player ->
+                                                syncedPlayersMap[cam.id] = player
+                                                setMediaPlayerRate(player, playbackSpeed)
+                                            },
+                                            onLayoutCreated = { layout ->
+                                                syncedLayoutsMap[cam.id] = layout
+                                            }
+                                        )
+
+                                        // Top Info Bar Overlay
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(Color.Black.copy(alpha = 0.65f))
+                                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                                .align(Alignment.TopCenter),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "${cam.name} (Ch ${cam.channel})",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 9.sp
+                                            )
+                                            Text(
+                                                text = "SYNCED",
+                                                color = Color(0xFFC084FC),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 8.sp
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                onRequestFullscreen(
+                                                    FullscreenData(
+                                                        titleText = "SYNCED PLAYBACK • ${cam.name} (Ch ${cam.channel})",
+                                                        cameraName = "${cam.name}_SyncedPlayback",
+                                                        rtspUrl = streamUrl,
+                                                        isPlayback = true,
+                                                        onDownloadClipClick = { handleDownloadClipTrigger() }
+                                                    )
+                                                )
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(4.dp)
+                                                .size(26.dp)
+                                                .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Fullscreen,
+                                                contentDescription = "Fullscreen",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        RtspVideoPlayer(
+                            rtspUrl = activeRtspUrl,
+                            playbackRate = playbackSpeed,
+                            modifier = Modifier.fillMaxSize(),
+                            onMediaPlayerReady = { player ->
+                                playerInstance = player
+                                setMediaPlayerRate(player, playbackSpeed)
                             },
+                            onLayoutCreated = { layout ->
+                                vlcLayoutInstance = layout
+                            },
+                            onPlayingStateChanged = { playing ->
+                                isPlaybackActive = playing
+                            }
+                        )
+
+                        // Bottom controls overlay bar on playback video
+                        Row(
                             modifier = Modifier
-                                .size(34.dp)
-                                .background(Color(0xFF10B981).copy(alpha = 0.8f), CircleShape)
+                                .fillMaxWidth()
+                                .align(Alignment.BottomCenter)
+                                .background(Color.Black.copy(alpha = 0.7f))
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                Icons.Default.Fullscreen,
-                                contentDescription = "Fullscreen",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
+                            // Snapshot
+                            IconButton(
+                                onClick = { takeCameraSnapshot(context, playerInstance, currentCam!!.name, vlcLayoutInstance) },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(Color(0xFF3B82F6).copy(alpha = 0.8f), CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Default.CameraAlt,
+                                    contentDescription = "Snapshot",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            // Fullscreen
+                            IconButton(
+                                onClick = {
+                                    onRequestFullscreen(
+                                        FullscreenData(
+                                            titleText = "NVR PLAYBACK \u2022 ${currentCam!!.name} (Ch ${currentCam!!.channel})",
+                                            cameraName = "${currentCam!!.name}_Playback",
+                                            rtspUrl = activeRtspUrl,
+                                            isPlayback = true,
+                                            onDownloadClipClick = { handleDownloadClipTrigger() }
+                                        )
+                                    )
+                                },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(Color(0xFF10B981).copy(alpha = 0.8f), CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Default.Fullscreen,
+                                    contentDescription = "Fullscreen",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
                 } else {
-                    // Initial Idle Placeholder View (CRITICAL: No RTSP connection until user taps Start Playback)
+                    // Initial Idle Placeholder View
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
@@ -2262,7 +2481,7 @@ fun ScreenD_Playback(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Select Camera, Date, Start Time, and End Time, then tap Start Playback.",
+                            text = if (isMultiSyncMode) "Select up to 4 feeds, Date & Time Slot, then tap Start Multi-Sync Playback." else "Select Camera, Date, Start Time, and End Time, then tap Start Playback.",
                             color = Color(0xFF94A3B8),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
@@ -2275,7 +2494,7 @@ fun ScreenD_Playback(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Timeline Scrubber Bar with Playback Speed Control
+        // Master Timeline Scrubber Bar with Playback Speed Control
         HourlyTimelineScrubber(
             startHourStr = startTime,
             currentPositionSec = currentSeekSec,
@@ -2293,15 +2512,23 @@ fun ScreenD_Playback(
                 val formattedRtspTime = String.format(Locale.getDefault(), "%02d%02d%02d", baseHour, mm, ss)
 
                 startTime = formattedTime
-                if (activeRtspUrl.isNotBlank() && currentCam != null) {
-                    activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
-                        camera = currentCam!!,
-                        isRemoteMode = isRemoteMode,
-                        startDateStr = cleanStartDate,
-                        startTimeStr = formattedRtspTime,
-                        endDateStr = cleanEndDate,
-                        endTimeStr = cleanEndTime
-                    )
+                val seekMs = sec * 1000L
+
+                if (isMultiSyncMode) {
+                    syncedPlayersMap.values.forEach { p ->
+                        try { p.time = seekMs } catch (e: Exception) {}
+                    }
+                } else {
+                    if (activeRtspUrl.isNotBlank() && currentCam != null) {
+                        activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
+                            camera = currentCam!!,
+                            isRemoteMode = isRemoteMode,
+                            startDateStr = cleanStartDate,
+                            startTimeStr = formattedRtspTime,
+                            endDateStr = cleanEndDate,
+                            endTimeStr = cleanEndTime
+                        )
+                    }
                 }
             },
             onClipRangeChanged = { startSec, endSec ->
@@ -2310,8 +2537,14 @@ fun ScreenD_Playback(
             },
             onSpeedChanged = { speed ->
                 playbackSpeed = speed
-                setMediaPlayerRate(playerInstance, speed)
-                Toast.makeText(context, "Playback speed set to ${speed}x", Toast.LENGTH_SHORT).show()
+                if (isMultiSyncMode) {
+                    syncedPlayersMap.values.forEach { p ->
+                        setMediaPlayerRate(p, speed)
+                    }
+                } else {
+                    setMediaPlayerRate(playerInstance, speed)
+                }
+                Toast.makeText(context, "Playback speed set to ${speed}x across feeds", Toast.LENGTH_SHORT).show()
             },
             onToggleDownloadMode = {
                 isDownloadMode = !isDownloadMode
@@ -2434,50 +2667,66 @@ fun ScreenD_Playback(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            if (activeRtspUrl.isBlank()) {
-                                if (currentCam != null) {
-                                    activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
-                                        camera = currentCam!!,
-                                        isRemoteMode = isRemoteMode,
-                                        startDateStr = cleanStartDate,
-                                        startTimeStr = cleanStartTime,
-                                        endDateStr = cleanEndDate,
-                                        endTimeStr = cleanEndTime
-                                    )
+                            if (isMultiSyncMode) {
+                                if (!isPlaybackActive) {
                                     isPlaybackActive = true
+                                } else {
+                                    syncedPlayersMap.values.forEach { p ->
+                                        try {
+                                            if (p.isPlaying) p.pause() else {
+                                                p.play()
+                                                setMediaPlayerRate(p, playbackSpeed)
+                                            }
+                                        } catch (e: Exception) {}
+                                    }
+                                    isPlaybackActive = syncedPlayersMap.values.any { it.isPlaying }
                                 }
                             } else {
-                                val player = playerInstance
-                                if (player != null) {
-                                    if (player.isPlaying) {
-                                        try {
-                                            player.pause()
-                                        } catch (e: Exception) {
-                                            player.stop()
-                                        }
-                                        isPlaybackActive = false
-                                    } else {
-                                        try {
-                                            player.play()
-                                            setMediaPlayerRate(player, playbackSpeed)
-                                        } catch (e: Exception) {}
+                                if (activeRtspUrl.isBlank()) {
+                                    if (currentCam != null) {
+                                        activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
+                                            camera = currentCam!!,
+                                            isRemoteMode = isRemoteMode,
+                                            startDateStr = cleanStartDate,
+                                            startTimeStr = cleanStartTime,
+                                            endDateStr = cleanEndDate,
+                                            endTimeStr = cleanEndTime
+                                        )
                                         isPlaybackActive = true
                                     }
                                 } else {
-                                    activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
-                                        camera = currentCam!!,
-                                        isRemoteMode = isRemoteMode,
-                                        startDateStr = cleanStartDate,
-                                        startTimeStr = cleanStartTime,
-                                        endDateStr = cleanEndDate,
-                                        endTimeStr = cleanEndTime
-                                    )
-                                    isPlaybackActive = true
+                                    val player = playerInstance
+                                    if (player != null) {
+                                        if (player.isPlaying) {
+                                            try {
+                                                player.pause()
+                                            } catch (e: Exception) {
+                                                player.stop()
+                                            }
+                                            isPlaybackActive = false
+                                        } else {
+                                            try {
+                                                player.play()
+                                                setMediaPlayerRate(player, playbackSpeed)
+                                            } catch (e: Exception) {}
+                                            isPlaybackActive = true
+                                        }
+                                    } else {
+                                        activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
+                                            camera = currentCam!!,
+                                            isRemoteMode = isRemoteMode,
+                                            startDateStr = cleanStartDate,
+                                            startTimeStr = cleanStartTime,
+                                            endDateStr = cleanEndDate,
+                                            endTimeStr = cleanEndTime
+                                        )
+                                        isPlaybackActive = true
+                                    }
                                 }
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isPlaybackActive) Color(0xFFEF4444) else Color(0xFFE67E22)
+                            containerColor = if (isPlaybackActive) Color(0xFFEF4444) else (if (isMultiSyncMode) Color(0xFF8B5CF6) else Color(0xFFE67E22))
                         ),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
@@ -2491,7 +2740,7 @@ fun ScreenD_Playback(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isPlaybackActive) "Pause ⏸" else "Start Playback",
+                            text = if (isPlaybackActive) "Pause ⏸" else (if (isMultiSyncMode) "Start Multi-Sync Playback" else "Start Playback"),
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp
