@@ -401,10 +401,6 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     var editingCamera by remember { mutableStateOf<CameraEntity?>(null) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
 
-    var showCastModal by remember { mutableStateOf(false) }
-    var castCameraName by remember { mutableStateOf("Live Camera") }
-    var castRtspUrl by remember { mutableStateOf("") }
-
     var activeFullscreen by remember { mutableStateOf<FullscreenData?>(null) }
 
     // Pitch Black Splash Screen Animation
@@ -550,28 +546,6 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     actions = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
-                                onClick = {
-                                    val firstCam = cameraList.firstOrNull()
-                                    castCameraName = firstCam?.name ?: "Live Camera"
-                                    castRtspUrl = if (firstCam != null) RtspUrlBuilder.buildLiveRtspUrl(firstCam, isRemoteMode, "MAIN") else ""
-                                    showCastModal = true
-                                },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .background(Color(0xFFC084FC).copy(alpha = 0.15f), CircleShape)
-                                    .border(1.dp, Color(0xFFC084FC).copy(alpha = 0.4f), CircleShape)
-                            ) {
-                                Icon(
-                                    Icons.Default.Cast,
-                                    contentDescription = "Cast Engine",
-                                    tint = Color(0xFFC084FC),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(6.dp))
-
-                            IconButton(
                                 onClick = { showLogoutConfirm = true },
                                 modifier = Modifier
                                     .size(32.dp)
@@ -679,11 +653,6 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                             },
                             onRequestFullscreen = { data ->
                                 activeFullscreen = data
-                            },
-                            onOpenCast = { camName, url ->
-                                castCameraName = camName
-                                castRtspUrl = url
-                                showCastModal = true
                             }
                         )
                     } else {
@@ -823,14 +792,6 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                 },
                 containerColor = Color(0xFF1E293B),
                 shape = RoundedCornerShape(16.dp)
-            )
-        }
-
-        if (showCastModal) {
-            CastBottomSheetModal(
-                activeCameraName = castCameraName,
-                activeRtspUrl = castRtspUrl,
-                onDismiss = { showCastModal = false }
             )
         }
     }
