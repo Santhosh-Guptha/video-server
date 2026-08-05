@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Domain
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
@@ -60,6 +61,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.VolumeOff
@@ -83,6 +85,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.godownvision.data.CameraEntity
+import com.example.godownvision.data.UserFeatures
 import com.example.godownvision.services.RtspUrlBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -684,6 +687,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                     activeCam = playbackCam ?: cameraList.firstOrNull(),
                                     cameraList = cameraList,
                                     isRemoteMode = isRemoteMode,
+                                    userFeatures = activeUserFeatures,
                                     onSelectCam = { playbackCam = it },
                                     onRequestFullscreen = { data ->
                                         activeFullscreen = data
@@ -2013,19 +2017,26 @@ fun ClockTimePickerDialog(
 }
 
 // SCREEN D: Fast & Smooth NVR Playback with Overlay Fullscreen Button directly on Video Feed
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScreenD_Playback(
     activeCam: CameraEntity?,
     cameraList: List<CameraEntity>,
     isRemoteMode: Boolean,
+    userFeatures: UserFeatures? = null,
     onSelectCam: (CameraEntity) -> Unit,
     onRequestFullscreen: (FullscreenData) -> Unit
 ) {
     val context = LocalContext.current
     var currentCam by remember { mutableStateOf(activeCam ?: cameraList.firstOrNull()) }
 
-    var isMultiSyncMode by remember { mutableStateOf(false) }
+    var showSetupBottomSheet by remember { mutableStateOf(true) }
+    var isListView by remember { mutableStateOf(false) }
+
+    val canMultiSync = userFeatures?.multiSyncPlayback != false
+    var isMultiSyncMode by remember { mutableStateOf(canMultiSync) }
     var selectedSyncCamIds by remember { mutableStateOf(cameraList.take(4).map { it.id }.toSet()) }
+
     val syncedPlayersMap = remember { mutableStateMapOf<Long, MediaPlayer>() }
     val syncedLayoutsMap = remember { mutableStateMapOf<Long, VLCVideoLayout>() }
 
@@ -2110,210 +2121,95 @@ fun ScreenD_Playback(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Playback Mode Toggle: Single Camera vs Multi-Camera Sync
+        // Top Action Bar: Edit Setup Button + View Mode Switcher (Grid vs List)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF1E293B), RoundedCornerShape(10.dp))
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
-                color = if (!isMultiSyncMode) Color(0xFF3B82F6) else Color.Transparent,
+                color = Color(0xFF1E293B),
                 shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable {
-                        isMultiSyncMode = false
-                        isPlaybackActive = false
-                    }
-            ) {
-                Text(
-                    text = "SINGLE CAMERA",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-            Surface(
-                color = if (isMultiSyncMode) Color(0xFF8B5CF6) else Color.Transparent,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable {
-                        isMultiSyncMode = true
-                        isPlaybackActive = false
-                        if (selectedSyncCamIds.isEmpty()) {
-                            selectedSyncCamIds = cameraList.take(4).map { it.id }.toSet()
-                        }
-                    }
-            ) {
-                Text(
-                    text = "MULTI-SYNC (2-4 FEEDS)",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (isMultiSyncMode) {
-            // Multi-Camera Selection Chips
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF1E293B), RoundedCornerShape(10.dp))
-                    .padding(8.dp)
+                border = BorderStroke(1.dp, Color(0xFF334155)),
+                modifier = Modifier.clickable { showSetupBottomSheet = true }
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "SELECT SYNCED FEEDS (${selectedSyncCamIds.size}/4)",
-                        color = Color(0xFFC084FC),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "Edit Setup",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(16.dp)
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Incident timestamp sync",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 10.sp
+                        text = "Edit Setup",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
                     )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    cameraList.forEach { cam ->
-                        val isChecked = selectedSyncCamIds.contains(cam.id)
-                        Surface(
-                            color = if (isChecked) Color(0xFF8B5CF6).copy(alpha = 0.25f) else Color(0xFF0F172A),
-                            shape = RoundedCornerShape(8.dp),
-                            border = BorderStroke(1.dp, if (isChecked) Color(0xFF8B5CF6) else Color(0xFF334155)),
-                            modifier = Modifier.clickable {
-                                val current = selectedSyncCamIds.toMutableSet()
-                                if (isChecked) {
-                                    if (current.size > 1) current.remove(cam.id)
-                                } else {
-                                    if (current.size < 4) current.add(cam.id)
-                                }
-                                selectedSyncCamIds = current
-                                isPlaybackActive = false
-                            }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = if (isChecked) "✓ ${cam.name}" else cam.name,
-                                    color = if (isChecked) Color.White else Color(0xFF94A3B8),
-                                    fontSize = 10.sp,
-                                    fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
                 }
             }
-        } else {
-            // Camera Selection Bar with Matching Dropdown Width & Highlight
-            Box(modifier = Modifier.fillMaxWidth()) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showCameraDropdown = true },
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!canMultiSync) {
+                    Surface(
+                        color = Color(0xFFEF4444).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Videocam, contentDescription = "Camera", tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Select Camera: ${currentCam!!.name} (Ch ${currentCam!!.channel})",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Select", tint = Color.White)
+                        Text(
+                            text = "Single Mode Only",
+                            color = Color(0xFFF87171),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
 
-                DropdownMenu(
-                    expanded = showCameraDropdown,
-                    onDismissRequest = { showCameraDropdown = false },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 240.dp)
-                        .background(Color(0xFF1E293B))
+                Surface(
+                    color = Color(0xFF1E293B),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    modifier = Modifier.clickable { isListView = !isListView }
                 ) {
-                    cameraList.forEach { cam ->
-                        val isSelected = cam.id == currentCam?.id
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = "${cam.name} (Ch ${cam.channel})",
-                                    fontSize = 13.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) Color(0xFF38BDF8) else Color.White
-                                )
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(if (isSelected) Color(0xFF0F172A) else Color.Transparent),
-                            onClick = {
-                                currentCam = cam
-                                onSelectCam(cam)
-                                activeRtspUrl = "" // Reset to Idle
-                                isPlaybackActive = false
-                                showCameraDropdown = false
-                            }
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isListView) Icons.Default.GridView else Icons.Default.ViewList,
+                            contentDescription = "Toggle View Mode",
+                            tint = Color.White,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (isListView) "GRID" else "LIST",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        // Maximized Video Viewport Layout
+        Box(modifier = Modifier.weight(1f)) {
+            if (isPlaybackActive) {
+                if (isMultiSyncMode) {
+                    val activeSyncCams = cameraList.filter { selectedSyncCamIds.contains(it.id) }.take(4)
 
-        // Playback Video Card / Grid (Single Stream vs Multi-Camera Synced Grid)
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(if (isMultiSyncMode) 230.dp else 200.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (isPlaybackActive) {
-                    if (isMultiSyncMode) {
-                        val activeSyncCams = cameraList.filter { selectedSyncCamIds.contains(it.id) }.take(4)
-                        val gridCols = if (activeSyncCams.size <= 2) activeSyncCams.size else 2
-
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(gridCols),
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    if (isListView) {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxSize()
                         ) {
                             items(activeSyncCams) { cam ->
                                 val streamUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
@@ -2324,13 +2220,12 @@ fun ScreenD_Playback(
                                     endDateStr = cleanEndDate,
                                     endTimeStr = cleanEndTime
                                 )
-
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(if (activeSyncCams.size <= 2) 220.dp else 110.dp),
+                                        .height(200.dp),
                                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                                    shape = RoundedCornerShape(6.dp)
+                                    shape = RoundedCornerShape(10.dp)
                                 ) {
                                     Box(modifier = Modifier.fillMaxSize()) {
                                         RtspVideoPlayer(
@@ -2346,7 +2241,80 @@ fun ScreenD_Playback(
                                             }
                                         )
 
-                                        // Top Info Bar Overlay
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(Color.Black.copy(alpha = 0.65f))
+                                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                .align(Alignment.TopCenter),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("${cam.name} (Ch ${cam.channel})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                            Text("SYNCED", color = Color(0xFFC084FC), fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                onRequestFullscreen(
+                                                    FullscreenData(
+                                                        titleText = "SYNCED PLAYBACK • ${cam.name} (Ch ${cam.channel})",
+                                                        cameraName = "${cam.name}_SyncedPlayback",
+                                                        rtspUrl = streamUrl,
+                                                        isPlayback = true,
+                                                        onDownloadClipClick = { handleDownloadClipTrigger() }
+                                                    )
+                                                )
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(6.dp)
+                                                .size(28.dp)
+                                                .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                        ) {
+                                            Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", tint = Color.White, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        val gridCols = if (activeSyncCams.size <= 2) activeSyncCams.size else 2
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(gridCols),
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(activeSyncCams) { cam ->
+                                val streamUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
+                                    camera = cam,
+                                    isRemoteMode = isRemoteMode,
+                                    startDateStr = cleanStartDate,
+                                    startTimeStr = cleanStartTime,
+                                    endDateStr = cleanEndDate,
+                                    endTimeStr = cleanEndTime
+                                )
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(if (activeSyncCams.size <= 2) 280.dp else 160.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        RtspVideoPlayer(
+                                            rtspUrl = streamUrl,
+                                            playbackRate = playbackSpeed,
+                                            modifier = Modifier.fillMaxSize(),
+                                            onMediaPlayerReady = { player ->
+                                                syncedPlayersMap[cam.id] = player
+                                                setMediaPlayerRate(player, playbackSpeed)
+                                            },
+                                            onLayoutCreated = { layout ->
+                                                syncedLayoutsMap[cam.id] = layout
+                                            }
+                                        )
+
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -2355,18 +2323,8 @@ fun ScreenD_Playback(
                                                 .align(Alignment.TopCenter),
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
-                                            Text(
-                                                text = "${cam.name} (Ch ${cam.channel})",
-                                                color = Color.White,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 9.sp
-                                            )
-                                            Text(
-                                                text = "SYNCED",
-                                                color = Color(0xFFC084FC),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 8.sp
-                                            )
+                                            Text("${cam.name} (Ch ${cam.channel})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                            Text("SYNCED", color = Color(0xFFC084FC), fontWeight = FontWeight.Bold, fontSize = 8.sp)
                                         }
 
                                         IconButton(
@@ -2387,65 +2345,42 @@ fun ScreenD_Playback(
                                                 .size(26.dp)
                                                 .background(Color.Black.copy(alpha = 0.65f), CircleShape)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Fullscreen,
-                                                contentDescription = "Fullscreen",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(15.dp)
-                                            )
+                                            Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", tint = Color.White, modifier = Modifier.size(15.dp))
                                         }
                                     }
                                 }
                             }
                         }
-                    } else {
-                        RtspVideoPlayer(
-                            rtspUrl = activeRtspUrl,
-                            playbackRate = playbackSpeed,
-                            modifier = Modifier.fillMaxSize(),
-                            onMediaPlayerReady = { player ->
-                                playerInstance = player
-                                setMediaPlayerRate(player, playbackSpeed)
-                            },
-                            onLayoutCreated = { layout ->
-                                vlcLayoutInstance = layout
-                            },
-                            onPlayingStateChanged = { playing ->
-                                isPlaybackActive = playing
-                            }
-                        )
+                    }
+                } else {
+                    // Single Camera Viewport
+                    Card(
+                        modifier = Modifier.fillMaxSize(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            RtspVideoPlayer(
+                                rtspUrl = activeRtspUrl,
+                                playbackRate = playbackSpeed,
+                                modifier = Modifier.fillMaxSize(),
+                                onMediaPlayerReady = { player ->
+                                    playerInstance = player
+                                    setMediaPlayerRate(player, playbackSpeed)
+                                },
+                                onLayoutCreated = { layout ->
+                                    vlcLayoutInstance = layout
+                                },
+                                onPlayingStateChanged = { playing ->
+                                    isPlaybackActive = playing
+                                }
+                            )
 
-                        // Bottom controls overlay bar on playback video
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .align(Alignment.BottomCenter)
-                                .background(Color.Black.copy(alpha = 0.7f))
-                                .padding(horizontal = 6.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Snapshot
-                            IconButton(
-                                onClick = { takeCameraSnapshot(context, playerInstance, currentCam!!.name, vlcLayoutInstance) },
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .background(Color(0xFF3B82F6).copy(alpha = 0.8f), CircleShape)
-                            ) {
-                                Icon(
-                                    Icons.Default.CameraAlt,
-                                    contentDescription = "Snapshot",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-
-                            // Fullscreen
                             IconButton(
                                 onClick = {
                                     onRequestFullscreen(
                                         FullscreenData(
-                                            titleText = "NVR PLAYBACK \u2022 ${currentCam!!.name} (Ch ${currentCam!!.channel})",
+                                            titleText = "NVR PLAYBACK • ${currentCam!!.name} (Ch ${currentCam!!.channel})",
                                             cameraName = "${currentCam!!.name}_Playback",
                                             rtspUrl = activeRtspUrl,
                                             isPlayback = true,
@@ -2454,315 +2389,464 @@ fun ScreenD_Playback(
                                     )
                                 },
                                 modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
                                     .size(34.dp)
-                                    .background(Color(0xFF10B981).copy(alpha = 0.8f), CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.7f), CircleShape)
                             ) {
-                                Icon(
-                                    Icons.Default.Fullscreen,
-                                    contentDescription = "Fullscreen",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen", tint = Color.White, modifier = Modifier.size(18.dp))
                             }
                         }
                     }
-                } else {
-                    // Initial Idle Placeholder View
+                }
+            } else {
+                // Idle Placeholder View
+                Card(
+                    modifier = Modifier.fillMaxSize(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.fillMaxSize().padding(16.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Movie,
                             contentDescription = "Playback Idle",
                             tint = Color(0xFF64748B),
-                            modifier = Modifier.size(44.dp)
+                            modifier = Modifier.size(48.dp)
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = if (isMultiSyncMode) "Select up to 4 feeds, Date & Time Slot, then tap Start Multi-Sync Playback." else "Select Camera, Date, Start Time, and End Time, then tap Start Playback.",
+                            text = "Configure parameters in setup sheet to start playback.",
                             color = Color(0xFF94A3B8),
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             textAlign = TextAlign.Center
                         )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { showSetupBottomSheet = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Tune, contentDescription = "Setup", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open Setup Sheet", color = Color(0xFF0F172A), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Master Timeline Scrubber Bar with Playback Speed Control
-        HourlyTimelineScrubber(
-            startHourStr = startTime,
-            currentPositionSec = currentSeekSec,
-            clipStartSec = clipStartSec,
-            clipEndSec = clipEndSec,
-            playbackSpeed = playbackSpeed,
-            isDownloadMode = isDownloadMode,
-            onSeekPositionChanged = { sec ->
-                currentSeekSec = sec
-                val baseHour = if (startTime.contains(":")) startTime.split(":")[0].toIntOrNull() ?: 12 else 12
-                val mm = ((sec % 3600) / 60).toInt()
-                val ss = (sec % 60).toInt()
-
-                val formattedTime = String.format(Locale.getDefault(), "%02d:%02d:%02d", baseHour, mm, ss)
-                val formattedRtspTime = String.format(Locale.getDefault(), "%02d%02d%02d", baseHour, mm, ss)
-
-                startTime = formattedTime
-                val seekMs = sec * 1000L
-
-                if (isMultiSyncMode) {
-                    syncedPlayersMap.values.forEach { p ->
-                        try { p.time = seekMs } catch (e: Exception) {}
-                    }
-                } else {
-                    if (activeRtspUrl.isNotBlank() && currentCam != null) {
-                        activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
-                            camera = currentCam!!,
-                            isRemoteMode = isRemoteMode,
-                            startDateStr = cleanStartDate,
-                            startTimeStr = formattedRtspTime,
-                            endDateStr = cleanEndDate,
-                            endTimeStr = cleanEndTime
-                        )
-                    }
-                }
-            },
-            onClipRangeChanged = { startSec, endSec ->
-                clipStartSec = startSec
-                clipEndSec = endSec
-            },
-            onSpeedChanged = { speed ->
-                playbackSpeed = speed
-                if (isMultiSyncMode) {
-                    syncedPlayersMap.values.forEach { p ->
-                        setMediaPlayerRate(p, speed)
-                    }
-                } else {
-                    setMediaPlayerRate(playerInstance, speed)
-                }
-                Toast.makeText(context, "Playback speed set to ${speed}x across feeds", Toast.LENGTH_SHORT).show()
-            },
-            onToggleDownloadMode = {
-                isDownloadMode = !isDownloadMode
-            }
-        )
-
-        if (isDownloadMode) {
-            Spacer(modifier = Modifier.height(6.dp))
-            Button(
-                onClick = { handleDownloadClipTrigger() },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-            ) {
-                Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Confirm Export Selected Clip Range (${clipEndSec - clipStartSec}s)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Date-Time Form with Start/Pause Playback Button
+        // Floating Action Controls & Translucent Master Seek Bar
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(14.dp)
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+            shape = RoundedCornerShape(12.dp)
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                // Date Field (Calendar Picker Modal)
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .clickable { showCalendarPicker = true },
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                    shape = RoundedCornerShape(8.dp),
-                    border = CardDefaults.outlinedCardBorder()
+            Column(modifier = Modifier.padding(8.dp)) {
+                // Master Scrubber
+                HourlyTimelineScrubber(
+                    startHourStr = startTime,
+                    currentPositionSec = currentSeekSec,
+                    clipStartSec = clipStartSec,
+                    clipEndSec = clipEndSec,
+                    playbackSpeed = playbackSpeed,
+                    isDownloadMode = isDownloadMode,
+                    onSeekPositionChanged = { sec ->
+                        currentSeekSec = sec
+                        val baseHour = if (startTime.contains(":")) startTime.split(":")[0].toIntOrNull() ?: 12 else 12
+                        val mm = ((sec % 3600) / 60).toInt()
+                        val ss = (sec % 60).toInt()
+
+                        val formattedTime = String.format(Locale.getDefault(), "%02d:%02d:%02d", baseHour, mm, ss)
+                        startTime = formattedTime
+                        val seekMs = sec * 1000L
+
+                        if (isMultiSyncMode) {
+                            syncedPlayersMap.values.forEach { p ->
+                                try { p.time = seekMs } catch (e: Exception) {}
+                            }
+                        } else {
+                            playerInstance?.let { p ->
+                                try { p.time = seekMs } catch (e: Exception) {}
+                            }
+                        }
+                    },
+                    onClipRangeChanged = { startSec, endSec ->
+                        clipStartSec = startSec
+                        clipEndSec = endSec
+                    },
+                    onSpeedChanged = { speed ->
+                        playbackSpeed = speed
+                        if (isMultiSyncMode) {
+                            syncedPlayersMap.values.forEach { p -> setMediaPlayerRate(p, speed) }
+                        } else {
+                            setMediaPlayerRate(playerInstance, speed)
+                        }
+                    },
+                    onToggleDownloadMode = { isDownloadMode = !isDownloadMode }
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Floating Action Control Bar (-10s, Play/Pause, +10s, Speed Rate Pills)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Quick Jump -10s, Play/Pause, +10s
                     Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Date: $selectedDate", color = Color(0xFF0F172A), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Icon(Icons.Default.CalendarToday, contentDescription = "Calendar", tint = Color(0xFF64748B))
+                        // -10s Button
+                        Button(
+                            onClick = {
+                                val targetSec = maxOf(0L, currentSeekSec - 10L)
+                                currentSeekSec = targetSec
+                                val targetMs = targetSec * 1000L
+                                if (isMultiSyncMode) {
+                                    syncedPlayersMap.values.forEach { p -> try { p.time = targetMs } catch (e: Exception) {} }
+                                } else {
+                                    playerInstance?.let { try { it.time = targetMs } catch (e: Exception) {} }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("-10s", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+
+                        // Play/Pause Button
+                        IconButton(
+                            onClick = {
+                                if (isMultiSyncMode) {
+                                    syncedPlayersMap.values.forEach { p ->
+                                        try {
+                                            if (p.isPlaying) p.pause() else { p.play(); setMediaPlayerRate(p, playbackSpeed) }
+                                        } catch (e: Exception) {}
+                                    }
+                                    isPlaybackActive = syncedPlayersMap.values.any { it.isPlaying }
+                                } else {
+                                    val player = playerInstance
+                                    if (player != null) {
+                                        if (player.isPlaying) player.pause() else { player.play(); setMediaPlayerRate(player, playbackSpeed) }
+                                        isPlaybackActive = player.isPlaying
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(if (isPlaybackActive) Color(0xFFEF4444) else Color(0xFF10B981), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaybackActive) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "Play/Pause",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        // +10s Button
+                        Button(
+                            onClick = {
+                                val targetSec = currentSeekSec + 10L
+                                currentSeekSec = targetSec
+                                val targetMs = targetSec * 1000L
+                                if (isMultiSyncMode) {
+                                    syncedPlayersMap.values.forEach { p -> try { p.time = targetMs } catch (e: Exception) {} }
+                                } else {
+                                    playerInstance?.let { try { it.time = targetMs } catch (e: Exception) {} }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("+10s", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
+
+                    // Speed Rate Selector Pills: 0.5x, 1.0x, 2.0x, 4.0x
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf(0.5f, 1.0f, 2.0f, 4.0f).forEach { speed ->
+                            val isSelected = playbackSpeed == speed
+                            Surface(
+                                color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF334155),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier
+                                    .clickable {
+                                        playbackSpeed = speed
+                                        if (isMultiSyncMode) {
+                                            syncedPlayersMap.values.forEach { p -> setMediaPlayerRate(p, speed) }
+                                        } else {
+                                            setMediaPlayerRate(playerInstance, speed)
+                                        }
+                                    }
+                            ) {
+                                Text(
+                                    text = "${speed}x",
+                                    color = if (isSelected) Color(0xFF0F172A) else Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Interactive Hover Bottom Sheet Drawer
+    if (showSetupBottomSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showSetupBottomSheet = false },
+            containerColor = Color(0xFF0F172A),
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("NVR PLAYBACK SETUP", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    IconButton(onClick = { showSetupBottomSheet = false }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8))
                     }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Time Field (Interactive Clock Time Picker Modal & Dropdown)
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .clickable { showTimePickerModal = true },
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9)),
+                // Mode Toggle: Single vs Multi-Sync
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1E293B), RoundedCornerShape(10.dp))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    Surface(
+                        color = if (!isMultiSyncMode) Color(0xFF3B82F6) else Color.Transparent,
                         shape = RoundedCornerShape(8.dp),
-                        border = CardDefaults.outlinedCardBorder()
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { isMultiSyncMode = false }
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.AccessTime, contentDescription = "Clock", tint = Color(0xFF0284C7), modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(selectedTimeSlot, color = Color(0xFF334155), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                            Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = Color(0xFF64748B))
-                        }
+                        Text("SINGLE CAMERA", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 8.dp))
                     }
 
-                    DropdownMenu(
-                        expanded = showTimeSlotDropdown,
-                        onDismissRequest = { showTimeSlotDropdown = false },
+                    Surface(
+                        color = if (isMultiSyncMode) Color(0xFF8B5CF6) else Color.Transparent,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                if (canMultiSync) {
+                                    isMultiSyncMode = true
+                                    if (selectedSyncCamIds.isEmpty()) {
+                                        selectedSyncCamIds = cameraList.take(4).map { it.id }.toSet()
+                                    }
+                                } else {
+                                    Toast.makeText(context, "Multi-Sync playback permission is disabled for your account.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                    ) {
+                        Text("MULTI-SYNC (2-4 FEEDS)", color = if (canMultiSync) Color.White else Color(0xFF64748B), fontSize = 11.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Camera Selector
+                if (isMultiSyncMode) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 260.dp)
-                            .background(Color.White)
+                            .background(Color(0xFF1E293B), RoundedCornerShape(10.dp))
+                            .padding(10.dp)
                     ) {
-                        timeSlots.forEach { (slotLabel, times) ->
-                            val isSelected = slotLabel == selectedTimeSlot
-                            DropdownMenuItem(
-                                text = {
+                        Text("SELECT SYNCED FEEDS (${selectedSyncCamIds.size}/4)", color = Color(0xFFC084FC), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            cameraList.forEach { cam ->
+                                val isChecked = selectedSyncCamIds.contains(cam.id)
+                                Surface(
+                                    color = if (isChecked) Color(0xFF8B5CF6).copy(alpha = 0.25f) else Color(0xFF0F172A),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, if (isChecked) Color(0xFF8B5CF6) else Color(0xFF334155)),
+                                    modifier = Modifier.clickable {
+                                        val current = selectedSyncCamIds.toMutableSet()
+                                        if (isChecked) {
+                                            if (current.size > 1) current.remove(cam.id)
+                                        } else {
+                                            if (current.size < 4) current.add(cam.id)
+                                        }
+                                        selectedSyncCamIds = current
+                                    }
+                                ) {
                                     Text(
-                                        text = slotLabel,
-                                        fontSize = 13.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) Color(0xFF0F172A) else Color(0xFF334155)
+                                        text = if (isChecked) "✓ ${cam.name}" else cam.name,
+                                        color = if (isChecked) Color.White else Color(0xFF94A3B8),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Normal,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                                     )
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(if (isSelected) Color(0xFFE0F2FE) else Color.Transparent),
-                                onClick = {
-                                    selectedTimeSlot = slotLabel
-                                    startTime = times.first
-                                    endTime = times.second
-                                    activeRtspUrl = "" // Reset to Idle
-                                    isPlaybackActive = false
-                                    showTimeSlotDropdown = false
                                 }
-                            )
+                            }
+                        }
+                    }
+                } else {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().clickable { showCameraDropdown = true },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Videocam, contentDescription = "Camera", tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Select Camera: ${currentCam!!.name} (Ch ${currentCam!!.channel})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Select", tint = Color.White)
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showCameraDropdown,
+                            onDismissRequest = { showCameraDropdown = false },
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).background(Color(0xFF1E293B))
+                        ) {
+                            cameraList.forEach { cam ->
+                                val isSelected = cam.id == currentCam?.id
+                                DropdownMenuItem(
+                                    text = { Text("${cam.name} (Ch ${cam.channel})", fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = if (isSelected) Color(0xFF38BDF8) else Color.White) },
+                                    onClick = {
+                                        currentCam = cam
+                                        onSelectCam(cam)
+                                        showCameraDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Date & Time Picker Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        // Date Selector Row
+                        Card(
+                            modifier = Modifier.fillMaxWidth().height(42.dp).clickable { showCalendarPicker = true },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Date: $selectedDate", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Icon(Icons.Default.CalendarToday, contentDescription = "Calendar", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Time Slot Selector
+                        Card(
+                            modifier = Modifier.fillMaxWidth().height(42.dp).clickable { showTimeSlotDropdown = true },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(selectedTimeSlot, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = Color.White)
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showTimeSlotDropdown,
+                            onDismissRequest = { showTimeSlotDropdown = false },
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).background(Color.White)
+                        ) {
+                            timeSlots.forEach { (slotLabel, times) ->
+                                val isSelected = slotLabel == selectedTimeSlot
+                                DropdownMenuItem(
+                                    text = { Text(slotLabel, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = if (isSelected) Color(0xFF0F172A) else Color(0xFF334155)) },
+                                    onClick = {
+                                        selectedTimeSlot = slotLabel
+                                        startTime = times.first
+                                        endTime = times.second
+                                        showTimeSlotDropdown = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            if (isMultiSyncMode) {
-                                if (!isPlaybackActive) {
-                                    isPlaybackActive = true
-                                } else {
-                                    syncedPlayersMap.values.forEach { p ->
-                                        try {
-                                            if (p.isPlaying) p.pause() else {
-                                                p.play()
-                                                setMediaPlayerRate(p, playbackSpeed)
-                                            }
-                                        } catch (e: Exception) {}
-                                    }
-                                    isPlaybackActive = syncedPlayersMap.values.any { it.isPlaying }
-                                }
-                            } else {
-                                if (activeRtspUrl.isBlank()) {
-                                    if (currentCam != null) {
-                                        activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
-                                            camera = currentCam!!,
-                                            isRemoteMode = isRemoteMode,
-                                            startDateStr = cleanStartDate,
-                                            startTimeStr = cleanStartTime,
-                                            endDateStr = cleanEndDate,
-                                            endTimeStr = cleanEndTime
-                                        )
-                                        isPlaybackActive = true
-                                    }
-                                } else {
-                                    val player = playerInstance
-                                    if (player != null) {
-                                        if (player.isPlaying) {
-                                            try {
-                                                player.pause()
-                                            } catch (e: Exception) {
-                                                player.stop()
-                                            }
-                                            isPlaybackActive = false
-                                        } else {
-                                            try {
-                                                player.play()
-                                                setMediaPlayerRate(player, playbackSpeed)
-                                            } catch (e: Exception) {}
-                                            isPlaybackActive = true
-                                        }
-                                    } else {
-                                        activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
-                                            camera = currentCam!!,
-                                            isRemoteMode = isRemoteMode,
-                                            startDateStr = cleanStartDate,
-                                            startTimeStr = cleanStartTime,
-                                            endDateStr = cleanEndDate,
-                                            endTimeStr = cleanEndTime
-                                        )
-                                        isPlaybackActive = true
-                                    }
-                                }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isPlaybackActive) Color(0xFFEF4444) else (if (isMultiSyncMode) Color(0xFF8B5CF6) else Color(0xFFE67E22))
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isPlaybackActive) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Stop",
-                            tint = Color.White
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (isPlaybackActive) "Pause ⏸" else (if (isMultiSyncMode) "Start Multi-Sync Playback" else "Start Playback"),
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            if (startTime.isBlank() || endTime.isBlank()) {
-                                Toast.makeText(context, "Please select Start and End time first!", Toast.LENGTH_LONG).show()
-                            } else {
-                                handleDownloadClipTrigger()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.height(44.dp)
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Download", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
+                // Primary CTA Button: Start Sync Playback
+                Button(
+                    onClick = {
+                        if (!isMultiSyncMode) {
+                            activeRtspUrl = RtspUrlBuilder.buildPlaybackRtspUrl(
+                                camera = currentCam!!,
+                                isRemoteMode = isRemoteMode,
+                                startDateStr = cleanStartDate,
+                                startTimeStr = cleanStartTime,
+                                endDateStr = cleanEndDate,
+                                endTimeStr = cleanEndTime
+                            )
+                        }
+                        isPlaybackActive = true
+                        showSetupBottomSheet = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = if (isMultiSyncMode) Color(0xFF8B5CF6) else Color(0xFF10B981)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Start Playback", tint = Color.White)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isMultiSyncMode) "Start Sync Playback (${selectedSyncCamIds.size} Feeds)" else "Start Single Playback",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
                 }
             }
         }

@@ -10,7 +10,8 @@ data class UserFeatures(
     val playback: Boolean = true,
     val hdStream: Boolean = true,
     val snapshotCapture: Boolean = true,
-    val clipDownload: Boolean = true
+    val clipDownload: Boolean = true,
+    val multiSyncPlayback: Boolean = true
 )
 
 data class UserProfile(

@@ -166,6 +166,7 @@ fun UserManagementPanel(
                                 FeatureBadge(label = "HD", active = user.features.hdStream)
                                 FeatureBadge(label = "Snapshot", active = user.features.snapshotCapture)
                                 FeatureBadge(label = "Clip Export", active = user.features.clipDownload)
+                                FeatureBadge(label = "Multi-Sync", active = user.features.multiSyncPlayback)
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
@@ -227,6 +228,7 @@ fun UserConfigModal(
     var featHdStream by remember { mutableStateOf(existingUser?.features?.hdStream ?: true) }
     var featSnapshot by remember { mutableStateOf(existingUser?.features?.snapshotCapture ?: true) }
     var featClipDownload by remember { mutableStateOf(existingUser?.features?.clipDownload ?: false) }
+    var featMultiSync by remember { mutableStateOf(existingUser?.features?.multiSyncPlayback ?: true) }
 
     val existingQ1 = existingUser?.securityQuestions?.getOrNull(0)?.question ?: "First Pet's Name?"
     val existingQ2 = existingUser?.securityQuestions?.getOrNull(1)?.question ?: "City of Birth?"
@@ -363,6 +365,7 @@ fun UserConfigModal(
                     ToggleRow("HD Main-Stream Toggle", featHdStream) { featHdStream = it }
                     ToggleRow("Snapshot / Frame Capture", featSnapshot) { featSnapshot = it }
                     ToggleRow("5-Min Clip Download Feature", featClipDownload) { featClipDownload = it }
+                    ToggleRow("Multi-Camera Synchronized Playback", featMultiSync) { featMultiSync = it }
 
                     HorizontalDivider(color = Color(0xFF1E293B))
 
@@ -450,7 +453,8 @@ fun UserConfigModal(
                                         playback = featPlayback,
                                         hdStream = featHdStream,
                                         snapshotCapture = featSnapshot,
-                                        clipDownload = featClipDownload
+                                        clipDownload = featClipDownload,
+                                        multiSyncPlayback = featMultiSync
                                     ),
                                     assignedCameraIds = selectedCamIds.toList(),
                                     securityQuestions = qList
