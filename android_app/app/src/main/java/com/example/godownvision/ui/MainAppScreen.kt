@@ -399,6 +399,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     var selectedCamIds by remember { mutableStateOf(setOf<Long>()) }
     var singleViewCam by remember { mutableStateOf<CameraEntity?>(null) }
     var playbackCam by remember { mutableStateOf<CameraEntity?>(null) }
+    var playbackTimestamp by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingCamera by remember { mutableStateOf<CameraEntity?>(null) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
@@ -705,6 +706,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                             if (activeUserFeatures.playback) {
                                 ScreenD_Playback(
                                     activeCam = playbackCam ?: cameraList.firstOrNull(),
+                                    initialTimestamp = playbackTimestamp,
                                     cameraList = cameraList,
                                     isRemoteMode = isRemoteMode,
                                     userFeatures = activeUserFeatures,
@@ -730,6 +732,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                 cameraList = cameraList,
                                 onJumpToPlayback = { targetCam, timestamp ->
                                     playbackCam = targetCam
+                                    playbackTimestamp = timestamp
                                     activeTab = "PLAYBACK"
                                     Toast.makeText(context, "Jumped to ${targetCam.name} @ $timestamp", Toast.LENGTH_SHORT).show()
                                 },
@@ -2150,6 +2153,7 @@ fun ClockTimePickerDialog(
 @Composable
 fun ScreenD_Playback(
     activeCam: CameraEntity?,
+    initialTimestamp: String = "",
     cameraList: List<CameraEntity>,
     isRemoteMode: Boolean,
     userFeatures: UserFeatures? = null,
@@ -2182,6 +2186,34 @@ fun ScreenD_Playback(
     var endTime by remember { mutableStateOf("12:59:59") }
 
     var currentSeekSec by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(activeCam, initialTimestamp) {
+        if (activeCam != null) {
+            currentCam = activeCam
+        }
+        if (initialTimestamp.isNotBlank()) {
+            try {
+                val parts = initialTimestamp.trim().split(" ")
+                if (parts.isNotEmpty() && parts[0].isNotBlank()) {
+                    selectedDate = parts[0]
+                }
+                if (parts.size >= 2) {
+                    val timeStr = parts[1]
+                    val tParts = timeStr.split(":")
+                    val h = tParts.getOrNull(0)?.toIntOrNull() ?: 12
+                    val m = tParts.getOrNull(1)?.toIntOrNull() ?: 0
+                    val s = tParts.getOrNull(2)?.toIntOrNull() ?: 0
+
+                    val formattedH = String.format(Locale.getDefault(), "%02d", h)
+                    startTime = "$formattedH:00:00"
+                    endTime = "$formattedH:59:59"
+                    currentSeekSec = (m * 60 + s).toLong()
+                }
+                showSetupBottomSheet = false
+                isPlaybackActive = true
+            } catch (e: Exception) {}
+        }
+    }
     var clipStartSec by remember { mutableLongStateOf(60L) }
     var clipEndSec by remember { mutableLongStateOf(330L) }
 
