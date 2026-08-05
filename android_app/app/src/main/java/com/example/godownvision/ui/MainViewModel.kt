@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.godownvision.data.AegisVaultData
+import com.example.godownvision.data.BookmarkIncident
 import com.example.godownvision.data.CameraEntity
 import com.example.godownvision.data.CameraRepository
 import com.example.godownvision.data.UserFeatures
@@ -139,5 +140,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteCamera(camera: CameraEntity) {
         repository.deleteCamera(camera)
+    }
+
+    fun addBookmark(bookmark: BookmarkIncident) {
+        vaultRepo.addBookmark(bookmark)
+    }
+
+    fun deleteBookmark(bookmarkId: String) {
+        vaultRepo.deleteBookmark(bookmarkId)
     }
 }

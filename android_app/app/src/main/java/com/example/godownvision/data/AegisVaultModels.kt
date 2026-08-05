@@ -32,10 +32,22 @@ data class AdminProfile(
     val securityQuestions: List<SecurityQuestion> = emptyList()
 )
 
+data class BookmarkIncident(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val cameraId: Long,
+    val cameraName: String,
+    val timestamp: String, // e.g. "2026-08-05 16:20:00"
+    val note: String,
+    val snapshotBase64: String = "",
+    val createdBy: String = "admin",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 data class AegisVaultData(
     val vaultVersion: String = "1.0.0",
     val lastUpdated: Long = System.currentTimeMillis(),
     val adminProfile: AdminProfile,
     val users: List<UserProfile> = emptyList(),
-    val cameras: List<CameraEntity> = emptyList()
+    val cameras: List<CameraEntity> = emptyList(),
+    val bookmarks: List<BookmarkIncident> = emptyList()
 )

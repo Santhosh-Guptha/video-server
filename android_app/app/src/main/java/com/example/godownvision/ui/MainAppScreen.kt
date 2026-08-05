@@ -40,6 +40,8 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CameraAlt
@@ -401,6 +403,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     var editingCamera by remember { mutableStateOf<CameraEntity?>(null) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
 
+    var showBookmarkDialog by remember { mutableStateOf(false) }
+    var bookmarkTargetCam by remember { mutableStateOf<CameraEntity?>(null) }
+    var bookmarkTargetTimestamp by remember { mutableStateOf("") }
+
     var activeFullscreen by remember { mutableStateOf<FullscreenData?>(null) }
 
     // Pitch Black Splash Screen Animation
@@ -591,6 +597,13 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                             label = { Text("Playback", fontSize = 9.sp) },
                             icon = { Icon(Icons.Default.Movie, contentDescription = "Playback") }
                         )
+
+                        NavigationBarItem(
+                            selected = activeTab == "BOOKMARKS",
+                            onClick = { activeTab = "BOOKMARKS" },
+                            label = { Text("Bookmarks", fontSize = 9.sp) },
+                            icon = { Icon(Icons.Default.Bookmark, contentDescription = "Bookmarks") }
+                        )
                     }
 
                     if (sessionState is ActiveSession.Admin) {
@@ -653,6 +666,11 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                             },
                             onRequestFullscreen = { data ->
                                 activeFullscreen = data
+                            },
+                            onOpenBookmark = { cam, ts ->
+                                bookmarkTargetCam = cam
+                                bookmarkTargetTimestamp = ts
+                                showBookmarkDialog = true
                             }
                         )
                     } else {
@@ -693,6 +711,11 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                     onSelectCam = { playbackCam = it },
                                     onRequestFullscreen = { data ->
                                         activeFullscreen = data
+                                    },
+                                    onOpenBookmark = { cam, ts ->
+                                        bookmarkTargetCam = cam
+                                        bookmarkTargetTimestamp = ts
+                                        showBookmarkDialog = true
                                     }
                                 )
                             } else {
@@ -700,6 +723,21 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                     Text("Playback feature is disabled for your user account.", color = Color.White)
                                 }
                             }
+                        }
+                        "BOOKMARKS" -> {
+                            BookmarksTabScreen(
+                                bookmarks = vaultData.bookmarks,
+                                cameraList = cameraList,
+                                onJumpToPlayback = { targetCam, timestamp ->
+                                    playbackCam = targetCam
+                                    activeTab = "PLAYBACK"
+                                    Toast.makeText(context, "Jumped to ${targetCam.name} @ $timestamp", Toast.LENGTH_SHORT).show()
+                                },
+                                onDeleteBookmark = { bookmarkId ->
+                                    viewModel.deleteBookmark(bookmarkId)
+                                    Toast.makeText(context, "Bookmark removed", Toast.LENGTH_SHORT).show()
+                                }
+                            )
                         }
                         "USERS" -> {
                             if (sessionState is ActiveSession.Admin) {
@@ -792,6 +830,21 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                 },
                 containerColor = Color(0xFF1E293B),
                 shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        if (showBookmarkDialog && bookmarkTargetCam != null) {
+            BookmarkDialog(
+                cameraId = bookmarkTargetCam!!.id,
+                cameraName = bookmarkTargetCam!!.name,
+                initialTimestamp = bookmarkTargetTimestamp,
+                currentUsername = currentUsername,
+                onDismiss = { showBookmarkDialog = false },
+                onSave = { bookmark ->
+                    viewModel.addBookmark(bookmark)
+                    showBookmarkDialog = false
+                    Toast.makeText(context, "Incident Bookmark Saved!", Toast.LENGTH_SHORT).show()
+                }
             )
         }
     }
@@ -1241,7 +1294,7 @@ fun ScreenC_SingleView(
     onBackToGrid: () -> Unit = {},
     onOpenPlayback: (CameraEntity) -> Unit,
     onRequestFullscreen: (FullscreenData) -> Unit,
-    onOpenCast: (String, String) -> Unit = { _, _ -> }
+    onOpenBookmark: (CameraEntity, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     var qualityMode by remember { mutableStateOf("MAIN") }
@@ -1397,16 +1450,16 @@ fun ScreenC_SingleView(
                         )
                     }
 
-                    // Cast Stream
+                    // Bookmark Incident
                     IconButton(
-                        onClick = { onOpenCast(camera.name, liveUrl) },
+                        onClick = { onOpenBookmark(camera, "") },
                         modifier = Modifier
                             .size(34.dp)
-                            .background(Color(0xFFC084FC).copy(alpha = 0.85f), CircleShape)
+                            .background(Color(0xFFF59E0B).copy(alpha = 0.85f), CircleShape)
                     ) {
                         Icon(
-                            Icons.Default.Cast,
-                            contentDescription = "Cast Stream",
+                            Icons.Default.BookmarkAdd,
+                            contentDescription = "Bookmark Incident",
                             tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
@@ -1456,7 +1509,8 @@ fun HourlyTimelineScrubber(
     onSeekPositionChanged: (Long) -> Unit,
     onClipRangeChanged: (Long, Long) -> Unit,
     onSpeedChanged: (Float) -> Unit,
-    onToggleDownloadMode: () -> Unit
+    onToggleDownloadMode: () -> Unit,
+    onOpenBookmark: () -> Unit = {}
 ) {
     val baseHour = remember(startHourStr) {
         if (startHourStr.contains(":")) startHourStr.split(":")[0].toIntOrNull() ?: 12 else 12
@@ -1596,6 +1650,26 @@ fun HourlyTimelineScrubber(
                             fontWeight = FontWeight.Medium
                         )
                     }
+                }
+            }
+
+            // Bookmark Incident Button
+            Surface(
+                color = Color(0xFFF59E0B).copy(alpha = 0.2f),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.5f)),
+                modifier = Modifier.clickable { onOpenBookmark() }
+            ) {
+                Box(
+                    modifier = Modifier.size(34.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BookmarkAdd,
+                        contentDescription = "Bookmark Incident",
+                        tint = Color(0xFFF59E0B),
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
 
@@ -2080,7 +2154,8 @@ fun ScreenD_Playback(
     isRemoteMode: Boolean,
     userFeatures: UserFeatures? = null,
     onSelectCam: (CameraEntity) -> Unit,
-    onRequestFullscreen: (FullscreenData) -> Unit
+    onRequestFullscreen: (FullscreenData) -> Unit,
+    onOpenBookmark: (CameraEntity, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     var currentCam by remember { mutableStateOf(activeCam ?: cameraList.firstOrNull()) }
@@ -2578,7 +2653,12 @@ fun ScreenD_Playback(
                             setMediaPlayerRate(playerInstance, speed)
                         }
                     },
-                    onToggleDownloadMode = { isDownloadMode = !isDownloadMode }
+                    onToggleDownloadMode = { isDownloadMode = !isDownloadMode },
+                    onOpenBookmark = {
+                        if (currentCam != null) {
+                            onOpenBookmark(currentCam!!, "$selectedDate $startTime")
+                        }
+                    }
                 )
             }
         }

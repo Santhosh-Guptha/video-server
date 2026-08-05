@@ -163,12 +163,31 @@ class VaultRepository(private val context: Context) {
                 )
             }
 
+            val bookmarksArray = root.optJSONArray("bookmarks") ?: JSONArray()
+            val bookmarksList = mutableListOf<BookmarkIncident>()
+            for (i in 0 until bookmarksArray.length()) {
+                val bObj = bookmarksArray.getJSONObject(i)
+                bookmarksList.add(
+                    BookmarkIncident(
+                        id = bObj.optString("id", UUID.randomUUID().toString()),
+                        cameraId = bObj.optLong("camera_id", 0L),
+                        cameraName = bObj.optString("camera_name", "Camera"),
+                        timestamp = bObj.optString("timestamp", ""),
+                        note = bObj.optString("note", ""),
+                        snapshotBase64 = bObj.optString("snapshot_base64", ""),
+                        createdBy = bObj.optString("created_by", "admin"),
+                        createdAt = bObj.optLong("created_at", System.currentTimeMillis())
+                    )
+                )
+            }
+
             val data = AegisVaultData(
                 vaultVersion = version,
                 lastUpdated = lastUpdated,
                 adminProfile = adminProfile,
                 users = usersList,
-                cameras = camsList
+                cameras = camsList,
+                bookmarks = bookmarksList
             )
             _vaultData.value = data
             return data
@@ -251,6 +270,22 @@ class VaultRepository(private val context: Context) {
                 camsArr.put(cObj)
             }
             put("cameras", camsArr)
+
+            val bookmarksArr = JSONArray()
+            data.bookmarks.forEach { b ->
+                val bObj = JSONObject().apply {
+                    put("id", b.id)
+                    put("camera_id", b.cameraId)
+                    put("camera_name", b.cameraName)
+                    put("timestamp", b.timestamp)
+                    put("note", b.note)
+                    put("snapshot_base64", b.snapshotBase64)
+                    put("created_by", b.createdBy)
+                    put("created_at", b.createdAt)
+                }
+                bookmarksArr.put(bObj)
+            }
+            put("bookmarks", bookmarksArr)
         }
 
         try {
@@ -258,6 +293,18 @@ class VaultRepository(private val context: Context) {
             vaultFile.writeBytes(encryptedBytes)
             _vaultData.value = data
         } catch (e: Exception) {}
+    }
+
+    fun addBookmark(bookmark: BookmarkIncident) {
+        val current = _vaultData.value
+        val updated = current.bookmarks.filterNot { it.id == bookmark.id } + bookmark
+        saveVault(current.copy(bookmarks = updated))
+    }
+
+    fun deleteBookmark(bookmarkId: String) {
+        val current = _vaultData.value
+        val updated = current.bookmarks.filterNot { it.id == bookmarkId }
+        saveVault(current.copy(bookmarks = updated))
     }
 
     fun updateAdminPassword(newPasswordHash: String, clearForceFlag: Boolean = true) {
