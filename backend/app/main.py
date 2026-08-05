@@ -446,8 +446,8 @@ async def startup():
     print(f"  Recording  : HD={policy.RECORD_HD_ONLY}, Normal={policy.RECORD_NORMAL}, Mobile={policy.RECORD_MOBILE}")
     print(f"  Live Stream: profile={policy.LIVE_STREAM_PROFILE}, adaptive={policy.ENABLE_ADAPTIVE_PROFILE}")
     if policy.ENABLE_ADAPTIVE_PROFILE:
-        print(f"    1x1 (focus) → {policy.FOCUS_VIEW_PROFILE}")
-        print(f"    2x2/3x3     → {policy.GRID_VIEW_PROFILE}")
+        print(f"    1x1 (focus) -> {policy.FOCUS_VIEW_PROFILE}")
+        print(f"    2x2/3x3     -> {policy.GRID_VIEW_PROFILE}")
     print(f"  Playback   : profile={policy.PLAYBACK_PROFILE}, normal_fallback={policy.PLAYBACK_ALLOW_NORMAL_FALLBACK}")
     print(f"  WebRTC     : enabled={policy.ENABLE_WEBRTC}, max_sessions={policy.MAX_WEBRTC_SESSIONS_PER_CAMERA}")
     print(f"  H265       : transcoding={policy.ENABLE_H265_TRANSCODING}, vcodec={policy.TRANSCODER_VCODEC}, preset={policy.TRANSCODER_PRESET}")
@@ -2089,9 +2089,12 @@ async def ws_status(ws: WebSocket):
 @app.get("/api/playback/{stream_id}/available-dates")
 async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depends(get_session)]):
     from .webrtc import resolve_stream_by_identifier
-    stream = await resolve_stream_by_identifier(stream_id, session, purpose="playback")
-    if stream:
-        stream_id = stream.stream_id
+    try:
+        stream = await asyncio.wait_for(resolve_stream_by_identifier(stream_id, session, purpose="playback"), timeout=2.0)
+        if stream:
+            stream_id = stream.stream_id
+    except Exception as e:
+        print(f"[available-dates] Stream resolution timeout/fallback: {e}")
 
     res = await session.execute(
         select(RecordingSegment.start_ts)

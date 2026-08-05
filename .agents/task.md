@@ -1,0 +1,8 @@
+- [x] Create and configure `.env` file with `PREFERRED_PROFILE` setting
+- [x] Add `preferred_profile` to `config.py` and `default_settings.json`
+- [x] Implement profile fallback routing in `webrtc.py` (`resolve_stream_by_identifier`)
+- [x] Modify `stream_manager.py` to use `server_camera_id` for path registration
+- [x] Modify `camera_watchdog.py` health and revert loops for Camera ID matching
+- [x] Update `edge_receiver.py` for Camera ID matching and `enable_edge_push` check
+- [x] Update `main.py` segment-complete webhook and `indexer.py` for Camera ID folder structure
+- [x] Verify functionality (restart services, push stream, check live/playback)

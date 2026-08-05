@@ -6,20 +6,6 @@ function getBackendTarget() {
   if (process.env.VITE_BACKEND_URL) {
     return process.env.VITE_BACKEND_URL
   }
-
-  // If running on Windows, resolve WSL IP address dynamically so proxy connects seamlessly to backend running in WSL
-  if (process.platform === 'win32') {
-    try {
-      const wslIp = execSync('wsl hostname -I', { encoding: 'utf8' }).trim().split(' ')[0]
-      if (wslIp) {
-        console.log(`[vite] Auto-detected WSL IP: ${wslIp} for backend proxy target`)
-        return `http://${wslIp}:8005`
-      }
-    } catch {
-      // Fallback if WSL command is unavailable
-    }
-  }
-
   return 'http://127.0.0.1:8005'
 }
 
