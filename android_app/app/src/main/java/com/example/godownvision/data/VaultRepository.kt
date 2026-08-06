@@ -206,7 +206,8 @@ class VaultRepository(private val context: Context) {
                         password = cObj.optString("password", ""),
                         channel = cObj.optInt("channel", 1),
                         nvrBrand = cObj.optString("nvrBrand", "HIKVISION"),
-                        streamQuality = cObj.optString("streamQuality", "MAIN")
+                        streamQuality = cObj.optString("streamQuality", "MAIN"),
+                        customRtspUrl = cObj.optString("custom_rtsp_url", "")
                     )
                 )
             }
@@ -323,6 +324,7 @@ class VaultRepository(private val context: Context) {
                     put("channel", c.channel)
                     put("nvrBrand", c.nvrBrand)
                     put("streamQuality", c.streamQuality)
+                    put("custom_rtsp_url", c.customRtspUrl)
                 }
                 camsArr.put(cObj)
             }

@@ -14,6 +14,10 @@ object RtspUrlBuilder {
         isRemoteMode: Boolean,
         overrideQuality: String? = null
     ): String {
+        if (camera.customRtspUrl.isNotBlank()) {
+            return camera.customRtspUrl.trim()
+        }
+
         val host = if (isRemoteMode) camera.remoteHost.ifBlank { camera.localIp } else camera.localIp.ifBlank { camera.remoteHost }
         val port = if (camera.rtspPort > 0) camera.rtspPort else 554
         val user = URLEncoder.encode(camera.username, "UTF-8")
@@ -59,6 +63,13 @@ object RtspUrlBuilder {
         endDateStr: String,   // YYYYMMDD
         endTimeStr: String    // HHMMSS
     ): String {
+        if (camera.customRtspUrl.isNotBlank()) {
+            val base = camera.customRtspUrl.trim()
+            val delim = if (base.contains("?")) "&" else "?"
+            val start = "${startDateStr}T${startTimeStr}Z"
+            val end = "${endDateStr}T${endTimeStr}Z"
+            return "$base${delim}starttime=$start&endtime=$end"
+        }
         val host = if (isRemoteMode) camera.remoteHost.ifBlank { camera.localIp } else camera.localIp.ifBlank { camera.remoteHost }
         val port = if (camera.rtspPort > 0) camera.rtspPort else 554
         val user = URLEncoder.encode(camera.username, "UTF-8")

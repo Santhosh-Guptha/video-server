@@ -26,5 +26,6 @@ data class CameraEntity(
     val nvrBrand: String = "HIKVISION",
     val streamQuality: String = "MAIN",
     val isNvr: Boolean = true,
+    val customRtspUrl: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )

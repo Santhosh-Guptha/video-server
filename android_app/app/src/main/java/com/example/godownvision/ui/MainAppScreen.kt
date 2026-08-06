@@ -3881,6 +3881,8 @@ fun CameraConfigDialog(
     var password by remember { mutableStateOf(initialCamera?.password ?: "") }
     var channel by remember { mutableStateOf(initialCamera?.channel?.toString() ?: "1") }
     var nvrBrand by remember { mutableStateOf(initialCamera?.nvrBrand ?: (prefilledDevice?.brand ?: "Hikvision")) }
+    var customRtspUrl by remember { mutableStateOf(initialCamera?.customRtspUrl ?: "") }
+    var useDirectRtsp by remember { mutableStateOf(initialCamera?.customRtspUrl?.isNotBlank() == true) }
 
     LaunchedEffect(prefilledDevice) {
         prefilledDevice?.let { dev ->
@@ -4077,35 +4079,75 @@ fun CameraConfigDialog(
                             }
                         }
 
-                        MonochromeTextField(
-                            value = localIp,
-                            onValueChange = { localIp = it },
-                            label = "IP Address or Hostname",
-                            placeholder = "192.168.1.100 or godown.ddns.net",
-                            helperText = "Local Wi-Fi IP address or remote public DDNS domain.",
-                            isDark = isDark
-                        )
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            MonochromeTextField(
-                                value = rtspPort,
-                                onValueChange = { rtspPort = it },
-                                label = "RTSP Port",
-                                placeholder = "554",
-                                keyboardType = KeyboardType.Number,
-                                isDark = isDark,
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { useDirectRtsp = false },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (!useDirectRtsp) Color(0xFF3B82F6) else Color(0xFF1E293B),
+                                    contentColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Standard IP / NVR", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = { useDirectRtsp = true },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (useDirectRtsp) Color(0xFFF59E0B) else Color(0xFF1E293B),
+                                    contentColor = if (useDirectRtsp) Color.Black else Color.White
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Direct RTSP URL", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (useDirectRtsp) {
+                            MonochromeTextField(
+                                value = customRtspUrl,
+                                onValueChange = { customRtspUrl = it },
+                                label = "Direct Custom RTSP Stream URL",
+                                placeholder = "rtsp://user:pass@192.168.1.50:554/live.sdp",
+                                helperText = "Enter direct RTSP URL. Overrides default NVR brand URL formatting.",
+                                isDark = isDark
+                            )
+                        } else {
+                            MonochromeTextField(
+                                value = localIp,
+                                onValueChange = { localIp = it },
+                                label = "IP Address or Hostname",
+                                placeholder = "192.168.1.100 or godown.ddns.net",
+                                helperText = "Local Wi-Fi IP address or remote public DDNS domain.",
+                                isDark = isDark
                             )
 
-                            MonochromeTextField(
-                                value = httpPort,
-                                onValueChange = { httpPort = it },
-                                label = "HTTP / ONVIF Port",
-                                placeholder = "80",
-                                keyboardType = KeyboardType.Number,
-                                isDark = isDark,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                MonochromeTextField(
+                                    value = rtspPort,
+                                    onValueChange = { rtspPort = it },
+                                    label = "RTSP Port",
+                                    placeholder = "554",
+                                    keyboardType = KeyboardType.Number,
+                                    isDark = isDark,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                MonochromeTextField(
+                                    value = httpPort,
+                                    onValueChange = { httpPort = it },
+                                    label = "HTTP / ONVIF Port",
+                                    placeholder = "80",
+                                    keyboardType = KeyboardType.Number,
+                                    isDark = isDark,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                     }
 
@@ -4292,19 +4334,33 @@ fun CameraConfigDialog(
 
                     Button(
                         onClick = {
-                            if (name.isNotBlank() && localIp.isNotBlank()) {
+                            val finalCustomUrl = if (useDirectRtsp && customRtspUrl.isNotBlank()) {
+                                val trimmed = customRtspUrl.trim()
+                                if (!trimmed.startsWith("rtsp://") && !trimmed.startsWith("rtsps://")) "rtsp://$trimmed" else trimmed
+                            } else ""
+
+                            val validIpOrCustom = localIp.isNotBlank() || finalCustomUrl.isNotBlank()
+
+                            if (name.isNotBlank() && validIpOrCustom) {
+                                val resolvedIp = if (localIp.isBlank() && finalCustomUrl.isNotBlank()) {
+                                    try {
+                                        finalCustomUrl.substringAfter("://").substringAfter("@").substringBefore("/").substringBefore(":")
+                                    } catch (e: Exception) { "127.0.0.1" }
+                                } else localIp
+
                                 val camera = CameraEntity(
                                     id = initialCamera?.id ?: 0L,
                                     name = name,
                                     location = location,
-                                    localIp = localIp,
-                                    remoteHost = remoteHost.ifBlank { localIp },
+                                    localIp = resolvedIp,
+                                    remoteHost = remoteHost.ifBlank { resolvedIp },
                                     rtspPort = rtspPort.toIntOrNull() ?: 554,
                                     httpPort = httpPort.toIntOrNull() ?: 80,
                                     username = username,
                                     password = password,
                                     channel = channel.toIntOrNull() ?: 1,
-                                    nvrBrand = nvrBrand
+                                    nvrBrand = if (useDirectRtsp) "CUSTOM" else nvrBrand,
+                                    customRtspUrl = finalCustomUrl
                                 )
                                 onSave(camera)
                             }
