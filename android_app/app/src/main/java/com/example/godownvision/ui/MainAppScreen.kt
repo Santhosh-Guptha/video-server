@@ -394,7 +394,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     val canConfigureCameras by viewModel.canConfigureCameras.collectAsState()
 
     var showSplash by remember { mutableStateOf(true) }
-    var activeTab by remember { mutableStateOf("LIVE") }
+    var activeTab by remember { mutableStateOf("CHANNELS") }
     var isRemoteMode by remember { mutableStateOf(true) }
     var selectedCamIds by remember { mutableStateOf(setOf<Long>()) }
     var singleViewCam by remember { mutableStateOf<CameraEntity?>(null) }
@@ -409,6 +409,16 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     var bookmarkTargetTimestamp by remember { mutableStateOf("") }
 
     var activeFullscreen by remember { mutableStateOf<FullscreenData?>(null) }
+
+    // Reset view state to Camera Tree on login/session transition
+    LaunchedEffect(sessionState) {
+        if (sessionState !is ActiveSession.Unauthenticated) {
+            activeTab = "CHANNELS"
+            singleViewCam = null
+            playbackCam = null
+            selectedCamIds = emptySet()
+        }
+    }
 
     // Pitch Black Splash Screen Animation
     if (showSplash) {
@@ -579,8 +589,11 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     contentColor = Color.White
                 ) {
                     NavigationBarItem(
-                        selected = activeTab == "CHANNELS",
-                        onClick = { activeTab = "CHANNELS" },
+                        selected = activeTab == "CHANNELS" && singleViewCam == null,
+                        onClick = {
+                            singleViewCam = null
+                            activeTab = "CHANNELS"
+                        },
                         label = { Text("Tree", fontSize = 9.sp) },
                         icon = { Icon(Icons.Default.AccountTree, contentDescription = "Tree") }
                     )
@@ -883,7 +896,13 @@ fun ScreenA_ChannelTree(
 
     if (cameraList.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No NVRs / Cameras Configured", color = Color.White, fontWeight = FontWeight.Bold)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.AccountTree, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("No Assigned Cameras / Locations", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Contact system administrator to assign camera feeds to your account.", color = Color(0xFF94A3B8), fontSize = 12.sp)
+            }
         }
         return
     }
