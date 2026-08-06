@@ -792,6 +792,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                 if (showAddDialog && canConfigureCameras) {
                     CameraConfigDialog(
                         initialCamera = editingCamera,
+                        cameraList = cameraList,
                         onDismiss = { showAddDialog = false },
                         onSave = { camera ->
                             viewModel.insertCamera(camera)
@@ -875,7 +876,10 @@ fun ScreenA_ChannelTree(
     onLaunchLiveView: () -> Unit,
     onOpenPlayback: (CameraEntity) -> Unit
 ) {
-    var expandedNvr by remember { mutableStateOf(true) }
+    val groupedByLocation = remember(cameraList) {
+        cameraList.groupBy { if (it.location.isBlank()) "Default Zone" else it.location.trim() }
+    }
+    var expandedLocations by remember { mutableStateOf(groupedByLocation.keys.toSet()) }
 
     if (cameraList.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -900,9 +904,20 @@ fun ScreenA_ChannelTree(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.AccountTree, contentDescription = "Tree", tint = Color(0xFF10B981), modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("NVR & IP Camera Tree", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Location & Camera Tree", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("(${selectedCamIds.size}/${cameraList.size})", color = Color(0xFF10B981), fontSize = 11.sp)
+                    Surface(
+                        color = Color(0xFF3B82F6).copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "${cameraList.size} Feeds",
+                            color = Color(0xFF60A5FA),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -932,7 +947,11 @@ fun ScreenA_ChannelTree(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item {
+            items(groupedByLocation.keys.toList()) { locName ->
+                val camsInLoc = groupedByLocation[locName] ?: emptyList()
+                val isExpanded = expandedLocations.contains(locName)
+                val allSelectedInLoc = camsInLoc.isNotEmpty() && camsInLoc.all { selectedCamIds.contains(it.id) }
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
@@ -942,26 +961,58 @@ fun ScreenA_ChannelTree(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { expandedNvr = !expandedNvr },
+                                .clickable {
+                                    expandedLocations = if (isExpanded) {
+                                        expandedLocations - locName
+                                    } else {
+                                        expandedLocations + locName
+                                    }
+                                },
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    if (expandedNvr) Icons.Default.ArrowDropDown else Icons.Default.ChevronRight,
+                                    if (isExpanded) Icons.Default.ArrowDropDown else Icons.Default.ChevronRight,
                                     contentDescription = "Expand",
                                     tint = Color(0xFF3B82F6),
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("NVR Cluster 01 (${cameraList.firstOrNull()?.nvrBrand ?: "HIKVISION"})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Icon(
+                                    Icons.Default.Place,
+                                    contentDescription = "Location Group",
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "$locName (${camsInLoc.size} Camera${if (camsInLoc.size > 1) "s" else ""})",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
                             }
-                            Text("ONLINE", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 10.sp)
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = allSelectedInLoc,
+                                    onCheckedChange = { checked ->
+                                        val mutable = selectedCamIds.toMutableSet()
+                                        if (checked) {
+                                            mutable.addAll(camsInLoc.map { it.id })
+                                        } else {
+                                            mutable.removeAll(camsInLoc.map { it.id }.toSet())
+                                        }
+                                        onSelectionChanged(mutable)
+                                    }
+                                )
+                            }
                         }
 
-                        if (expandedNvr) {
+                        if (isExpanded) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            cameraList.forEach { cam ->
+                            camsInLoc.forEach { cam ->
                                 val isChecked = selectedCamIds.contains(cam.id)
                                 Row(
                                     modifier = Modifier
@@ -3690,6 +3741,7 @@ fun MonochromeTextField(
     isPassword: Boolean = false,
     keyboardType: KeyboardType = KeyboardType.Text,
     isDark: Boolean = true,
+    trailingIcon: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val textColor = if (isDark) Color.White else Color.Black
@@ -3698,19 +3750,22 @@ fun MonochromeTextField(
     val borderColor = if (isDark) Color(0xFF3A3A3C) else Color(0xFFE5E5EA)
 
     Column(modifier = modifier) {
-        Text(
-            text = label,
-            color = textColor,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(4.dp))
+        if (label.isNotBlank()) {
+            Text(
+                text = label,
+                color = textColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        }
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
             placeholder = { Text(placeholder, color = subtextColor, fontSize = 12.sp) },
             visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            trailingIcon = trailingIcon,
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = inputBg,
@@ -3739,6 +3794,7 @@ fun MonochromeTextField(
 @Composable
 fun CameraConfigDialog(
     initialCamera: CameraEntity?,
+    cameraList: List<CameraEntity> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (CameraEntity) -> Unit
 ) {
@@ -3762,7 +3818,17 @@ fun CameraConfigDialog(
     var channel by remember { mutableStateOf(initialCamera?.channel?.toString() ?: "1") }
     var nvrBrand by remember { mutableStateOf(initialCamera?.nvrBrand ?: "Hikvision") }
 
+    var showLocationDropdown by remember { mutableStateOf(false) }
     var showBrandDropdown by remember { mutableStateOf(false) }
+
+    val existingLocations = remember(cameraList) {
+        val list = cameraList.map { it.location.trim() }.filter { it.isNotBlank() }.distinct().toMutableList()
+        if (!list.contains("Warehouse A")) list.add("Warehouse A")
+        if (!list.contains("Main Entrance")) list.add("Main Entrance")
+        if (!list.contains("Godown #1")) list.add("Godown #1")
+        if (!list.contains("Loading Dock")) list.add("Loading Dock")
+        list
+    }
 
     // Test Connection States: 0 = Idle, 1 = Testing, 2 = Success, 3 = Failure
     var testStatus by remember { mutableIntStateOf(0) }
@@ -3831,13 +3897,71 @@ fun CameraConfigDialog(
                             isDark = isDark
                         )
 
-                        MonochromeTextField(
-                            value = location,
-                            onValueChange = { location = it },
-                            label = "Location Tag",
-                            placeholder = "e.g., Zone A, Main Entrance",
-                            isDark = isDark
-                        )
+                        // Interactive Location Selector (Dropdown + Custom Input)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            MonochromeTextField(
+                                value = location,
+                                onValueChange = { location = it },
+                                label = "Location Group",
+                                placeholder = "Select or type new group (e.g. Godown #2)",
+                                helperText = "Select from existing location groups or type a new group name.",
+                                isDark = isDark,
+                                trailingIcon = {
+                                    IconButton(onClick = { showLocationDropdown = !showLocationDropdown }) {
+                                        Icon(
+                                            Icons.Default.ArrowDropDown,
+                                            contentDescription = "Select Location Group",
+                                            tint = subtextColor
+                                        )
+                                    }
+                                }
+                            )
+
+                            DropdownMenu(
+                                expanded = showLocationDropdown,
+                                onDismissRequest = { showLocationDropdown = false },
+                                modifier = Modifier
+                                    .fillMaxWidth(0.85f)
+                                    .background(if (isDark) Color(0xFF1E293B) else Color(0xFFFFFFFF))
+                            ) {
+                                Text(
+                                    "EXISTING LOCATION GROUPS:",
+                                    color = subtextColor,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                                existingLocations.forEach { loc ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.Place, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(loc, color = textColor, fontSize = 13.sp)
+                                            }
+                                        },
+                                        onClick = {
+                                            location = loc
+                                            showLocationDropdown = false
+                                        }
+                                    )
+                                }
+                                HorizontalDivider(color = borderColor)
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Add, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("+ Add New Location Group...", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        }
+                                    },
+                                    onClick = {
+                                        location = ""
+                                        showLocationDropdown = false
+                                    }
+                                )
+                            }
+                        }
                     }
 
                     HorizontalDivider(color = borderColor, thickness = 1.dp)
