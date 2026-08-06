@@ -3822,12 +3822,7 @@ fun CameraConfigDialog(
     var showBrandDropdown by remember { mutableStateOf(false) }
 
     val existingLocations = remember(cameraList) {
-        val list = cameraList.map { it.location.trim() }.filter { it.isNotBlank() }.distinct().toMutableList()
-        if (!list.contains("Warehouse A")) list.add("Warehouse A")
-        if (!list.contains("Main Entrance")) list.add("Main Entrance")
-        if (!list.contains("Godown #1")) list.add("Godown #1")
-        if (!list.contains("Loading Dock")) list.add("Loading Dock")
-        list
+        cameraList.map { it.location.trim() }.filter { it.isNotBlank() }.distinct()
     }
 
     // Test Connection States: 0 = Idle, 1 = Testing, 2 = Success, 3 = Failure

@@ -35,11 +35,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         when (session) {
             is ActiveSession.Admin -> vault.cameras
             is ActiveSession.User -> {
-                if (session.profile.assignedCameraIds.isEmpty()) {
-                    vault.cameras
-                } else {
-                    vault.cameras.filter { session.profile.assignedCameraIds.contains(it.id) }
-                }
+                vault.cameras.filter { session.profile.assignedCameraIds.contains(it.id) }
             }
             is ActiveSession.Unauthenticated -> emptyList()
         }

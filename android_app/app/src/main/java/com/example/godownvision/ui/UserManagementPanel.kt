@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -374,27 +375,128 @@ fun UserConfigModal(
 
                     HorizontalDivider(color = Color(0xFF1E293B))
 
-                    Text("ASSIGNED CAMERA FEEDS", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                    allCameras.forEach { cam ->
-                        val isChecked = selectedCamIds.contains(cam.id)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (isChecked) selectedCamIds.remove(cam.id) else selectedCamIds.add(cam.id)
+                    val groupedByLocation = remember(allCameras) {
+                        allCameras.groupBy { if (it.location.isBlank()) "Default Zone" else it.location.trim() }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("LOCATION & CAMERA ASSIGNMENTS", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "Select All",
+                                color = Color(0xFF38BDF8),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.clickable {
+                                    selectedCamIds.clear()
+                                    selectedCamIds.addAll(allCameras.map { it.id })
                                 }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = isChecked,
-                                onCheckedChange = { check ->
-                                    if (check) selectedCamIds.add(cam.id) else selectedCamIds.remove(cam.id)
-                                },
-                                colors = CheckboxDefaults.colors(checkedColor = Color(0xFF10B981))
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("${cam.name} (Ch ${cam.channel})", color = Color.White, fontSize = 12.sp)
+                            Text("•", color = Color(0xFF64748B), fontSize = 10.sp)
+                            Text(
+                                "Clear All",
+                                color = Color(0xFFF87171),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.clickable {
+                                    selectedCamIds.clear()
+                                }
+                            )
+                        }
+                    }
+
+                    if (allCameras.isEmpty()) {
+                        Text("No cameras available in system.", color = Color(0xFF64748B), fontSize = 11.sp)
+                    } else {
+                        groupedByLocation.forEach { (locName, camsInLoc) ->
+                            val allInLocSelected = camsInLoc.isNotEmpty() && camsInLoc.all { selectedCamIds.contains(it.id) }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    // Location Header Row
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                if (allInLocSelected) {
+                                                    camsInLoc.forEach { selectedCamIds.remove(it.id) }
+                                                } else {
+                                                    camsInLoc.forEach {
+                                                        if (!selectedCamIds.contains(it.id)) selectedCamIds.add(it.id)
+                                                    }
+                                                }
+                                            },
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Place, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = locName,
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "(${camsInLoc.count { selectedCamIds.contains(it.id) }}/${camsInLoc.size})",
+                                                color = Color(0xFF94A3B8),
+                                                fontSize = 10.sp
+                                            )
+                                        }
+
+                                        Checkbox(
+                                            checked = allInLocSelected,
+                                            onCheckedChange = { checked ->
+                                                if (checked) {
+                                                    camsInLoc.forEach {
+                                                        if (!selectedCamIds.contains(it.id)) selectedCamIds.add(it.id)
+                                                    }
+                                                } else {
+                                                    camsInLoc.forEach { selectedCamIds.remove(it.id) }
+                                                }
+                                            },
+                                            colors = CheckboxDefaults.colors(checkedColor = Color(0xFF10B981))
+                                        )
+                                    }
+
+                                    // Individual Cameras under Location
+                                    camsInLoc.forEach { cam ->
+                                        val isChecked = selectedCamIds.contains(cam.id)
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(start = 16.dp, top = 2.dp, bottom = 2.dp)
+                                                .clickable {
+                                                    if (isChecked) selectedCamIds.remove(cam.id) else selectedCamIds.add(cam.id)
+                                                },
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Checkbox(
+                                                checked = isChecked,
+                                                onCheckedChange = { check ->
+                                                    if (check) selectedCamIds.add(cam.id) else selectedCamIds.remove(cam.id)
+                                                },
+                                                colors = CheckboxDefaults.colors(checkedColor = Color(0xFF10B981)),
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("${cam.name} (Ch ${cam.channel})", color = Color(0xFFE2E8F0), fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
