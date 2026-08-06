@@ -12,13 +12,41 @@ import java.util.UUID
 
 class VaultRepository(private val context: Context) {
 
-    private val vaultFile: File by lazy {
-        val primaryDir = File(Environment.getExternalStorageDirectory(), "Android/media/${context.packageName}")
-        if (!primaryDir.exists()) {
-            try { primaryDir.mkdirs() } catch (e: Exception) {}
-        }
-        val targetDir = if (primaryDir.exists()) primaryDir else context.filesDir
-        File(targetDir, "aegis_vault.bin")
+    private fun getVaultCandidateFiles(): List<File> {
+        val candidates = mutableListOf<File>()
+
+        // 1. Public Documents (Survives uninstall)
+        try {
+            val docsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "AegisVault")
+            if (!docsDir.exists()) docsDir.mkdirs()
+            candidates.add(File(docsDir, "aegis_vault.bin"))
+        } catch (e: Exception) {}
+
+        // 2. Public Downloads (Survives uninstall)
+        try {
+            val dlDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AegisVault")
+            if (!dlDir.exists()) dlDir.mkdirs()
+            candidates.add(File(dlDir, "aegis_vault.bin"))
+        } catch (e: Exception) {}
+
+        // 3. /sdcard/AegisVault (Survives uninstall)
+        try {
+            val sdDir = File(Environment.getExternalStorageDirectory(), "AegisVault")
+            if (!sdDir.exists()) sdDir.mkdirs()
+            candidates.add(File(sdDir, "aegis_vault.bin"))
+        } catch (e: Exception) {}
+
+        // 4. Android/media package directory
+        try {
+            val mediaDir = File(Environment.getExternalStorageDirectory(), "Android/media/${context.packageName}")
+            if (!mediaDir.exists()) mediaDir.mkdirs()
+            candidates.add(File(mediaDir, "aegis_vault.bin"))
+        } catch (e: Exception) {}
+
+        // 5. Internal filesDir
+        candidates.add(File(context.filesDir, "aegis_vault.bin"))
+
+        return candidates
     }
 
     private val _vaultData = MutableStateFlow<AegisVaultData>(createInitialVault())
@@ -51,15 +79,32 @@ class VaultRepository(private val context: Context) {
 
     @Synchronized
     fun loadVault(): AegisVaultData {
-        if (!vaultFile.exists() || vaultFile.length() == 0L) {
+        val candidates = getVaultCandidateFiles()
+        var foundBytes: ByteArray? = null
+
+        for (file in candidates) {
+            if (file.exists() && file.length() > 0L) {
+                try {
+                    val bytes = file.readBytes()
+                    if (bytes.isNotEmpty()) {
+                        val testDecrypted = VaultCryptoEngine.decrypt(bytes)
+                        if (testDecrypted.isNotBlank()) {
+                            foundBytes = bytes
+                            break
+                        }
+                    }
+                } catch (e: Exception) {}
+            }
+        }
+
+        if (foundBytes == null) {
             val initial = createInitialVault()
             saveVault(initial)
             return initial
         }
 
         try {
-            val encryptedBytes = vaultFile.readBytes()
-            val jsonStr = VaultCryptoEngine.decrypt(encryptedBytes)
+            val jsonStr = VaultCryptoEngine.decrypt(foundBytes)
             if (jsonStr.isBlank()) {
                 val initial = createInitialVault()
                 saveVault(initial)
@@ -194,6 +239,8 @@ class VaultRepository(private val context: Context) {
                 bookmarks = bookmarksList
             )
             _vaultData.value = data
+            // Mirror restored vault across all persistent locations
+            saveVault(data)
             return data
         } catch (e: Exception) {
             val initial = createInitialVault()
@@ -298,7 +345,16 @@ class VaultRepository(private val context: Context) {
 
         try {
             val encryptedBytes = VaultCryptoEngine.encrypt(root.toString(2))
-            vaultFile.writeBytes(encryptedBytes)
+            val candidates = getVaultCandidateFiles()
+            candidates.forEach { file ->
+                try {
+                    val parent = file.parentFile
+                    if (parent != null && !parent.exists()) {
+                        parent.mkdirs()
+                    }
+                    file.writeBytes(encryptedBytes)
+                } catch (e: Exception) {}
+            }
             _vaultData.value = data
         } catch (e: Exception) {}
     }
@@ -391,8 +447,10 @@ class VaultRepository(private val context: Context) {
     }
 
     fun emergencyResetVault() {
-        if (vaultFile.exists()) {
-            try { vaultFile.delete() } catch (e: Exception) {}
+        getVaultCandidateFiles().forEach { file ->
+            if (file.exists()) {
+                try { file.delete() } catch (e: Exception) {}
+            }
         }
         val initial = createInitialVault()
         saveVault(initial)

@@ -1,43 +1,30 @@
 package com.example.godownvision.security
 
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import java.security.KeyStore
 import java.security.MessageDigest
 import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 object VaultCryptoEngine {
-    private const val KEY_ALIAS = "AegisStreamMasterKey"
-    private const val ANDROID_KEYSTORE = "AndroidKeyStore"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val GCM_TAG_LENGTH = 128
     private const val IV_LENGTH = 12
+    private const val MASTER_SEED = "AEGIS_PERSISTENT_UNINSTALL_SAFE_VAULT_KEY_2026"
+    private val MASTER_SALT = byteArrayOf(
+        0x41.toByte(), 0x65.toByte(), 0x67.toByte(), 0x69.toByte(),
+        0x73.toByte(), 0x53.toByte(), 0x65.toByte(), 0x63.toByte(),
+        0x75.toByte(), 0x72.toByte(), 0x65.toByte(), 0x56.toByte(),
+        0x61.toByte(), 0x75.toByte(), 0x6c.toByte(), 0x74.toByte()
+    )
 
     private fun getSecretKey(): SecretKey {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        if (keyStore.containsAlias(KEY_ALIAS)) {
-            val entry = keyStore.getEntry(KEY_ALIAS, null) as KeyStore.SecretKeyEntry
-            return entry.secretKey
-        }
-
-        val keyGenerator = KeyGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_AES,
-            ANDROID_KEYSTORE
-        )
-        val keyGenSpec = KeyGenParameterSpec.Builder(
-            KEY_ALIAS,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256)
-            .build()
-
-        keyGenerator.init(keyGenSpec)
-        return keyGenerator.generateKey()
+        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val spec = PBEKeySpec(MASTER_SEED.toCharArray(), MASTER_SALT, 1000, 256)
+        val tmp = factory.generateSecret(spec)
+        return SecretKeySpec(tmp.encoded, "AES")
     }
 
     fun encrypt(plainText: String): ByteArray {
@@ -49,15 +36,28 @@ object VaultCryptoEngine {
     }
 
     fun decrypt(encryptedBytes: ByteArray): String {
-        if (encryptedBytes.size <= IV_LENGTH) return ""
-        val iv = encryptedBytes.copyOfRange(0, IV_LENGTH)
-        val cipherText = encryptedBytes.copyOfRange(IV_LENGTH, encryptedBytes.size)
+        if (encryptedBytes.isEmpty()) return ""
 
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
-        cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), gcmSpec)
-        val plainBytes = cipher.doFinal(cipherText)
-        return String(plainBytes, Charsets.UTF_8)
+        // Check if raw plaintext JSON
+        val rawStr = String(encryptedBytes, Charsets.UTF_8)
+        if (rawStr.trim().startsWith("{") && rawStr.trim().endsWith("}")) {
+            return rawStr
+        }
+
+        if (encryptedBytes.size <= IV_LENGTH) return ""
+
+        return try {
+            val iv = encryptedBytes.copyOfRange(0, IV_LENGTH)
+            val cipherText = encryptedBytes.copyOfRange(IV_LENGTH, encryptedBytes.size)
+
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
+            cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), gcmSpec)
+            val plainBytes = cipher.doFinal(cipherText)
+            String(plainBytes, Charsets.UTF_8)
+        } catch (e: Exception) {
+            ""
+        }
     }
 
     fun hashPassword(password: String): String {
