@@ -1138,7 +1138,7 @@ fun ScreenB_LiveGrid(
 ) {
     var matrixMode by remember { mutableIntStateOf(2) }
     var currentPage by remember { mutableIntStateOf(0) }
-    var isListView by remember { mutableStateOf(true) }
+    var isListView by remember { mutableStateOf(false) }
 
     if (cameraList.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1147,28 +1147,18 @@ fun ScreenB_LiveGrid(
         return
     }
 
-    val pageSize = when (matrixMode) {
-        1 -> 1
-        2 -> 4
-        3 -> 9
-        else -> 16
-    }
-
-    val totalPages = maxOf(1, (cameraList.size + pageSize - 1) / pageSize)
-    val safePage = currentPage.coerceIn(0, totalPages - 1)
-    val pageCameras = cameraList.drop(safePage * pageSize).take(pageSize)
-
     Column(modifier = Modifier.fillMaxSize()) {
+        // Header Controls
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 8.dp),
+                .padding(bottom = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (!isListView) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf(1 to "1x1", 2 to "2x2", 3 to "3x3", 4 to "4x4").forEach { (mode, label) ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1 to "1x1 Single", 2 to "2x Dynamic Grid").forEach { (mode, label) ->
                         Button(
                             onClick = {
                                 matrixMode = mode
@@ -1178,7 +1168,7 @@ fun ScreenB_LiveGrid(
                                 containerColor = if (matrixMode == mode) Color(0xFF3B82F6) else Color(0xFF1E293B),
                                 contentColor = Color.White
                             ),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.height(30.dp)
                         ) {
@@ -1225,187 +1215,201 @@ fun ScreenB_LiveGrid(
             }
         }
 
-        val gridColumns = matrixMode
-        val cardHeight = when (matrixMode) {
-            1 -> 260.dp
-            2 -> 160.dp
-            3 -> 110.dp
-            else -> 85.dp
-        }
+        // Dynamic Non-Scrolling Grid Container fitting screen length
+        BoxWithConstraints(modifier = Modifier.weight(1f)) {
+            val totalHeight = maxHeight
+            val gridColumns = if (matrixMode == 1) 1 else 2
 
-        Box(modifier = Modifier.weight(1f)) {
-            if (isListView) {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(cameraList) { cam ->
-                        val streamUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = cam.streamQuality)
+            // Target ~150.dp height per row in 2-column mode to fit rows up to screen length without scrolling
+            val targetRowHeight = if (matrixMode == 1) totalHeight else 150.dp
+            val numRows = if (matrixMode == 1) 1 else maxOf(1, (totalHeight / targetRowHeight).toInt())
+            val pageSize = gridColumns * numRows
 
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(210.dp)
-                                .clickable { onDoubleTapTile(cam) },
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                            shape = RoundedCornerShape(12.dp)
+            val totalPages = maxOf(1, (cameraList.size + pageSize - 1) / pageSize)
+            val safePage = currentPage.coerceIn(0, totalPages - 1)
+            val pageCameras = cameraList.drop(safePage * pageSize).take(pageSize)
+
+            val rowSpacing = 6.dp
+            val cardHeight = if (matrixMode == 1) totalHeight else (totalHeight - (rowSpacing * (numRows - 1))) / numRows
+
+            Column(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (isListView) {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxSize()
                         ) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                RtspVideoPlayer(
-                                    rtspUrl = streamUrl,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                            items(cameraList) { cam ->
+                                val streamUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = cam.streamQuality)
 
-                                // Top Info Bar
-                                Row(
+                                Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(Color.Black.copy(alpha = 0.65f))
-                                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                                        .align(Alignment.TopCenter),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .height(210.dp)
+                                        .clickable { onDoubleTapTile(cam) },
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                    shape = RoundedCornerShape(12.dp)
                                 ) {
-                                    Text(
-                                        text = "${cam.name} (Ch ${cam.channel})",
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp
-                                    )
-                                    Text(
-                                        text = "LIVE • DOUBLE-TAP FOR HD",
-                                        color = Color(0xFF10B981),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 10.sp
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        onRequestFullscreen(
-                                            FullscreenData(
-                                                titleText = "LIVE FULLSCREEN • ${cam.name} (Ch ${cam.channel})",
-                                                cameraName = cam.name,
-                                                rtspUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = "MAIN"),
-                                                isPlayback = false
-                                            )
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        RtspVideoPlayer(
+                                            rtspUrl = streamUrl,
+                                            modifier = Modifier.fillMaxSize()
                                         )
-                                    },
+
+                                        // Top Info Bar
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(Color.Black.copy(alpha = 0.65f))
+                                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                                .align(Alignment.TopCenter),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "${cam.name} (Ch ${cam.channel})",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp
+                                            )
+                                            Text(
+                                                text = "LIVE • DOUBLE-TAP FOR HD",
+                                                color = Color(0xFF10B981),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                onRequestFullscreen(
+                                                    FullscreenData(
+                                                        titleText = "LIVE FULLSCREEN • ${cam.name} (Ch ${cam.channel})",
+                                                        cameraName = cam.name,
+                                                        rtspUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = "MAIN"),
+                                                        isPlayback = false
+                                                    )
+                                                )
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(8.dp)
+                                                .size(32.dp)
+                                                .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Fullscreen,
+                                                contentDescription = "Fullscreen",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(gridColumns),
+                            verticalArrangement = Arrangement.spacedBy(rowSpacing),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            userScrollEnabled = false,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(pageCameras) { cam ->
+                                val qualityToUse = if (matrixMode == 1) "MAIN" else cam.streamQuality
+                                val streamUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = qualityToUse)
+
+                                Card(
                                     modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .padding(8.dp)
-                                        .size(32.dp)
-                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                        .fillMaxWidth()
+                                        .height(cardHeight)
+                                        .clickable { onDoubleTapTile(cam) },
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                                    shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Fullscreen,
-                                        contentDescription = "Fullscreen",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        RtspVideoPlayer(
+                                            rtspUrl = streamUrl,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+
+                                        // Top Info Bar
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(Color.Black.copy(alpha = 0.6f))
+                                                .padding(4.dp)
+                                                .align(Alignment.TopCenter),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(cam.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                            Text(if (qualityToUse == "MAIN") "HD" else "LIVE", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 8.sp)
+                                        }
+
+                                        // Translucent Fullscreen Symbol Overlay directly on top of video feed
+                                        IconButton(
+                                            onClick = {
+                                                onRequestFullscreen(
+                                                    FullscreenData(
+                                                        titleText = "LIVE FULLSCREEN • ${cam.name} (Ch ${cam.channel})",
+                                                        cameraName = cam.name,
+                                                        rtspUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = "MAIN"),
+                                                        isPlayback = false
+                                                    )
+                                                )
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(4.dp)
+                                                .size(28.dp)
+                                                .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Fullscreen,
+                                                contentDescription = "Fullscreen",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(gridColumns),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(pageCameras) { cam ->
-                        val qualityToUse = if (matrixMode == 1) "MAIN" else cam.streamQuality
-                        val streamUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = qualityToUse)
 
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(cardHeight)
-                                .clickable { onDoubleTapTile(cam) },
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                            shape = RoundedCornerShape(8.dp)
+                // Page Navigation Bar
+                if (totalPages > 1 && !isListView) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = { if (safePage > 0) currentPage-- },
+                            enabled = safePage > 0,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                            modifier = Modifier.height(30.dp)
                         ) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                RtspVideoPlayer(
-                                    rtspUrl = streamUrl,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                            Icon(Icons.Default.ChevronLeft, contentDescription = "Prev", modifier = Modifier.size(16.dp))
+                            Text("Prev", fontSize = 10.sp)
+                        }
 
-                                // Top Info Bar
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(Color.Black.copy(alpha = 0.6f))
-                                        .padding(4.dp)
-                                        .align(Alignment.TopCenter),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(cam.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 9.sp)
-                                    Text(if (qualityToUse == "MAIN") "HD" else "LIVE", color = Color(0xFF10B981), fontWeight = FontWeight.Bold, fontSize = 8.sp)
-                                }
+                        Text("Page ${safePage + 1} of $totalPages (${cameraList.size} Feeds)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
 
-                                // Translucent Fullscreen Symbol Overlay directly on top of video feed
-                                IconButton(
-                                    onClick = {
-                                        onRequestFullscreen(
-                                            FullscreenData(
-                                                titleText = "LIVE FULLSCREEN • ${cam.name} (Ch ${cam.channel})",
-                                                cameraName = cam.name,
-                                                rtspUrl = RtspUrlBuilder.buildLiveRtspUrl(cam, isRemoteMode, overrideQuality = "MAIN"),
-                                                isPlayback = false
-                                            )
-                                        )
-                                    },
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .padding(4.dp)
-                                        .size(28.dp)
-                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Fullscreen,
-                                        contentDescription = "Fullscreen",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
+                        Button(
+                            onClick = { if (safePage < totalPages - 1) currentPage++ },
+                            enabled = safePage < totalPages - 1,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Text("Next", fontSize = 10.sp)
+                            Icon(Icons.Default.ChevronRight, contentDescription = "Next", modifier = Modifier.size(16.dp))
                         }
                     }
-                }
-            }
-        }
-
-        if (totalPages > 1) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = { if (safePage > 0) currentPage-- },
-                    enabled = safePage > 0,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    modifier = Modifier.height(30.dp)
-                ) {
-                    Icon(Icons.Default.ChevronLeft, contentDescription = "Prev", modifier = Modifier.size(16.dp))
-                    Text("Prev", fontSize = 10.sp)
-                }
-
-                Text("Page ${safePage + 1} of $totalPages", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-
-                Button(
-                    onClick = { if (safePage < totalPages - 1) currentPage++ },
-                    enabled = safePage < totalPages - 1,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    modifier = Modifier.height(30.dp)
-                ) {
-                    Text("Next", fontSize = 10.sp)
-                    Icon(Icons.Default.ChevronRight, contentDescription = "Next", modifier = Modifier.size(16.dp))
                 }
             }
         }
