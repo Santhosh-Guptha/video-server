@@ -11,7 +11,9 @@ data class UserFeatures(
     val hdStream: Boolean = true,
     val snapshotCapture: Boolean = true,
     val clipDownload: Boolean = true,
-    val multiSyncPlayback: Boolean = true
+    val multiSyncPlayback: Boolean = true,
+    val canScanIpRange: Boolean = true,
+    val canScanNetwork: Boolean = true
 )
 
 data class UserProfile(

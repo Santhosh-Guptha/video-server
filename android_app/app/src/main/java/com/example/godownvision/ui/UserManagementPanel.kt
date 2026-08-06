@@ -230,6 +230,8 @@ fun UserConfigModal(
     var featSnapshot by remember { mutableStateOf(existingUser?.features?.snapshotCapture ?: true) }
     var featClipDownload by remember { mutableStateOf(existingUser?.features?.clipDownload ?: false) }
     var featMultiSync by remember { mutableStateOf(existingUser?.features?.multiSyncPlayback ?: true) }
+    var featScanIpRange by remember { mutableStateOf(existingUser?.features?.canScanIpRange ?: true) }
+    var featScanNetwork by remember { mutableStateOf(existingUser?.features?.canScanNetwork ?: true) }
 
     val existingQ1 = existingUser?.securityQuestions?.getOrNull(0)?.question ?: "First Pet's Name?"
     val existingQ2 = existingUser?.securityQuestions?.getOrNull(1)?.question ?: "City of Birth?"
@@ -367,6 +369,8 @@ fun UserConfigModal(
                     ToggleRow("Snapshot / Frame Capture", featSnapshot) { featSnapshot = it }
                     ToggleRow("5-Min Clip Download Feature", featClipDownload) { featClipDownload = it }
                     ToggleRow("Multi-Camera Synchronized Playback", featMultiSync) { featMultiSync = it }
+                    ToggleRow("Targeted Subnet IP Range Scanner", featScanIpRange) { featScanIpRange = it }
+                    ToggleRow("Smart Wi-Fi Network Auto-Discovery", featScanNetwork) { featScanNetwork = it }
 
                     HorizontalDivider(color = Color(0xFF1E293B))
 
@@ -556,7 +560,9 @@ fun UserConfigModal(
                                         hdStream = featHdStream,
                                         snapshotCapture = featSnapshot,
                                         clipDownload = featClipDownload,
-                                        multiSyncPlayback = featMultiSync
+                                        multiSyncPlayback = featMultiSync,
+                                        canScanIpRange = featScanIpRange,
+                                        canScanNetwork = featScanNetwork
                                     ),
                                     assignedCameraIds = selectedCamIds.toList(),
                                     securityQuestions = qList

@@ -403,6 +403,9 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     var showAddDialog by remember { mutableStateOf(false) }
     var editingCamera by remember { mutableStateOf<CameraEntity?>(null) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showSubnetScanDialog by remember { mutableStateOf(false) }
+    var showWifiScanDialog by remember { mutableStateOf(false) }
+    var prefilledScanDevice by remember { mutableStateOf<com.example.godownvision.services.DiscoveredDevice?>(null) }
 
     var showBookmarkDialog by remember { mutableStateOf(false) }
     var bookmarkTargetCam by remember { mutableStateOf<CameraEntity?>(null) }
@@ -806,11 +809,48 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     CameraConfigDialog(
                         initialCamera = editingCamera,
                         cameraList = cameraList,
-                        onDismiss = { showAddDialog = false },
+                        canScanIpRange = activeUserFeatures.canScanIpRange,
+                        canScanNetwork = activeUserFeatures.canScanNetwork,
+                        onOpenSubnetScan = { showSubnetScanDialog = true },
+                        onOpenWifiScan = { showWifiScanDialog = true },
+                        prefilledDevice = prefilledScanDevice,
+                        onDismiss = {
+                            showAddDialog = false
+                            prefilledScanDevice = null
+                        },
                         onSave = { camera ->
                             viewModel.insertCamera(camera)
                             showAddDialog = false
+                            prefilledScanDevice = null
                             Toast.makeText(context, "Camera saved!", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+
+                if (showSubnetScanDialog && activeUserFeatures.canScanIpRange) {
+                    SubnetScannerDialog(
+                        onDismiss = { showSubnetScanDialog = false },
+                        onDeviceSelected = { device ->
+                            prefilledScanDevice = device
+                            showSubnetScanDialog = false
+                            if (!showAddDialog) {
+                                editingCamera = null
+                                showAddDialog = true
+                            }
+                        }
+                    )
+                }
+
+                if (showWifiScanDialog && activeUserFeatures.canScanNetwork) {
+                    WifiAutoScanDialog(
+                        onDismiss = { showWifiScanDialog = false },
+                        onDeviceSelected = { device ->
+                            prefilledScanDevice = device
+                            showWifiScanDialog = false
+                            if (!showAddDialog) {
+                                editingCamera = null
+                                showAddDialog = true
+                            }
                         }
                     )
                 }
@@ -3814,6 +3854,11 @@ fun MonochromeTextField(
 fun CameraConfigDialog(
     initialCamera: CameraEntity?,
     cameraList: List<CameraEntity> = emptyList(),
+    canScanIpRange: Boolean = true,
+    canScanNetwork: Boolean = true,
+    onOpenSubnetScan: () -> Unit = {},
+    onOpenWifiScan: () -> Unit = {},
+    prefilledDevice: com.example.godownvision.services.DiscoveredDevice? = null,
     onDismiss: () -> Unit,
     onSave: (CameraEntity) -> Unit
 ) {
@@ -3826,16 +3871,24 @@ fun CameraConfigDialog(
     val primaryBtnBg = if (isDark) Color(0xFFFFFFFF) else Color(0xFF000000)
     val primaryBtnText = if (isDark) Color(0xFF000000) else Color(0xFFFFFFFF)
 
-    var name by remember { mutableStateOf(initialCamera?.name ?: "") }
+    var name by remember { mutableStateOf(initialCamera?.name ?: (prefilledDevice?.serviceName ?: "")) }
     var location by remember { mutableStateOf(initialCamera?.location ?: "") }
-    var localIp by remember { mutableStateOf(initialCamera?.localIp ?: "") }
+    var localIp by remember { mutableStateOf(initialCamera?.localIp ?: (prefilledDevice?.ip ?: "")) }
     var remoteHost by remember { mutableStateOf(initialCamera?.remoteHost ?: "") }
-    var rtspPort by remember { mutableStateOf(initialCamera?.rtspPort?.toString() ?: "554") }
+    var rtspPort by remember { mutableStateOf(initialCamera?.rtspPort?.toString() ?: (prefilledDevice?.primaryPort?.toString() ?: "554")) }
     var httpPort by remember { mutableStateOf(initialCamera?.httpPort?.toString() ?: "80") }
     var username by remember { mutableStateOf(initialCamera?.username ?: "admin") }
     var password by remember { mutableStateOf(initialCamera?.password ?: "") }
     var channel by remember { mutableStateOf(initialCamera?.channel?.toString() ?: "1") }
-    var nvrBrand by remember { mutableStateOf(initialCamera?.nvrBrand ?: "Hikvision") }
+    var nvrBrand by remember { mutableStateOf(initialCamera?.nvrBrand ?: (prefilledDevice?.brand ?: "Hikvision")) }
+
+    LaunchedEffect(prefilledDevice) {
+        prefilledDevice?.let { dev ->
+            localIp = dev.ip
+            rtspPort = dev.primaryPort.toString()
+            if (dev.serviceName.isNotBlank() && name.isBlank()) name = dev.serviceName
+        }
+    }
 
     var showLocationDropdown by remember { mutableStateOf(false) }
     var showBrandDropdown by remember { mutableStateOf(false) }
@@ -3982,7 +4035,47 @@ fun CameraConfigDialog(
 
                     // Section 2: Connection Settings
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("SECTION 2: CONNECTION SETTINGS", color = subtextColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("SECTION 2: CONNECTION SETTINGS", color = subtextColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        if (canScanIpRange || canScanNetwork) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (canScanIpRange) {
+                                    OutlinedButton(
+                                        onClick = onOpenSubnetScan,
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8)),
+                                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Scan IP / Subnet", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                if (canScanNetwork) {
+                                    OutlinedButton(
+                                        onClick = onOpenWifiScan,
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF10B981)),
+                                        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Scan Connected Wi-Fi", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
 
                         MonochromeTextField(
                             value = localIp,

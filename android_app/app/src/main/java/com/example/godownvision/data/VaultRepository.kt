@@ -152,7 +152,10 @@ class VaultRepository(private val context: Context) {
                     playback = featObj.optBoolean("playback", true),
                     hdStream = featObj.optBoolean("hd_stream", true),
                     snapshotCapture = featObj.optBoolean("snapshot_capture", true),
-                    clipDownload = featObj.optBoolean("clip_download", true)
+                    clipDownload = featObj.optBoolean("clip_download", true),
+                    multiSyncPlayback = featObj.optBoolean("multi_sync_playback", true),
+                    canScanIpRange = featObj.optBoolean("can_scan_ip_range", true),
+                    canScanNetwork = featObj.optBoolean("can_scan_network", true)
                 )
                 val camArray = uObj.optJSONArray("assigned_camera_ids") ?: JSONArray()
                 val camIds = mutableListOf<Long>()
@@ -284,6 +287,9 @@ class VaultRepository(private val context: Context) {
                         put("hd_stream", u.features.hdStream)
                         put("snapshot_capture", u.features.snapshotCapture)
                         put("clip_download", u.features.clipDownload)
+                        put("multi_sync_playback", u.features.multiSyncPlayback)
+                        put("can_scan_ip_range", u.features.canScanIpRange)
+                        put("can_scan_network", u.features.canScanNetwork)
                     })
                     val camArr = JSONArray()
                     u.assignedCameraIds.forEach { camArr.put(it) }
