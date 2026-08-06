@@ -21,6 +21,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -593,7 +595,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     contentColor = Color.White
                 ) {
                     NavigationBarItem(
-                        selected = activeTab == "CHANNELS" && singleViewCam == null,
+                        selected = activeTab == "CHANNELS",
                         onClick = {
                             singleViewCam = null
                             activeTab = "CHANNELS"
@@ -603,7 +605,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     )
                     NavigationBarItem(
                         selected = activeTab == "LIVE",
-                        onClick = { activeTab = "LIVE" },
+                        onClick = {
+                            singleViewCam = null
+                            activeTab = "LIVE"
+                        },
                         label = { Text("Live View", fontSize = 9.sp) },
                         icon = { Icon(Icons.Default.Videocam, contentDescription = "Live View") }
                     )
@@ -612,6 +617,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                         NavigationBarItem(
                             selected = activeTab == "PLAYBACK",
                             onClick = {
+                                singleViewCam = null
                                 playbackTimestamp = ""
                                 activeTab = "PLAYBACK"
                             },
@@ -621,7 +627,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
 
                         NavigationBarItem(
                             selected = activeTab == "BOOKMARKS",
-                            onClick = { activeTab = "BOOKMARKS" },
+                            onClick = {
+                                singleViewCam = null
+                                activeTab = "BOOKMARKS"
+                            },
                             label = { Text("Bookmarks", fontSize = 9.sp) },
                             icon = { Icon(Icons.Default.Bookmark, contentDescription = "Bookmarks") }
                         )
@@ -630,7 +639,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     if (sessionState is ActiveSession.Admin) {
                         NavigationBarItem(
                             selected = activeTab == "USERS",
-                            onClick = { activeTab = "USERS" },
+                            onClick = {
+                                singleViewCam = null
+                                activeTab = "USERS"
+                            },
                             label = { Text("Users", fontSize = 9.sp) },
                             icon = { Icon(Icons.Default.Domain, contentDescription = "Users") }
                         )
@@ -639,7 +651,10 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     if (canConfigureCameras) {
                         NavigationBarItem(
                             selected = activeTab == "CONFIG",
-                            onClick = { activeTab = "CONFIG" },
+                            onClick = {
+                                singleViewCam = null
+                                activeTab = "CONFIG"
+                            },
                             label = { Text("Cameras", fontSize = 9.sp) },
                             icon = { Icon(Icons.Default.Settings, contentDescription = "Cameras") }
                         )
@@ -669,7 +684,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                     .padding(12.dp)
             ) {
                 key(activeTab, singleViewCam) {
-                    if (singleViewCam != null || activeTab == "SINGLE") {
+                    if (activeTab == "SINGLE" && singleViewCam != null) {
                         ScreenC_SingleView(
                             camera = singleViewCam ?: cameraList.firstOrNull(),
                             isRemoteMode = isRemoteMode,
@@ -717,6 +732,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                                 isRemoteMode = isRemoteMode,
                                 onDoubleTapTile = { cam ->
                                     singleViewCam = cam
+                                    activeTab = "SINGLE"
                                 },
                                 onRequestFullscreen = { data ->
                                     activeFullscreen = data
@@ -1287,7 +1303,11 @@ fun ScreenB_LiveGrid(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(210.dp)
-                                            .clickable { onDoubleTapTile(cam) },
+                                            .pointerInput(cam.id) {
+                                                detectTapGestures(
+                                                    onDoubleTap = { onDoubleTapTile(cam) }
+                                                )
+                                            },
                                         colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
                                         shape = RoundedCornerShape(12.dp)
                                     ) {
@@ -1406,7 +1426,11 @@ fun ScreenB_LiveGrid(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(cardHeight)
-                                            .clickable { onDoubleTapTile(cam) },
+                                            .pointerInput(cam.id) {
+                                                detectTapGestures(
+                                                    onDoubleTap = { onDoubleTapTile(cam) }
+                                                )
+                                            },
                                         colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
