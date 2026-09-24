@@ -43,7 +43,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           c => c.active && c.streams && c.streams.length > 0
         )
         setActiveCameras(activeCams)
-        
+
         // Populate initial statuses and online set from DB values
         const activeIds = new Set<string>()
         const statuses: Record<string, string> = {}
@@ -205,7 +205,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
     else if (gridSize === 36) cols = 6;
 
     return (
-      <div 
+      <div
         className="liveWallGrid"
         style={{
           display: 'grid',
@@ -226,8 +226,8 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           const viewers = streamViewers[anyStream.stream_id] || 0
 
           return (
-            <div 
-              key={cam.id} 
+            <div
+              key={cam.id}
               className="liveWallCell"
               onDoubleClick={() => setSelectedCameraForModal(cam)}
               style={{ cursor: 'pointer', position: 'relative', width: '100%', aspectRatio: '16/9' }}
@@ -301,9 +301,9 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
         </div>
         <div className="liveWallActions" style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
           {/* Refresh Button */}
-          <button 
+          <button
             type="button"
-            className="batchBtn" 
+            className="batchBtn"
             onClick={fetchActiveList}
             style={{
               padding: '4px 10px',
@@ -380,8 +380,8 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
               <button className="batchBtn stop" onClick={handleStopAll} style={{ padding: '4px 10px', fontSize: '11px' }}>
                 <Square size={12} /> Stop All
               </button>
-              <button 
-                className="batchBtn" 
+              <button
+                className="batchBtn"
                 onClick={() => setIsFullView(true)}
                 style={{
                   background: 'rgba(59, 130, 246, 0.15)',
@@ -443,7 +443,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
               <div className="vmsModalInfoCol">
                 <h3 className="vmsModalTitle">{selectedCameraForModal.name}</h3>
                 <span className="vmsModalSubtitle">Camera details & stream metadata</span>
-                
+
                 <div className="vmsModalSpecs">
                   {selectedCameraForModal.server_camera_id && (
                     <div className="vmsSpecItem">

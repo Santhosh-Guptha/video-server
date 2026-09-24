@@ -138,3 +138,8 @@ backend/venv_win/
 *.njsproj
 *.sln
 *.sw?
+
+# Local deployment state and camera inventory
+backend/app/backup_cameras.json
+backend/app/configs/streaming_overrides.json
+frontend/dist-verified/

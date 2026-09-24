@@ -37,7 +37,7 @@ export default function App() {
   const [layout, setLayout] = useState(() => {
     const stored = localStorage.getItem('vms_layout')
     return stored ? parseInt(stored, 10) : 4
-  }) 
+  })
   const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream' | 'gap_recovery' | 'streaming_settings'>(() => {
     const stored = localStorage.getItem('vms_active_tab')
     return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream' || stored === 'gap_recovery' || stored === 'streaming_settings') ? stored : 'dashboard'

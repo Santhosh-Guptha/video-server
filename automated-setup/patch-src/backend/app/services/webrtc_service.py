@@ -45,7 +45,7 @@ class WebRTCService:
             source_stream_id, db_session, sdp_offer
         )
         url = f"{settings.mediamtx_webrtc_url}/{media_stream_id}/whep"
-        
+
         headers = {"Content-Type": "application/sdp"}
         try:
             resp = await client.post(url, content=sdp_offer, headers=headers)
@@ -80,7 +80,7 @@ class WebRTCService:
                 browser_tab_id=browser_tab_id,
                 db_session=db_session
             )
-                
+
             return resp.text, session_id
         except Exception as e:
             if transcoded:
@@ -106,11 +106,11 @@ class WebRTCService:
         source_stream_id = session_path[1] if session_path else stream_id
         was_transcoded = session_path[2] if session_path else False
         url = f"{settings.mediamtx_webrtc_url}/{media_stream_id}/whep/{session_id}"
-        
+
         headers = {"Content-Type": content_type}
         try:
             resp = await client.request(method, url, content=content, headers=headers)
-            
+
             if method == "DELETE" and resp.status_code in (200, 204, 404):
                 # Close the session cleanly in the registries
                 await SessionRegistry.close_session(session_id, db_session, stream_id=source_stream_id)

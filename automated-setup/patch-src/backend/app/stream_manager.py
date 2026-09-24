@@ -39,11 +39,11 @@ async def _mtx_request(method: str, url: str, **kwargs):
 async def should_record_stream(session: AsyncSession, stream: CameraStream) -> bool:
     from .config import should_record_profile
     profile_val = stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type)
-    
+
     # Check standard policy
     if should_record_profile(profile_val):
         return True
-        
+
     # Check fallback recording policy
     if settings.record_fallback_to_normal and profile_val.upper() in ("SUB", "NORMAL"):
         # Check if the HD stream of this camera is offline
@@ -53,11 +53,11 @@ async def should_record_stream(session: AsyncSession, stream: CameraStream) -> b
         )
         all_streams = res.scalars().all()
         hd_stream = next((s for s in all_streams if (s.profile_type.value if hasattr(s.profile_type, 'value') else str(s.profile_type)).upper() in ("MAIN", "HD")), None)
-        
+
         if not hd_stream or hd_stream.status == StreamState.OFFLINE:
             print(f"[recording] HD stream is offline/missing. Falling back to record NORMAL profile for stream {stream.stream_id}")
             return True
-            
+
     return False
 
 def should_record(stream: CameraStream) -> bool:
@@ -89,7 +89,7 @@ class StreamManager:
         """Registers a camera stream path permanently in MediaMTX with sourceOnDemand = True."""
         from .webrtc import resolve_stream_by_identifier
         from .models import Camera
-        
+
         # Load camera safely
         camera = stream.camera if getattr(stream, "camera", None) else None
         if not camera:
@@ -97,19 +97,19 @@ class StreamManager:
                 select(Camera).where(Camera.id == stream.camera_id)
             )
             camera = res_cam.scalar_one_or_none()
-            
+
         if camera:
             path_name = camera.server_camera_id or camera.name
         else:
             path_name = stream.stream_id
-            
+
         # Resolve the best stream URL to publish/pull (applying preferred profile & fallback)
         best_stream = await resolve_stream_by_identifier(path_name, session)
         if not best_stream:
             best_stream = stream
-            
+
         lock_name = f"stream:{path_name}"
-        
+
         # Acquire Lock
         acquired = await RedisManager.acquire_lock(lock_name, expire_seconds=30)
         if not acquired:
@@ -119,7 +119,7 @@ class StreamManager:
         try:
             url_strip = best_stream.stream_url.strip() if best_stream.stream_url else ""
             is_push = best_stream.stream_mode == "PUSH" or (best_stream.stream_mode == "AUTO" and "publisher" in url_strip.lower())
-            
+
             # 1. Ensure path exists in DB Registry
             res = await session.execute(
                 select(StreamRegistry).where(StreamRegistry.stream_id == path_name)
@@ -169,10 +169,10 @@ class StreamManager:
                 select(Camera).where(Camera.id == stream.camera_id)
             )
             camera = res_cam.scalar_one_or_none()
-            
+
         path_name = (camera.server_camera_id or camera.name) if camera else stream.stream_id
         lock_name = f"stream:{path_name}"
-        
+
         acquired = await RedisManager.acquire_lock(lock_name, expire_seconds=30)
         if not acquired:
             return
@@ -183,7 +183,7 @@ class StreamManager:
             if resp.status_code in (200, 204):
                 print(f"[stream_manager] Deleted path {path_name} from MediaMTX.")
                 await EventBus.publish("stream_closed", {"stream_id": path_name})
-            
+
             # 2. Stop transcoder if active
             if stream.codec and stream.codec.upper() == "H265":
                 from .transcoder import transcoder_manager
@@ -206,9 +206,9 @@ class StreamManager:
         stream.status = state
         stream.error_message = error_message
         await session.commit()
-        
+
         await RedisManager.set_stream_state(stream.stream_id, state.value, error_message)
-        
+
         # Also set state for camera ID if camera is available
         from .models import Camera
         camera = stream.camera if getattr(stream, "camera", None) else None

@@ -1,50 +1,31 @@
-# MediaMTX configuration
-
-# Enable API for dynamic path management
-api: true
-apiAddress: :9997
-
-# Log level
-logLevel: warn
-
-# RTSP server settings (Ingress and Egress)
-rtsp: true
+# MediaMTX v1.21 configuration template. Run from the backend directory.
+# The unattended installer generates deployment-specific addresses and paths.
+logLevel: info
+api: yes
+apiAddress: 127.0.0.1:9997
+rtsp: yes
 rtspAddress: :8554
-protocols: [udp, multicast, tcp]
-
-# RTMP server settings (Edge push ingress)
-rtmp: true
+rtspTransports: [tcp]
+rtmp: yes
 rtmpAddress: :1935
-
-# HLS server settings (Browser compatibility fallback)
-hls: true
+hls: yes
 hlsAddress: :8080
 hlsVariant: lowLatency
-hlsSegmentCount: 8
-hlsSegmentDuration: 1s
-hlsPartDuration: 200ms
-
-# WebRTC server settings (WHEP / WHIP live viewing)
-webrtc: true
+webrtc: yes
 webrtcAddress: :8889
-webrtcAdditionalHosts: [localhost]
-webrtcICEServers: [stun:stun.l.google.com:19302]
-
-# Recording settings
-# We enable recording on paths. Each dynamic stream will configure its record option.
-# By default, we write fragmented MP4 files matching the indexer folder structure.
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8000
+webrtcAdditionalHosts: [localhost, 127.0.0.1]
+webrtcICEServers2: []
+moq: no
 pathDefaults:
-  record: true
-  recordPath: /app/data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live
+  rtspTransport: tcp
+  record: yes
+  recordPath: ./data/recordings/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live
   recordFormat: fmp4
   recordPartDuration: 1s
   recordSegmentDuration: 60s
-  runOnRecordSegmentComplete: python -m app.record_complete "${MTX_PATH:-$RTSP_PATH}" "${MTX_SEGMENT_PATH:-$RECORD_PATH}"
-
-# Configuration for paths
+  runOnRecordSegmentComplete: /bin/bash ./app/segment_hook.sh "$MTX_PATH" "$MTX_SEGMENT_PATH"
 paths:
-  # Enable a default path configuration for publishers
-  # This allows edge clients to push streams dynamically without prior path registration if needed.
   all_others:
     source: publisher
-    record: true

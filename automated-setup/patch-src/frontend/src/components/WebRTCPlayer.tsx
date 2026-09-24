@@ -285,7 +285,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       // Get Session URL from Location header
       const locationHeader = whepResp.headers.get('Location');
       if (!locationHeader) throw new Error('Missing WHEP Location session header');
-      
+
       const sessionUrl = locationHeader;
       (pc as any).sessionUrl = sessionUrl;
       (pc as any).sessionId = sessionUrl.split('/').pop();
@@ -335,7 +335,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       const backoffDelay = Math.min(1000 * Math.pow(2, reconnectCountRef.current), 10000);
       console.log(`[WebRTCPlayer:${streamId}] Reconnecting (attempt ${reconnectCountRef.current}) in ${backoffDelay}ms...`);
       setStats(prev => ({ ...prev, reconnections: reconnectCountRef.current }));
-      
+
       reconnectTimeoutRef.current = window.setTimeout(() => {
         startWebRTC();
       }, backoffDelay);
@@ -443,8 +443,8 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
                   packet_loss: packetLoss,
                   jitter: videoTrackStats.jitter ? videoTrackStats.jitter * 1000 : null,
                   frames_dropped: videoTrackStats.framesDropped || 0,
-                  decoder_latency: videoTrackStats.totalDecodeTime && framesDecoded > 0 
-                    ? (videoTrackStats.totalDecodeTime / framesDecoded) * 1000 
+                  decoder_latency: videoTrackStats.totalDecodeTime && framesDecoded > 0
+                    ? (videoTrackStats.totalDecodeTime / framesDecoded) * 1000
                     : null
                 })
               }).catch(() => {});
@@ -482,9 +482,9 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   };
 
   return (
-    <div 
-      className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} 
-      onClick={onFocus} 
+    <div
+      className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`}
+      onClick={onFocus}
       style={{ width: '100%', height: '100%', position: 'relative', cursor: onFocus ? 'pointer' : 'default' }}
     >
       {!minimal && (
@@ -545,24 +545,24 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
             <X size={14} />
           </button>
         )}
-        
+
         {!loaded && (
           <div className="playerOverlay" style={{ background: 'rgba(9, 13, 22, 0.85)', backdropFilter: 'blur(8px)' }}>
             <Loader2 className="spin" size={20} style={{ color: '#38bdf8' }} />
             <div className="overlayText" style={{ color: '#cbd5e1' }}>
-              {health === 'RECOVERING' 
-                ? `Reconnecting stream (attempt ${reconnectCountRef.current})...` 
+              {health === 'RECOVERING'
+                ? `Reconnecting stream (attempt ${reconnectCountRef.current})...`
                 : 'Negotiating WebRTC stream…'}
             </div>
           </div>
         )}
 
-        <video 
-          ref={videoRef} 
-          className="videoEl" 
-          controls={!minimal} 
-          autoPlay 
-          playsInline 
+        <video
+          ref={videoRef}
+          className="videoEl"
+          controls={!minimal}
+          autoPlay
+          playsInline
           muted={muted}
           onPlaying={(event) => {
             const video = event.currentTarget;
@@ -577,17 +577,17 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
           }}
           style={{ width: '100%', height: '100%', objectFit: 'contain' }}
         />
-        
+
         {loaded && (
           <div className="fakeStamp" style={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <span className="recordingDot" style={{ marginRight: '0' }} /> WEBRTC LIVE
           </div>
         )}
 
-        <SessionStatsOverlay 
-          stats={stats} 
-          visible={showStats} 
-          onToggle={() => setShowStats(!showStats)} 
+        <SessionStatsOverlay
+          stats={stats}
+          visible={showStats}
+          onToggle={() => setShowStats(!showStats)}
         />
       </div>
 

@@ -77,10 +77,10 @@ class MediaMTXClient:
                     def normalize_url(u):
                         if not u: return ""
                         return u.replace("%25", "%").replace("&amp;", "&")
-                    
+
                     existing_src = normalize_url(existing.get("source", ""))
                     desired_src = normalize_url(payload.get("source", ""))
-                    
+
                     if (existing_src == desired_src and
                         existing.get("rtspTransport") == payload.get("rtspTransport") and
                         existing.get("sourceOnDemand") == payload.get("sourceOnDemand") and
@@ -88,11 +88,11 @@ class MediaMTXClient:
                         existing.get("runOnDemand", "") == payload.get("runOnDemand", "") and
                         existing.get("runOnUnDemand", "") == payload.get("runOnUnDemand", "")):
                         return True
-                    
+
                     patch_resp = await _mtx_request("PATCH", f"{self.api_url}/v3/config/paths/patch/{path_name}", json=payload, timeout=5.0)
                     if patch_resp.status_code in (200, 201):
                         return True
-                
+
                 # Fallback to delete & add if GET/PATCH failed
                 await _mtx_request("DELETE", f"{self.api_url}/v3/config/paths/delete/{path_name}", timeout=5.0)
                 resp = await _mtx_request("POST", f"{self.api_url}/v3/config/paths/add/{path_name}", json=payload, timeout=5.0)

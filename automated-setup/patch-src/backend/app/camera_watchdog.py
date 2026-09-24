@@ -49,10 +49,10 @@ async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool:
     """
     import urllib.parse
     import socket
-    
+
     host = ""
     port = 554
-    
+
     # Parse RTSP URL
     if "://" in rtsp_url:
         try:
@@ -63,7 +63,7 @@ async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool:
                 port = parsed.port
         except Exception:
             pass
-            
+
     if not host:
         # Fallback manual parse
         try:
@@ -78,7 +78,7 @@ async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool:
                 host = clean
         except Exception:
             return False
-            
+
     if not host:
         return False
 
@@ -199,18 +199,18 @@ async def camera_health_watchdog_loop():
                     return
 
                 path_name = camera.server_camera_id or camera.name or camera.streams[0].stream_id
-                
+
                 async with semaphore:
                     # ── P1: Check for active Edge Push ──────────────────
                     last_push_ts = await RedisManager.get_last_push_seen(path_name)
-                    
+
                     recent_db_ts = None
                     for s in camera.streams:
                         if s.last_push_seen:
                             ts_val = s.last_push_seen.timestamp()
                             if recent_db_ts is None or ts_val > recent_db_ts:
                                 recent_db_ts = ts_val
-                                
+
                     if last_push_ts is None and recent_db_ts is not None:
                         last_push_ts = recent_db_ts
 
@@ -219,7 +219,7 @@ async def camera_health_watchdog_loop():
                             best_stream = await resolve_stream_by_identifier(path_name, session)
                             if not best_stream:
                                 best_stream = camera.streams[0]
-                                
+
                             if best_stream.stream_source != "EDGE_PUSH":
                                 print(f"[watchdog] {path_name}: Active edge push detected → switching to EDGE_PUSH")
                                 from .stream_manager import should_record_stream
@@ -260,14 +260,14 @@ async def camera_health_watchdog_loop():
                         best_stream = await resolve_stream_by_identifier(path_name, session)
                         if not best_stream:
                             best_stream = camera.streams[0]
-                            
+
                         rtsp_url = best_stream.stream_url.strip() if best_stream.stream_url else ""
-                        
+
                         reachable = False
                         if _is_valid_rtsp(rtsp_url):
                             print(f"[watchdog] {path_name}: checking primary stream...")
                             reachable = await _ffprobe_rtsp(rtsp_url, CAMERA_PING_TIMEOUT_SECONDS)
-                            
+
                         if reachable:
                             print(f"[watchdog] {path_name}: primary RTSP reachable → CONNECTING")
                             from .stream_manager import should_record_stream
@@ -292,11 +292,11 @@ async def camera_health_watchdog_loop():
                         fallback_stream = next((s for s in camera.streams if s.id != best_stream.id), None)
                         fallback_reachable = False
                         fallback_rtsp = fallback_stream.stream_url.strip() if (fallback_stream and fallback_stream.stream_url) else ""
-                        
+
                         if fallback_stream and _is_valid_rtsp(fallback_rtsp):
                             print(f"[watchdog] {path_name}: primary unreachable, trying fallback profile...")
                             fallback_reachable = await _ffprobe_rtsp(fallback_rtsp, CAMERA_PING_TIMEOUT_SECONDS)
-                            
+
                         if fallback_reachable:
                             print(f"[watchdog] {path_name}: fallback RTSP reachable → CONNECTING fallback")
                             from .stream_manager import should_record_stream
@@ -307,7 +307,7 @@ async def camera_health_watchdog_loop():
                                 "sourceOnDemand": True,
                                 "record": rec_val,
                             })
-                            
+
                             fallback_db = await session.get(CameraStream, fallback_stream.id)
                             if fallback_db:
                                 fallback_db.stream_source = "RTSP_PULL"
@@ -315,7 +315,7 @@ async def camera_health_watchdog_loop():
                                 await stream_manager.set_stream_state(
                                     session, fallback_db, StreamState.CONNECTING
                                 )
-                                
+
                             pref_db = await session.get(CameraStream, best_stream.id)
                             if pref_db:
                                 await stream_manager.set_stream_state(
@@ -375,12 +375,12 @@ async def edge_push_watchdog_loop():
                     if not camera.streams:
                         continue
                     path_name = camera.server_camera_id or camera.name or camera.streams[0].stream_id
-                    
+
                     # Check if any stream of this camera is currently marked as EDGE_PUSH
                     push_stream = next((s for s in camera.streams if s.stream_source == "EDGE_PUSH"), None)
                     if not push_stream:
                         continue
-                        
+
                     # Check last push heartbeat
                     last_push_ts = await RedisManager.get_last_push_seen(path_name)
                     if last_push_ts is None and push_stream.last_push_seen:
@@ -393,7 +393,7 @@ async def edge_push_watchdog_loop():
                     best_stream = await resolve_stream_by_identifier(path_name, session)
                     if not best_stream:
                         best_stream = push_stream
-                        
+
                     rtsp_url = best_stream.stream_url.strip() if best_stream.stream_url else ""
                     print(
                         f"[watchdog] {path_name}: Edge push heartbeat expired "

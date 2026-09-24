@@ -127,10 +127,10 @@ class Settings(BaseSettings):
     def __init__(self, **values):
         super().__init__(**values)
         pref = self.preferred_profile.upper()
-        
+
         # Respect user overrides explicitly set via .env or arguments
         explicit = getattr(self, "model_fields_set", getattr(self, "__fields_set__", set()))
-        
+
         if pref in ("NORMAL", "SUB"):
             if "live_stream_profile" not in explicit:
                 self.live_stream_profile = "NORMAL"
