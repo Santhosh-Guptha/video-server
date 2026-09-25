@@ -18,7 +18,7 @@ function loadRecoverySettings() {
 let cachedIceServers: RTCIceServer[] | null = null;
 let pendingIceServerPromise: Promise<RTCIceServer[]> | null = null;
 
-function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs = 8000): Promise<void> {
+function waitForIceGatheringComplete(pc: RTCPeerConnection, earlyMs = 2500): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
 
   return new Promise((resolve) => {
@@ -28,12 +28,17 @@ function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs = 8000): P
       settled = true;
       pc.removeEventListener('icegatheringstatechange', handleStateChange);
       window.clearTimeout(timeout);
+      window.clearTimeout(earlyTimeout);
       resolve();
     };
     const handleStateChange = () => {
       if (pc.iceGatheringState === 'complete') finish();
     };
-    const timeout = window.setTimeout(finish, timeoutMs);
+    const timeout = window.setTimeout(finish, 8000);
+    // WHEP needs SDP candidates, but a LAN candidate can be sent before slow TURN gathering ends.
+    const earlyTimeout = window.setTimeout(() => {
+      if (/^a=candidate:/m.test(pc.localDescription?.sdp || '')) finish();
+    }, earlyMs);
     pc.addEventListener('icegatheringstatechange', handleStateChange);
   });
 }
@@ -54,6 +59,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   const statsIntervalRef = useRef<number | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const connectionTimeoutRef = useRef<number | null>(null);
+  const preferFullIceGatheringRef = useRef(false);
 
   const [muted, setMuted] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -252,7 +258,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
       if (!isCurrent()) { pc.close(); return; }
       // Send a complete SDP offer. This avoids browser-specific trickle ICE
       // behavior and works consistently with MediaMTX WHEP on desktop/mobile.
-      await waitForIceGatheringComplete(pc);
+      await waitForIceGatheringComplete(pc, preferFullIceGatheringRef.current ? 8000 : 2500);
       if (!isCurrent()) { pc.close(); return; }
       const localSdp = pc.localDescription?.sdp;
       if (!localSdp) throw new Error('Browser did not produce a local SDP offer');
@@ -326,6 +332,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
   };
 
   const handleDisconnection = (reason: string, isPermanent = false) => {
+    if (reason.includes('ICE') || reason.startsWith('Peer connection')) preferFullIceGatheringRef.current = true;
     setHealth('RECOVERING');
     setErrorMessage(reason);
     cleanupConnection();

@@ -40,7 +40,7 @@ export default function App() {
   }) 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream' | 'gap_recovery' | 'streaming_settings'>(() => {
     const stored = localStorage.getItem('vms_active_tab')
-    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream' || stored === 'gap_recovery' || stored === 'streaming_settings') ? stored : 'dashboard'
+    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream' || stored === 'gap_recovery' || stored === 'streaming_settings') ? stored : 'live'
   })
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
@@ -50,7 +50,7 @@ export default function App() {
   const [liveLoading, setLiveLoading] = useState(false)
   const [lastSync, setLastSync] = useState('Never')
   const [isFullView, setIsFullView] = useState(false)
-  const [liveSubTab, setLiveSubTab] = useState<'manual' | 'wall'>('manual')
+  const [liveSubTab, setLiveSubTab] = useState<'manual' | 'wall'>(() => localStorage.getItem('vms_live_subtab') === 'manual' ? 'manual' : 'wall')
 
   const [liveDropdownOpen, setLiveDropdownOpen] = useState(false)
   const [liveSearchQuery, setLiveSearchQuery] = useState('')
@@ -60,6 +60,8 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('vms_active_tab', activeTab)
   }, [activeTab])
+
+  useEffect(() => { localStorage.setItem('vms_live_subtab', liveSubTab) }, [liveSubTab])
 
   useEffect(() => {
     localStorage.setItem('vms_layout', layout.toString())
@@ -293,6 +295,7 @@ export default function App() {
                   setSelectedStreams(prev => [...prev, cam])
                   setSelected(cam)
                 }
+                setLiveSubTab('manual')
                 setActiveTab('live')
               }}
             />
