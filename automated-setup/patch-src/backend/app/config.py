@@ -15,7 +15,7 @@ except Exception as e:
 
 class Settings(BaseSettings):
     app_name: str = defaults.get("app_name", "camera-video-platform")
-    backend_port: int = defaults.get("backend_port", 8005)
+    backend_port: int = defaults.get("backend_port", 8006)
     telemetry_port: int = defaults.get("telemetry_port", 8010)
     mediamtx_rtsp_port: int = defaults.get("mediamtx_rtsp_port", 8554)
     mediamtx_api_port: int = defaults.get("mediamtx_api_port", 9997)

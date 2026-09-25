@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('all','install','setup','check')][string]$Mode = 'all',
-    [string]$Distro = 'Ubuntu-22.04',
+    [string]$Distro = 'Ubuntu-24.04',
     [string]$LinuxUser = 'santhosh',
     [string]$LanIp,
     [switch]$NetworkOnly

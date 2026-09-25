@@ -5,6 +5,7 @@ import subprocess, sys, tarfile, tempfile, time, urllib.request
 from pathlib import Path
 
 BASE = '7937d80044f76b072478197695d8a8e51dbf6891'
+TESTED = 'f1eea0b85bc89b138e72fd936612ef02920cce72'
 REPO = 'https://github.com/Santhosh-Guptha/video-server.git'
 UPSTREAM = 'https://monolithic-portal.iviscloud.net/api/cameras/camera-videoserver'
 BUNDLE = Path(__file__).resolve().parent
@@ -99,11 +100,11 @@ if not override.exists() or override.read_text()!=text:
             root.mkdir(); shutil.chown(root,args.user,account.pw_gid)
             user_run(['git','init',str(root)])
             user_run(['git','remote','add','origin',REPO],root)
-            user_run(['git','fetch','--depth','1','origin',BASE],root)
+            user_run(['git','fetch','--depth','1','origin',TESTED],root)
             user_run(['git','checkout','-b','develop','FETCH_HEAD'],root)
         elif not (root/'.git').is_dir(): raise RuntimeError('Installation directory exists but is not the application checkout')
         current=subprocess.check_output(['runuser','-u',args.user,'--','git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
-        if current!=BASE: raise RuntimeError('Existing checkout revision differs; refusing to overwrite an unrelated version')
+        if current not in (BASE, TESTED) and subprocess.run(['runuser','-u',args.user,'--','git','-C',str(root),'merge-base','--is-ancestor',TESTED,current],check=False).returncode!=0: raise RuntimeError('Existing checkout does not descend from the tested develop revision')
         backup=Path('/var/backups/video-server')/time.strftime('setup-%Y%m%d-%H%M%S')
         for source in (BUNDLE/'patch-src').rglob('*'):
             if not source.is_file() or '__pycache__' in source.parts: continue
@@ -218,7 +219,7 @@ Wants=mediamtx.service redis-server.service
 [Service]
 User={args.user}
 WorkingDirectory={root}/backend
-ExecStart={root}/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8005
+ExecStart={root}/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8006
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=5
@@ -233,9 +234,9 @@ WantedBy=multi-user.target
  root /var/www/video-server;
  index index.html;
  location / { try_files $uri $uri/ /index.html; }
- location /api/ { proxy_pass http://127.0.0.1:8005; proxy_http_version 1.1; proxy_set_header Host $host; proxy_read_timeout 120s; proxy_buffering off; }
- location = /health { proxy_pass http://127.0.0.1:8005; }
- location /ws/ { proxy_pass http://127.0.0.1:8005; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s; }
+ location /api/ { proxy_pass http://127.0.0.1:8006; proxy_http_version 1.1; proxy_set_header Host $host; proxy_read_timeout 120s; proxy_buffering off; }
+ location = /health { proxy_pass http://127.0.0.1:8006; }
+ location /ws/ { proxy_pass http://127.0.0.1:8006; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 3600s; }
 }
 ''')
         link=Path('/etc/nginx/sites-enabled/video-server')

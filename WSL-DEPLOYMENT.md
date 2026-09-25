@@ -1,9 +1,5 @@
 # Current WSL deployment
 
-Updated 24 September 2026. The deployment is on `develop`, base `7937d80044f76b072478197695d8a8e51dbf6891`, with local repairs that have not been pushed.
+Updated 25 September 2026. The repository is cloned at `/home/santhosh/video-server` in `Ubuntu-24.04`, on `develop`. The fresh Ubuntu installation completed successfully with the unattended installer. The app is available at `http://172.22.3.86:5173/` on the current LAN address; that address may change after a reboot or VPN change.
 
-Current UI: http://172.16.2.243:5173/
-
-Use [STREAMING-CONFIGURATION.md](STREAMING-CONFIGURATION.md) for effective configuration and verification limits, and [automated setup instructions](automated-setup/README.md) for the one-command installer.
-
-Earlier deployment scripts in this folder are historical experiments; use the packaged installer instead.
+Run the [one-command setup](automated-setup/README.md) from Administrator PowerShell to refresh Windows forwarding and startup automation. See [streaming configuration](STREAMING-CONFIGURATION.md) for camera, WebRTC, TURN, recording, and verification details.
