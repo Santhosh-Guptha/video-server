@@ -3,6 +3,7 @@ import httpx
 from typing import Optional
 from fastapi import Request, Response, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models import CameraStream, StreamState
 from ..registries.session_registry import SessionRegistry
@@ -192,13 +193,38 @@ class WebRTCService:
             target_codecs = await cls._path_codecs(target)
             if "H264" not in target_codecs:
                 await transcoder_manager.register_viewer_disconnect(stream_id, db_session)
+                fallback = await cls._compatible_camera_fallback(stream, stream_id, db_session)
+                if fallback:
+                    return fallback, False
                 raise HTTPException(
                     status_code=503,
                     detail="H.264 compatibility stream could not start because the source camera is unavailable",
                 )
             return target, True
         except TranscoderCapacityError as exc:
+            fallback = await cls._compatible_camera_fallback(stream, stream_id, db_session)
+            if fallback:
+                return fallback, False
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @classmethod
+    async def _compatible_camera_fallback(cls, stream: CameraStream | None, stream_id: str, db_session: AsyncSession) -> str | None:
+        """Use a verified H.264 sibling only after requested HD conversion fails."""
+        if not stream:
+            return None
+        result = await db_session.execute(
+            select(CameraStream).where(
+                CameraStream.camera_id == stream.camera_id,
+                CameraStream.stream_id != stream_id,
+            )
+        )
+        candidates = list(result.scalars().all())
+        candidates.sort(key=lambda item: (0 if str(getattr(item.profile_type, "value", item.profile_type)).upper() in ("MAIN", "HD") else 1, item.stream_id))
+        for candidate in candidates:
+            if "H264" in await cls._path_codecs(candidate.stream_id):
+                print(f"[webrtc] Using H.264 sibling {candidate.stream_id} after conversion of {stream_id} failed")
+                return candidate.stream_id
+        return None
 
     @classmethod
     async def _path_codecs(cls, stream_id: str) -> set[str]:

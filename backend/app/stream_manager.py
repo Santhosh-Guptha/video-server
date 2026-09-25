@@ -120,6 +120,11 @@ class StreamManager:
             url_strip = best_stream.stream_url.strip() if best_stream.stream_url else ""
             is_push = best_stream.stream_mode == "PUSH" or (best_stream.stream_mode == "AUTO" and "publisher" in url_strip.lower())
             
+            from .source_url import valid_camera_source
+            if not is_push and not valid_camera_source(url_strip):
+                print(f"[stream_manager] Skipping invalid camera source for {path_name}")
+                return
+
             # 1. Ensure path exists in DB Registry
             res = await session.execute(
                 select(StreamRegistry).where(StreamRegistry.stream_id == path_name)

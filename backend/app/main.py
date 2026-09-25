@@ -102,13 +102,14 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
             "record": True
         }
     }
+    from .source_url import valid_camera_source
     for stream in active_streams:
         source_url = stream.stream_url.strip() if stream.stream_url else ""
         
         # Skip invalid or empty URLs
         if stream.stream_source != "EDGE_PUSH":
-            if not source_url or source_url.lower() in ("rtsp://", "rtsps://", "rtmp://") or source_url.endswith("@"):
-                print(f"[yaml_config] Skipping stream {stream.stream_id} due to invalid/empty stream_url: {source_url}")
+            if not valid_camera_source(source_url):
+                print(f"[yaml_config] Skipping invalid camera source for {stream.stream_id}")
                 continue
 
         use_local_transcode = False

@@ -125,15 +125,8 @@ def _has_recent_push(last_push_ts: float | None) -> bool:
 
 
 def _is_valid_rtsp(url: str) -> bool:
-    """Returns True if the URL looks like a real RTSP source (not publisher/empty)."""
-    if not url:
-        return False
-    url = url.strip().lower()
-    return (
-        url.startswith(("rtsp://", "rtsps://", "rtmp://"))
-        and "publisher" not in url
-        and url not in ("rtsp://", "rtsps://", "rtmp://")
-    )
+    from .source_url import valid_camera_source
+    return valid_camera_source(url)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

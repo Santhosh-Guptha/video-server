@@ -20,3 +20,8 @@ sudo journalctl -u mediamtx -u video-backend -n 100 --no-pager
 ```
 
 Backend listens on localhost port 8006. The UI and API are served through Nginx port 5173. MediaMTX configuration is `/opt/mediamtx/mediamtx.yml`. Windows startup/port forwarding needs an elevated run of `automated-setup/setup.ps1` on this new WSL distribution. The installed services run while WSL is running; Windows sleep stops access.
+## Current source audit and startup fixes
+
+Run `python3 scripts/camera_source_audit.py` from the repository root for a credential-free list of invalid stream IDs. On 25 September, 42 of 570 configured stream URLs were malformed (41 missing a host, one invalid numeric host). The server now excludes these from startup and background re-registration rather than repeatedly sending them to MediaMTX. Upstream portal records must supply real URLs; the application cannot infer missing camera addresses. Separate MediaMTX logs show camera network timeouts and HTTP 401 responses. Those require a route/VPN and valid camera credentials respectively.
+
+H.265-to-H.264 startup now allows different camera conversions to start concurrently within the configured capacity, and each checks only its own MediaMTX path for readiness. If HD conversion cannot publish, the server selects a ready H.264 stream from the same camera when available. The frontend monitors decoded-frame progress and reconnects a stalled receiver. The wall opens with four maximum-quality streams by default to reduce simultaneous decoding pressure; the operator can select 9–36 tiles, and the chosen grid size persists in the browser. These changes reduce avoidable startup delay; they do not eliminate source outages or browser decode limits when many high-resolution feeds play simultaneously.

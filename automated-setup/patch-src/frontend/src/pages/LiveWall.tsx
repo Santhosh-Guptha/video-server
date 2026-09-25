@@ -23,8 +23,13 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   const [wsConnected, setWsConnected] = useState(false)
   const [isFullView, setIsFullView] = useState(false)
   const [selectedCameraForModal, setSelectedCameraForModal] = useState<Camera | null>(null)
-  const [gridSize, setGridSize] = useState<number>(12) // default 12 (4x3 layout)
+  const [gridSize, setGridSize] = useState<number>(() => {
+    const saved = Number(window.localStorage.getItem('liveWallGridSize'))
+    return [4, 9, 12, 16, 24, 36].includes(saved) ? saved : 4
+  })
   const [currentPage, setCurrentPage] = useState<number>(1)
+
+  useEffect(() => { window.localStorage.setItem('liveWallGridSize', String(gridSize)) }, [gridSize])
 
   // Policy-driven stream resolution for live wall
   const { policy } = usePolicy()

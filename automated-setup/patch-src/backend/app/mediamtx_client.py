@@ -57,6 +57,10 @@ class MediaMTXClient:
 
     async def add_path(self, path_name: str, source_url: str, source_on_demand: bool = False) -> bool:
         """Adds a path configuration on MediaMTX."""
+        from .source_url import valid_camera_source
+        if source_url != "publisher" and not valid_camera_source(source_url):
+            print(f"[mediamtx_client] Skipping invalid camera source for {path_name}")
+            return False
         payload = {
             "source": source_url,
             "rtspTransport": "tcp",

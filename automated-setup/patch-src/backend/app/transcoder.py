@@ -101,7 +101,7 @@ class TranscoderManager:
                 process = await cls._spawn_ffmpeg(stream_id, h264_path)
             finally:
                 cls._starting.discard(stream_id)
-            
+
             initial_viewers = 1 if increment_viewer else 0
             cls._transcoders[stream_id] = _TranscoderState(process, stream_id, active_viewers=initial_viewers)
 
@@ -133,7 +133,7 @@ class TranscoderManager:
                 except Exception as e:
                     print(f"[transcoder] Error checking readiness for {h264_path}: {e}")
                 await asyncio.sleep(0.2)
-            
+
             if ready:
                 print(f"[transcoder] Transcoded stream {h264_path} is ready and publishing.")
             else:
@@ -179,7 +179,7 @@ class TranscoderManager:
             state = cls._transcoders.get(stream_id)
             if not state:
                 return
-            
+
             # Check if there are active readers on the h264 path in MediaMTX
             h264_path = f"{stream_id}_h264"
             has_readers = False
@@ -253,7 +253,7 @@ class TranscoderManager:
                 state = cls._transcoders.pop(stream_id)
                 exit_code = state.process.returncode
                 viewer_count = state.active_viewers
-                
+
                 h264_path = f"{stream_id}_h264"
                 path_info = mediamtx_paths.get(h264_path)
                 has_readers = False
@@ -271,7 +271,7 @@ class TranscoderManager:
                         process = await cls._spawn_ffmpeg(stream_id, h264_path)
                         new_state = _TranscoderState(process, stream_id, active_viewers=max(viewer_count, 1 if has_readers else 0))
                         cls._transcoders[stream_id] = new_state
-                        
+
                         if db_session:
                             await cls._upsert_db_record(
                                 stream_id, process.pid, "ACTIVE", db_session,
@@ -333,7 +333,7 @@ class TranscoderManager:
     @classmethod
     async def _spawn_ffmpeg(cls, stream_id: str, h264_path: str) -> asyncio.subprocess.Process:
         """Spawns an FFmpeg process to transcode from the raw RTSP stream to H.264.
-        
+
         Codec, preset, and tune are read from vms_policy (TRANSCODER_VCODEC,
         TRANSCODER_PRESET, TRANSCODER_TUNE) so they can be changed in one place.
         """
