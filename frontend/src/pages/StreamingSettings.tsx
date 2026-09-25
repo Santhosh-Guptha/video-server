@@ -4,6 +4,7 @@ type Values = {
   grid_view_profile: string; focus_view_profile: string; playback_profile: string;
   webrtc_stall_timeout_seconds: number; webrtc_connection_timeout_seconds: number;
   max_active_transcoders: number;
+  default_retention_days: number;
 }
 type Configuration = {
   settings: Values; upstream_url: string; turn_configured: boolean;
@@ -57,13 +58,17 @@ export function StreamingSettings() {
           <label key={key} style={{ display: 'grid', gap: 6 }}>{label}
             <input required type="number" style={control} min={min} max={max} step={1} value={values[key]} onChange={e => setValues({ ...values, [key]: e.target.valueAsNumber })} />
           </label>)}
+        <label style={{ display: 'grid', gap: 6 }}>Maximum recording retention (days)
+          <input required type="number" style={control} min={1} max={365} step={1} value={values.default_retention_days} onChange={e => setValues({ ...values, default_retention_days: e.target.valueAsNumber })} />
+        </label>
+        <p>Recordings keep the camera's original HD encoding. Shorter retention saves disk space without reducing image quality. A camera's shorter archive period still applies. Older recordings are removed by the periodic cleanup after you save this setting.</p>
         <p>HD preserves the camera's actual resolution. If its main stream is unavailable, the wall labels its lower-quality fallback. Conversion capacity depends on this server's CPU; native streams do not use a conversion slot.</p>
         <button type="submit" disabled={busy} className="refreshBtn">{busy ? 'Saving…' : 'Save streaming settings'}</button>
       </form>
       <h3>Connected services</h3>
       <p>Camera configuration upstream: <a href={data.upstream_url} target="_blank" rel="noreferrer">{data.upstream_url}</a></p>
       <p>TURN: {data.turn_configured ? 'Configured as a connection fallback' : 'Not configured'}</p>
-      <p>Recordings: {data.recording.hd_only ? 'HD profile' : 'Multiple profiles'} · {data.recording.segment_seconds}-second segments · {data.recording.retention_days}-day retention</p>
+      <p>Recordings: {data.recording.hd_only ? 'HD profile' : 'Multiple profiles'} · {data.recording.segment_seconds}-second segments · up to {data.recording.retention_days}-day retention</p>
       <p>Camera-side starting point: native resolution, a one-second keyframe interval, 15–25 FPS and a bitrate supported by the network. H.264 without B-frames gives broader browser support. These settings do not modify remote camera encoders.</p>
     </>}
   </section>

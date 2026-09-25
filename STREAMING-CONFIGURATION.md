@@ -10,6 +10,10 @@ Fresh-install validation on 25 September: all five services (`video-backend`, `m
 
 For widest browser support, configure each camera's MAIN stream with H.264, a keyframe interval near one second, 15–25 FPS, and a sustainable bitrate. Set resolution to the maximum detail the camera and network actually support. Keep a lower bitrate substream for constrained links. Source URLs and credentials should be corrected in the upstream portal; the installer does not modify cameras.
 
+Recording storage uses the camera's already-compressed video without re-encoding it, preserving the source quality and avoiding CPU load from hundreds of simultaneous encoders. In **Streaming Settings**, set **Maximum recording retention** to limit local disk use without reducing picture quality. The cap is 30 days by default and a camera's shorter archive period still applies; cleanup runs periodically and removes both expired files and their index entries. Changing the cap can delete older recordings, so choose it according to the required history. A 4 Mb/s camera uses roughly 43 GB per day before small container overhead; fewer retention days reduce total storage but not the write rate. To lower the write rate while retaining HD detail, adjust the camera's own main-stream bitrate or supported smart encoding in the upstream camera configuration, then check motion detail and WebRTC compatibility. The server does not mass-change camera encoder settings.
+
+On 25 September, the first four live-wall tiles all decoded WebRTC video during a spot check (one at 1280×720, three at 704×576), and a sampled 1280×720 H.264 recording decoded cleanly. MediaMTX also reported substantial RTP packet loss, recorder timestamp resets, timeouts and authentication failures on other camera paths. These source/network faults can cause live stutter and recording gaps; retention tuning does not repair them.
+
 Useful checks in Ubuntu:
 
 ```bash

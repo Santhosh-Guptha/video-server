@@ -16,6 +16,7 @@ class StreamingSettings(BaseModel):
     webrtc_stall_timeout_seconds: int = Field(default=8, ge=4, le=60, strict=True)
     webrtc_connection_timeout_seconds: int = Field(default=20, ge=10, le=60, strict=True)
     max_active_transcoders: int = Field(default=10, ge=1, le=10, strict=True)
+    default_retention_days: int = Field(default=30, ge=1, le=365, strict=True)
 
 def load_overrides():
     if not CONFIG_FILE.exists():
@@ -50,6 +51,7 @@ async def write_streaming_settings(payload: StreamingSettings):
     for key, value in payload.model_dump().items():
         setattr(config.settings, key, value)
     for key in ['grid_view_profile', 'focus_view_profile', 'playback_profile',
-                'webrtc_connection_timeout_seconds', 'max_active_transcoders']:
+                'webrtc_connection_timeout_seconds', 'max_active_transcoders',
+                'default_retention_days']:
         setattr(config, key.upper(), getattr(payload, key))
     return await read_streaming_settings()
