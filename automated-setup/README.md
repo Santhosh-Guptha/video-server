@@ -4,13 +4,13 @@ For Windows, `setup.ps1` is the only file to copy or download. It fetches the co
 
 ## One command on this Windows + Ubuntu WSL machine
 
-From **Administrator PowerShell**, run the copied file:
+From PowerShell, run the copied file. It requests Windows elevation when needed:
 
 ```powershell
 .\setup.ps1
 ```
 
-This installs dependencies, fetches the `develop` checkout, builds the UI, configures services, checks health, forwards LAN ports and registers a hidden Windows logon task to keep WSL running and refresh changed addresses. It does not embed an administrator password. OS elevation must already be granted; it cannot bypass Windows approval or a required initial WSL install/reboot.
+This installs dependencies, fetches the `develop` checkout, builds the UI, configures services, checks health, forwards LAN ports and registers a hidden Windows logon task to keep WSL running and refresh changed addresses. It does not embed an administrator password. Windows still requires approval of its UAC prompt and may require a reboot to finish an initial WSL installation.
 
 Optional separate commands:
 

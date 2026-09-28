@@ -11,13 +11,21 @@ param(
 $ErrorActionPreference = 'Stop'
 $Repo = 'https://github.com/Santhosh-Guptha/video-server.git'
 if ($LinuxUser -notmatch '^[a-z_][a-z0-9_-]*$') { throw 'Invalid Linux user name.' }
+if ($Distro -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid WSL distribution name.' }
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $admin -and ($Mode -ne 'check' -or $NetworkOnly)) { throw 'Run this file in Administrator PowerShell; Windows networking requires elevation.' }
 if (-not $LanIp) {
     $route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1
     $LanIp = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $route.InterfaceIndex | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).IPAddress
 }
 [void][Net.IPAddress]::Parse($LanIp)
+if (-not $admin -and ($Mode -ne 'check' -or $NetworkOnly)) {
+    # Windows must show its UAC prompt; no stored password or silent bypass.
+    $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $PSCommandPath),
+                   '-Mode',$Mode,'-Distro',$Distro,'-LinuxUser',$LinuxUser,'-LanIp',$LanIp)
+    if ($NetworkOnly) { $arguments += '-NetworkOnly' }
+    $elevated = Start-Process -FilePath powershell.exe -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    exit $elevated.ExitCode
+}
 $distros = (& wsl.exe --list --quiet) -replace "`0", ''
 if ($distros -notcontains $Distro) {
     if ($Mode -eq 'check' -or $NetworkOnly) { throw "WSL distribution $Distro is not installed." }
