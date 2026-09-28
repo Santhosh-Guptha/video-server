@@ -1,16 +1,16 @@
 # Unattended Video Server setup
 
-Keep this entire folder together: `setup.py`, `setup.ps1`, `install.sh` and `patch-src`.
+For Windows, `setup.ps1` is the only file to copy or download. It fetches the complete `develop` checkout inside Ubuntu WSL and runs the bundled Linux installer. The other files remain in the repository for that installer.
 
 ## One command on this Windows + Ubuntu WSL machine
 
-From **Administrator PowerShell**, in this folder:
+From **Administrator PowerShell**, run the copied file:
 
 ```powershell
 .\setup.ps1
 ```
 
-This installs dependencies, fetches the tested develop revision, applies bundled fixes, builds the UI, configures services, checks health, forwards LAN ports and registers a hidden Windows logon task to keep WSL running and refresh changed addresses. It does not embed an administrator password. OS elevation must already be granted; it cannot bypass Windows approval or an initial WSL install/reboot.
+This installs dependencies, fetches the `develop` checkout, builds the UI, configures services, checks health, forwards LAN ports and registers a hidden Windows logon task to keep WSL running and refresh changed addresses. It does not embed an administrator password. OS elevation must already be granted; it cannot bypass Windows approval or a required initial WSL install/reboot.
 
 Optional separate commands:
 
@@ -32,7 +32,7 @@ Ubuntu-only setup does not manage Windows port forwarding. Use the PowerShell en
 
 ## Repeat runs and configuration
 
-Existing database, recordings, credentials and service configuration are preserved. Patched source files are backed up under `/var/backups/video-server/setup-*` before replacement. An unrelated source revision is rejected instead of overwriting it. Installation pins the tested `develop` revision `f1eea0b85bc89b138e72fd936612ef02920cce72`; it does not pull arbitrary future code.
+Existing database, recordings, credentials and service configuration are preserved. Older tested checkouts receive bundled fixes with backups under `/var/backups/video-server/setup-*`; current checkouts keep their committed source unchanged. An unrelated source revision is rejected. The standalone Windows file fetches current `develop` and fast-forwards a clean existing checkout. The Linux installer verifies that source descends from its tested base. Local changes are never overwritten automatically.
 
 Open **Streaming Settings** in the app to select quality and recovery settings. Saved values live in `backend/app/configs/streaming_overrides.json` and take precedence over environment values for the fields exposed in that screen. Existing remote camera encoder configurations are not altered.
 

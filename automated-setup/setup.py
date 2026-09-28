@@ -95,6 +95,14 @@ if not override.exists() or override.read_text()!=text:
             run(['apt-get','install','-y','git','curl','ca-certificates','xz-utils','python3-venv','python3-pip','ffmpeg','nginx','redis-server','coturn'],env=env)
         else:
             print('Required system executables already available; preserving installed system packages.',flush=True)
+        # Purging Redis can leave its package state but remove the data/log
+        # directories. Recreate them so an unattended reinstall actually starts.
+        for directory, group, mode in [('/var/lib/redis','redis',0o750),
+                                       ('/var/log/redis','adm',0o2750)]:
+            path=Path(directory)
+            path.mkdir(parents=True,exist_ok=True)
+            shutil.chown(path,'redis',group)
+            path.chmod(mode)
         if not root.exists():
             root.parent.mkdir(parents=True,exist_ok=True)
             root.mkdir(); shutil.chown(root,args.user,account.pw_gid)
@@ -106,12 +114,15 @@ if not override.exists() or override.read_text()!=text:
         current=subprocess.check_output(['runuser','-u',args.user,'--','git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
         if current not in (BASE, TESTED) and subprocess.run(['runuser','-u',args.user,'--','git','-C',str(root),'merge-base','--is-ancestor',TESTED,current],check=False).returncode!=0: raise RuntimeError('Existing checkout does not descend from the tested develop revision')
         backup=Path('/var/backups/video-server')/time.strftime('setup-%Y%m%d-%H%M%S')
-        for source in (BUNDLE/'patch-src').rglob('*'):
-            if not source.is_file() or '__pycache__' in source.parts: continue
-            target=root/source.relative_to(BUNDLE/'patch-src')
-            if target.exists():
-                saved=backup/source.relative_to(BUNDLE/'patch-src');saved.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(target,saved)
-            target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target);shutil.chown(target,args.user,account.pw_gid)
+        if current in (BASE, TESTED):
+            for source in (BUNDLE/'patch-src').rglob('*'):
+                if not source.is_file() or '__pycache__' in source.parts: continue
+                target=root/source.relative_to(BUNDLE/'patch-src')
+                if target.exists():
+                    saved=backup/source.relative_to(BUNDLE/'patch-src');saved.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(target,saved)
+                target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target);shutil.chown(target,args.user,account.pw_gid)
+        else:
+            print('Checkout already contains the committed fixes; leaving source files unchanged.',flush=True)
         node=Path('/opt/video-server-node/bin/node')
         if not node.exists():
             arch={'x86_64':'x64','aarch64':'arm64'}[os.uname().machine]
@@ -252,6 +263,8 @@ WantedBy=multi-user.target
                     if response.status==200:break
             except Exception:time.sleep(2)
         else:raise RuntimeError('Backend health check failed; inspect journalctl -u video-backend')
+        for service in ['video-backend','mediamtx','coturn','nginx','redis-server']:
+            run(['systemctl','is-active','--quiet',service])
         print(f'Setup complete: http://{args.lan_ip}:5173/ — open Streaming Settings to review policy.')
 
 if __name__=='__main__':
