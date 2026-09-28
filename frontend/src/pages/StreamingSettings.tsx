@@ -4,6 +4,7 @@ type Values = {
   grid_view_profile: string; focus_view_profile: string; playback_profile: string;
   webrtc_stall_timeout_seconds: number; webrtc_connection_timeout_seconds: number;
   max_active_transcoders: number;
+  webrtc_jitter_buffer_ms: number;
   default_retention_days: number;
 }
 type Configuration = {
@@ -58,6 +59,10 @@ export function StreamingSettings() {
           <label key={key} style={{ display: 'grid', gap: 6 }}>{label}
             <input required type="number" style={control} min={min} max={max} step={1} value={values[key]} onChange={e => setValues({ ...values, [key]: e.target.valueAsNumber })} />
           </label>)}
+        <label style={{ display: 'grid', gap: 6 }}>Live smoothing buffer target (milliseconds)
+          <input required type="number" style={control} min={0} max={1000} step={1} value={values.webrtc_jitter_buffer_ms} onChange={e => setValues({ ...values, webrtc_jitter_buffer_ms: e.target.valueAsNumber })} />
+        </label>
+        <p>Start at 100 ms. A larger target can smooth uneven packet arrival but adds delay. This is a browser hint, not a latency limit; unsupported browsers use their automatic buffer. Resolution and recording quality are unchanged.</p>
         <label style={{ display: 'grid', gap: 6 }}>Maximum recording retention (days)
           <input required type="number" style={control} min={1} max={365} step={1} value={values.default_retention_days} onChange={e => setValues({ ...values, default_retention_days: e.target.valueAsNumber })} />
         </label>

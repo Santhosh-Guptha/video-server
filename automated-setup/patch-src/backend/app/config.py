@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     strict_camera_validation: bool = defaults.get("strict_camera_validation", True)
 
     webrtc_stall_timeout_seconds: int = 8
+    webrtc_jitter_buffer_ms: int = 100
 
     max_active_transcoders: int = defaults.get("max_active_transcoders", 10)
     transcoder_vcodec: str = defaults.get("transcoder_vcodec", "libx264")

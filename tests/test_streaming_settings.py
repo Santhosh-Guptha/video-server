@@ -17,14 +17,18 @@ class SettingsTests(unittest.TestCase):
     def test_round_trip_and_persistence(self):
         value=module.StreamingSettings().model_dump()
         value['webrtc_stall_timeout_seconds']=12
+        value['webrtc_jitter_buffer_ms']=150
         response=self.client.put('/api/settings/streaming',json=value)
         self.assertEqual(response.status_code,200)
         self.assertEqual(module.load_overrides(),value)
         self.assertEqual(self.client.get('/api/settings/streaming').json()['settings'],value)
     def test_invalid_input_does_not_write(self):
-        for change in [{'max_active_transcoders':999},{'webrtc_stall_timeout_seconds':0},{'grid_view_profile':'4K'},{'turn_server_credential':'not-allowed'}]:
+        for change in [{'max_active_transcoders':999},{'webrtc_stall_timeout_seconds':0},{'webrtc_jitter_buffer_ms':-1},{'webrtc_jitter_buffer_ms':1001},{'webrtc_jitter_buffer_ms':1.5},{'grid_view_profile':'4K'},{'turn_server_credential':'not-allowed'}]:
             value=module.StreamingSettings().model_dump();value.update(change)
             self.assertEqual(self.client.put('/api/settings/streaming',json=value).status_code,422)
         self.assertFalse(module.CONFIG_FILE.exists())
+    def test_existing_settings_gain_buffer_default(self):
+        module.CONFIG_FILE.write_text('{"grid_view_profile":"HD"}')
+        self.assertEqual(module.load_overrides()['webrtc_jitter_buffer_ms'],100)
 
 if __name__=='__main__':unittest.main()

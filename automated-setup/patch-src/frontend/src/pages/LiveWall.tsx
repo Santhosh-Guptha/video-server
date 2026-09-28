@@ -404,7 +404,16 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
       </div>
 
       {liveCameras.length > 0 ? (
-        renderGrid()
+        <div className={isFullView ? 'fullscreenVideoWall' : undefined}>
+          <div style={isFullView ? { width: '100%', height: '100%', padding: '12px', boxSizing: 'border-box', overflow: 'auto' } : undefined}>
+            {renderGrid()}
+          </div>
+          {isFullView && (
+            <button className="exitFullViewBtn" type="button" onClick={() => setIsFullView(false)} title="Exit Full Wall">
+              <Minimize2 size={18} /> Exit Full Wall
+            </button>
+          )}
+        </div>
       ) : (
         <div className="liveWallEmpty">
           <ServerCrash className="liveWallEmptyIcon" />
@@ -412,22 +421,6 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           <div className="liveWallEmptySub">
             All cameras are currently offline. Use "Start All" or start individual cameras from the Live View tab.
           </div>
-        </div>
-      )}
-
-      {isFullView && liveCameras.length > 0 && (
-        <div className="fullscreenVideoWall">
-          <div style={{ width: '100%', height: '100%', padding: '12px', boxSizing: 'border-box' }}>
-            {renderGrid()}
-          </div>
-          <button
-            className="exitFullViewBtn"
-            type="button"
-            onClick={() => setIsFullView(false)}
-            title="Exit Full Wall"
-          >
-            <Minimize2 size={18} /> Exit Full Wall
-          </button>
         </div>
       )}
 

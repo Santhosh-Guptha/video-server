@@ -14,6 +14,7 @@ class StreamingSettings(BaseModel):
     focus_view_profile: Literal['HD', 'NORMAL', 'MOBILE'] = 'HD'
     playback_profile: Literal['HD', 'NORMAL', 'MOBILE'] = 'HD'
     webrtc_stall_timeout_seconds: int = Field(default=8, ge=4, le=60, strict=True)
+    webrtc_jitter_buffer_ms: int = Field(default=100, ge=0, le=1000, strict=True)
     webrtc_connection_timeout_seconds: int = Field(default=20, ge=10, le=60, strict=True)
     max_active_transcoders: int = Field(default=10, ge=1, le=10, strict=True)
     default_retention_days: int = Field(default=30, ge=1, le=365, strict=True)

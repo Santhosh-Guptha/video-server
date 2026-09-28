@@ -1,5 +1,15 @@
 # Streaming configuration — 25 September 2026
 
+## Smooth live viewing — 28 September 2026
+
+Full Wall reuses the existing video elements and WebRTC sessions. It no longer opens a duplicate grid in the background. The selected source profile remains unchanged, including HD. The default four-camera layout limits simultaneous browser decoding; increase the tile count only while measured FPS remains close to the camera's output.
+
+Streaming Settings includes a live smoothing buffer target, defaulting to 100 ms and adjustable from 0–1000 ms. Supported browsers receive this value through `RTCRtpReceiver.jitterBufferTarget`; other browsers retain their automatic buffer. A larger target trades more delay for tolerance of uneven arrival. It is a hint, not a maximum latency guarantee. It neither changes resolution nor modifies recordings. Changes apply when streams next open.
+
+The statistics overlay reports recent packet loss over the sampling interval, RTT from the selected ICE candidate pair, and measured receiver buffer delay. Receiver buffer delay is calculated from the changes in `jitterBufferDelay` and `jitterBufferEmittedCount`, following the [W3C WebRTC specification](https://www.w3.org/TR/webrtc/). This excludes camera encoding, upstream transit and server delay; it must not be interpreted as end-to-end latency.
+
+On 28 September, the first four wall feeds decoded at 1920×1080. A five-minute MediaMTX log sample also contained many source timeouts and RTP packet-loss events across the deployment. UI improvements cannot repair missing upstream packets or unreachable camera endpoints; those feeds require source/network correction before uninterrupted playback is possible.
+
 The fresh `Ubuntu-24.04` installation runs the `develop` branch at `/home/santhosh/video-server`. Current UI: `http://172.22.3.86:5173/`. Camera configuration is synced from `https://monolithic-portal.iviscloud.net/api/cameras/camera-videoserver`. The most recent sync imported 326 cameras, 307 enabled. This is configuration inventory, not a promise that every source is reachable.
 
 Open **Streaming Settings** in the app to edit HD/NORMAL/MOBILE selection, WebRTC retry and HLS fallback policy. These values persist in `backend/app/configs/streaming_overrides.json`. The default grid, live, focus, and playback profiles are HD. The wall prefers the actual MAIN/HD stream and falls back when unavailable. A profile name alone does not prove pixel resolution; use the tile's connection statistics to inspect decoded width and height.

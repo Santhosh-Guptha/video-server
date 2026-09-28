@@ -3,14 +3,14 @@ import { AlertCircle, Loader2, Play, Volume2, VolumeX, Maximize2, X } from 'luci
 import { StreamHealthBadge, StreamHealthState } from './StreamHealthBadge';
 import { SessionStatsOverlay, PlayerStats } from './SessionStatsOverlay';
 
-type RecoverySettings = { webrtc_stall_timeout_seconds: number; webrtc_connection_timeout_seconds: number };
-let recoverySettings: RecoverySettings = { webrtc_stall_timeout_seconds: 8, webrtc_connection_timeout_seconds: 20 };
+type RecoverySettings = { webrtc_stall_timeout_seconds: number; webrtc_connection_timeout_seconds: number; webrtc_jitter_buffer_ms: number };
+let recoverySettings: RecoverySettings = { webrtc_stall_timeout_seconds: 8, webrtc_connection_timeout_seconds: 20, webrtc_jitter_buffer_ms: 100 };
 let recoveryRequest: Promise<void> | null = null;
 window.addEventListener('streaming-settings-changed', () => { recoveryRequest = null; });
 function loadRecoverySettings() {
   if (!recoveryRequest) recoveryRequest = fetch('/api/settings/streaming').then(async response => {
     if (!response.ok) throw new Error('Settings unavailable');
-    const result = await response.json(); recoverySettings = result.settings;
+    const result = await response.json(); recoverySettings = { ...recoverySettings, ...result.settings };
   }).catch(() => { recoveryRequest = null; });
   return recoveryRequest;
 }
@@ -73,7 +73,11 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
     timestamp: number;
     bytesReceived: number;
     framesDecoded: number;
-  }>({ timestamp: 0, bytesReceived: 0, framesDecoded: 0 });
+    packetsReceived: number;
+    packetsLost: number;
+    jitterBufferDelay: number;
+    jitterBufferEmittedCount: number;
+  }>({ timestamp: 0, bytesReceived: 0, framesDecoded: 0, packetsReceived: 0, packetsLost: 0, jitterBufferDelay: 0, jitterBufferEmittedCount: 0 });
 
   const reconnectCountRef = useRef(0);
   const maxReconnectAttempts = 3;
@@ -116,7 +120,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
     generationRef.current += 1;
     lastFrameAtRef.current = 0;
     stablePlaybackSinceRef.current = 0;
-    prevStatsRef.current = { timestamp: 0, bytesReceived: 0, framesDecoded: 0 };
+    prevStatsRef.current = { timestamp: 0, bytesReceived: 0, framesDecoded: 0, packetsReceived: 0, packetsLost: 0, jitterBufferDelay: 0, jitterBufferEmittedCount: 0 };
     stopStatsInterval();
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -206,6 +210,12 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
       // Create dummy audio/video transceivers for receive-only direction
       const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+      // Request a small smoothing buffer without disabling the browser's
+      // adaptive protection against jitter. Older browsers keep their defaults.
+      const receiver = videoTransceiver.receiver as RTCRtpReceiver & { jitterBufferTarget?: number | null };
+      if ('jitterBufferTarget' in receiver) {
+        try { receiver.jitterBufferTarget = recoverySettings.webrtc_jitter_buffer_ms; } catch { /* Browser default */ }
+      }
       // An advertised H.265 decoder can still fail for a camera's profile/level.
       // Retry using the browser's H.264 codecs so the server selects conversion.
       if (preferH264Ref.current && videoTransceiver.setCodecPreferences) {
@@ -371,14 +381,15 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
           if (report.type === 'inbound-rtp' && (report.kind === 'video' || report.mediaType === 'video')) {
             videoTrackStats = report;
           }
-          if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-            candidatePairStats = report;
+          if (report.type === 'transport' && report.selectedCandidatePairId) {
+            candidatePairStats = rtcStats.get(report.selectedCandidatePairId);
           }
         });
 
         if (videoTrackStats) {
           const now = Date.now();
-          const timeDelta = (now - prevStatsRef.current.timestamp) / 1000; // in seconds
+          const previous = prevStatsRef.current;
+          const timeDelta = previous.timestamp > 0 ? (videoTrackStats.timestamp - previous.timestamp) / 1000 : 0;
 
           const bytesReceived = videoTrackStats.bytesReceived || 0;
           const bytesDelta = bytesReceived - prevStatsRef.current.bytesReceived;
@@ -404,10 +415,17 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
           }
           const fps = timeDelta > 0 ? framesDelta / timeDelta : 0;
 
-          const rtt = candidatePairStats ? candidatePairStats.currentRoundTripTime * 1000 : undefined; // ms
+          const rtt = typeof candidatePairStats?.currentRoundTripTime === 'number' ? candidatePairStats.currentRoundTripTime * 1000 : undefined;
           const packetsReceived = videoTrackStats.packetsReceived || 0;
           const packetsLost = videoTrackStats.packetsLost || 0;
-          const packetLoss = (packetsReceived + packetsLost) > 0 ? packetsLost / (packetsReceived + packetsLost) : 0;
+          const receivedDelta = Math.max(0, packetsReceived - previous.packetsReceived);
+          const lostDelta = Math.max(0, packetsLost - previous.packetsLost);
+          const packetLoss = timeDelta > 0 && receivedDelta + lostDelta > 0 ? lostDelta / (receivedDelta + lostDelta) : 0;
+          const jitterBufferDelay = videoTrackStats.jitterBufferDelay || 0;
+          const jitterBufferEmittedCount = videoTrackStats.jitterBufferEmittedCount || 0;
+          const emittedDelta = jitterBufferEmittedCount - previous.jitterBufferEmittedCount;
+          const bufferDelay = timeDelta > 0 && emittedDelta > 0
+            ? Math.max(0, (jitterBufferDelay - previous.jitterBufferDelay) / emittedDelta * 1000) : undefined;
 
           const resolution = videoTrackStats.frameWidth && videoTrackStats.frameHeight
             ? `${videoTrackStats.frameWidth}x${videoTrackStats.frameHeight}`
@@ -420,7 +438,8 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
             bitrate,
             rtt,
             packetLoss,
-            jitter: videoTrackStats.jitter ? videoTrackStats.jitter * 1000 : undefined, // ms
+            bufferDelay,
+            jitter: typeof videoTrackStats.jitter === 'number' ? videoTrackStats.jitter * 1000 : undefined,
             reconnections: reconnectCountRef.current,
           };
 
@@ -428,9 +447,13 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
           // Update prev values
           prevStatsRef.current = {
-            timestamp: now,
+            timestamp: videoTrackStats.timestamp,
             bytesReceived,
             framesDecoded,
+            packetsReceived,
+            packetsLost,
+            jitterBufferDelay,
+            jitterBufferEmittedCount,
           };
 
           // Send stats payload back to control plane API every 4-6 seconds
@@ -517,7 +540,6 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
             <StreamHealthBadge status={health} errorMessage={errorMessage} />
             <span className="chip chipLive"><span className="dotPulse" />{loaded ? 'Live' : 'Connecting'}</span>
             <span className="chip" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}>WebRTC (WHEP)</span>
-            <span className="chip">Sub-second Latency</span>
           </div>
         </div>
       )}
