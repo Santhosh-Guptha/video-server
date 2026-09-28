@@ -10,7 +10,7 @@ From PowerShell, run the copied file. It requests Windows elevation when needed:
 .\setup.ps1
 ```
 
-This installs dependencies, fetches the `develop` checkout, builds the UI, configures services, checks health, forwards LAN ports and registers a hidden Windows logon task to keep WSL running and refresh changed addresses. It does not embed an administrator password. Windows still requires approval of its UAC prompt and may require a reboot to finish an initial WSL installation.
+This installs dependencies, fetches the `develop` checkout, builds the UI, configures services, checks health, disables WSL's idle shutdown, forwards LAN ports and registers a Windows logon task to start WSL and refresh changed addresses. It does not embed an administrator password. Windows still requires approval of its UAC prompt and may require a reboot to finish an initial WSL installation.
 
 Optional separate commands:
 

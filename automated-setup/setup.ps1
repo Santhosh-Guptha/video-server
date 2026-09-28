@@ -35,6 +35,26 @@ if ($distros -notcontains $Distro) {
     if ($distros -notcontains $Distro) { throw "Windows must finish registering $Distro, possibly after a reboot." }
 }
 
+# Keep the distribution alive after the last WSL shell exits. Without this,
+# WSL's default idle timeout stops every service even though systemd is active.
+if ($Mode -ne 'check') {
+    $wslConfigPath = Join-Path $env:USERPROFILE '.wslconfig'
+    $wslConfig = if (Test-Path -LiteralPath $wslConfigPath) { [IO.File]::ReadAllText($wslConfigPath) } else { '' }
+    $updatedWslConfig = $wslConfig
+    if ($updatedWslConfig -match '(?m)^\s*instanceIdleTimeout\s*=') {
+        $updatedWslConfig = [regex]::Replace($updatedWslConfig, '(?m)^\s*instanceIdleTimeout\s*=\s*[^\r\n]*', 'instanceIdleTimeout=-1')
+    } elseif ($updatedWslConfig -match '(?m)^\[general\]\s*$') {
+        $updatedWslConfig = [regex]::Replace($updatedWslConfig, '(?m)^\[general\]\s*$', "[general]`r`ninstanceIdleTimeout=-1", 1)
+    } else {
+        $updatedWslConfig = $updatedWslConfig.TrimEnd() + "`r`n[general]`r`ninstanceIdleTimeout=-1`r`n"
+    }
+    if ($updatedWslConfig -ne $wslConfig) {
+        [IO.File]::WriteAllText($wslConfigPath, $updatedWslConfig, [Text.UTF8Encoding]::new($false))
+        & wsl.exe --shutdown
+        if ($LASTEXITCODE -ne 0) { throw 'Could not restart WSL after updating its idle timeout.' }
+    }
+}
+
 # Bootstrap from this file alone. The repository supplies the Linux installer
 # and its patch files; the caller does not need to keep an installer folder.
 $bootstrap = @'
@@ -100,8 +120,6 @@ foreach ($port in @(5173,8000,3478)) {
 if (-not (Get-NetFirewallRule -Name 'VideoServer-LAN' -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -Name 'VideoServer-LAN' -DisplayName 'Video Server LAN' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5173,8000,3478 -RemoteAddress LocalSubnet -Profile Domain,Private | Out-Null
 }
-$keeper = Get-CimInstance Win32_Process -Filter "Name='wsl.exe'" | Where-Object { $_.CommandLine -like "*-d $Distro --exec tail -f /dev/null*" }
-if (-not $keeper) { Start-Process -FilePath wsl.exe -ArgumentList @('-d',$Distro,'--exec','tail','-f','/dev/null') -WindowStyle Hidden }
 if (-not $NetworkOnly) {
     $persistentDir = Join-Path $env:ProgramData 'VideoServer'
     New-Item -ItemType Directory -Path $persistentDir -Force | Out-Null
