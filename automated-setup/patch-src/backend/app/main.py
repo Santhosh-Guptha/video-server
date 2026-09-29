@@ -275,62 +275,18 @@ def configure_mediamtx_paths_dynamically():
         print(f"[startup] Failed to read MediaMTX config file: {e}")
         return
 
-    # 4. Parse/replace settings in the configuration content
-    modified = False
-
-    # Replace recordPath
-    record_path_pattern = r"(^\s*recordPath:\s*)[^\n]+"
-    match_rp = re.search(record_path_pattern, content, re.MULTILINE)
-    if match_rp:
-        current_line = match_rp.group(0)
-        new_line = f"{match_rp.group(1)}\"{target_record_path}\""
-        if current_line.strip() != new_line.strip():
-            content = re.sub(record_path_pattern, new_line, content, flags=re.MULTILINE)
-            modified = True
-            print(f"[startup] MediaMTX recordPath updated to: {target_record_path}")
-
-    # Replace recordSegmentDuration
-    segment_dur_pattern = r"(^\s*recordSegmentDuration:\s*)[^\n]+"
-    match_sd = re.search(segment_dur_pattern, content, re.MULTILINE)
-    if match_sd:
-        current_line = match_sd.group(0)
-        new_line = f"{match_sd.group(1)}\"{settings.segment_time_seconds}s\""
-        if current_line.strip() != new_line.strip():
-            content = re.sub(segment_dur_pattern, new_line, content, flags=re.MULTILINE)
-            modified = True
-            print(f"[startup] MediaMTX recordSegmentDuration updated to: {settings.segment_time_seconds}s")
-
-    # Replace runOnRecordSegmentComplete
-    hook_pattern = r"(^\s*runOnRecordSegmentComplete:\s*)[^\n]+"
-    match_hook = re.search(hook_pattern, content, re.MULTILINE)
-    if match_hook:
-        current_line = match_hook.group(0)
-        new_line = f"{match_hook.group(1)}{target_hook_cmd}"
-        if current_line.strip() != new_line.strip():
-            content = re.sub(hook_pattern, new_line, content, flags=re.MULTILINE)
-            modified = True
-            print(f"[startup] MediaMTX runOnRecordSegmentComplete updated to: {target_hook_cmd}")
-
-    # 5. Write back and restart MediaMTX service if updated
-    if modified:
-        try:
-            config_path.write_text(content)
-            print("[startup] MediaMTX configuration updated successfully.")
-
-            # Check if running as a systemd service, restart it
-            if os.path.exists("/etc/systemd/system/mediamtx.service") or os.path.exists("/lib/systemd/system/mediamtx.service"):
-                print("[startup] Restarting mediamtx service to apply changes...")
-                res = subprocess.run(["systemctl", "restart", "mediamtx"], capture_output=True, text=True)
-                if res.returncode == 0:
-                    print("[startup] mediamtx service restarted successfully.")
-                else:
-                    print(f"[startup] Failed to restart mediamtx service: {res.stderr}")
-            else:
-                print("[startup] Not running under systemd or service file not found, mediamtx needs to be restarted manually.")
-        except Exception as e:
-            print(f"[startup] Failed to write config or restart MediaMTX: {e}")
+    # Update only defaults: helper paths deliberately disable recording hooks.
+    data = yaml.safe_load(content)
+    defaults = data.setdefault('pathDefaults', {})
+    updates = {'recordPath': target_record_path,
+               'recordSegmentDuration': f'{settings.segment_time_seconds}s',
+               'runOnRecordSegmentComplete': target_hook_cmd}
+    if any(defaults.get(key) != value for key, value in updates.items()):
+        defaults.update(updates)
+        config_path.write_text(yaml.safe_dump(data, sort_keys=False))
+        print('[startup] MediaMTX recording defaults updated for hot reload.')
     else:
-        print("[startup] MediaMTX configuration is already up to date.")
+        print('[startup] MediaMTX configuration is already up to date.')
 
 @app.on_event("startup")
 async def startup():
