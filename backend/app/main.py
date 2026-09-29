@@ -234,6 +234,7 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
             raise
 
 def configure_mediamtx_paths_dynamically():
+    import yaml
     import subprocess
     import os
     import re
