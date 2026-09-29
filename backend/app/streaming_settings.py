@@ -15,6 +15,7 @@ class StreamingSettings(BaseModel):
     playback_profile: Literal['HD', 'NORMAL', 'MOBILE'] = 'HD'
     webrtc_stall_timeout_seconds: int = Field(default=8, ge=4, le=60, strict=True)
     webrtc_jitter_buffer_ms: int = Field(default=100, ge=0, le=1000, strict=True)
+    rtsp_connections_per_endpoint: int = Field(default=6, ge=1, le=128, strict=True)
     webrtc_connection_timeout_seconds: int = Field(default=20, ge=10, le=60, strict=True)
     max_active_transcoders: int = Field(default=10, ge=1, le=10, strict=True)
     default_retention_days: int = Field(default=30, ge=1, le=365, strict=True)
@@ -56,3 +57,9 @@ async def write_streaming_settings(payload: StreamingSettings):
                 'default_retention_days']:
         setattr(config, key.upper(), getattr(payload, key))
     return await read_streaming_settings()
+
+
+@router.get('/rtsp-capacity')
+async def read_rtsp_capacity():
+    from .rtsp_budget import rtsp_budget
+    return await rtsp_budget.snapshot()

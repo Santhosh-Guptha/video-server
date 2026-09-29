@@ -13,6 +13,7 @@ from sqlalchemy import select, delete, text, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import asyncio
+from .rtsp_budget import spawn_media_process, communicate_process, RTSPCapacityError
 import httpx
 import os
 import tempfile
@@ -86,7 +87,7 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
     import os
     from pathlib import Path
     from .stream_manager import should_record, double_escape_rtsp_url
-    
+
     # 1. Fetch all active streams
     res = await session.execute(
         select(CameraStream)
@@ -94,7 +95,7 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
         .where(Camera.active == True)
     )
     active_streams = list(res.scalars().all())
-    
+
     # 2. Build paths dictionary
     paths_dict = {
         "all_others": {
@@ -105,7 +106,7 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
     from .source_url import valid_camera_source
     for stream in active_streams:
         source_url = stream.stream_url.strip() if stream.stream_url else ""
-        
+
         # Skip invalid or empty URLs
         if stream.stream_source != "EDGE_PUSH":
             if not valid_camera_source(source_url):
@@ -132,13 +133,13 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
                     vf_filters.append(f"scale={parts[0]}:{parts[1]}")
             if stream.fps:
                 vf_filters.append(f"fps=fps={stream.fps}")
-            
+
             vf_arg = f"-vf \"{','.join(vf_filters)}\"" if vf_filters else ""
-            
+
             bitrate_arg = ""
             if stream.bitrate:
                 bitrate_arg = f"-b:v {stream.bitrate}k -maxrate {stream.bitrate}k -bufsize {stream.bitrate * 2}k"
-            
+
             from .stream_manager import double_escape_rtsp_url
             input_url = double_escape_rtsp_url(stream.stream_url)
             ffmpeg_cmd = (
@@ -171,7 +172,7 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
                 "sourceOnDemand": not stream.always_on,
                 "record": should_record(stream),
             }
-        
+
     # 3. Find mediamtx.yml path
     candidate_paths = [
         "/opt/mediamtx/mediamtx.yml",
@@ -186,47 +187,49 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
         if p.exists():
             config_path = p
             break
-            
+
     if not config_path:
         print("[startup] No MediaMTX configuration file found to write camera paths.")
         return
-        
+
     # 4. Read config, keep base, append paths
     try:
         content = config_path.read_text()
     except Exception as e:
         print(f"[startup] Failed to read MediaMTX config file: {e}")
         return
-        
-    idx = content.find("paths:")
-    if idx != -1:
-        base_content = content[:idx + 6]
-        paths_yaml = yaml.safe_dump(paths_dict, default_flow_style=False)
-        indented_paths = "\n" + "\n".join("  " + line for line in paths_yaml.splitlines())
-        
-        try:
-            config_path.write_text(base_content + indented_paths)
-            print(f"[startup] Successfully wrote {len(active_streams)} camera paths to {config_path}")
-            
-            # Restart MediaMTX to apply changes in one go
-            if os.path.exists("/etc/systemd/system/mediamtx.service") or os.path.exists("/lib/systemd/system/mediamtx.service"):
-                print("[startup] Restarting mediamtx service to apply changes...")
-                res = subprocess.run(["systemctl", "restart", "mediamtx"], capture_output=True, text=True)
-                if res.returncode == 0:
-                    print("[startup] mediamtx service restarted successfully.")
-                else:
-                    print(f"[startup] Failed to restart mediamtx service: {res.stderr}")
-            else:
-                print("[startup] mediamtx service restart bypassed (not systemd).")
-        except Exception as e:
-            print(f"[startup] Failed to write MediaMTX config or restart service: {e}")
 
+    from .rtsp_budget import rtsp_budget, shared_paths
+    async with rtsp_budget.lock:
+        # Coordinate bulk YAML reloads with dynamic path changes and probes.
+        await rtsp_budget._load()
+        paths_dict, blocked = shared_paths(paths_dict, rtsp_budget.paths, settings.rtsp_connections_per_endpoint)
+        rtsp_budget.blocked = set(blocked)
+        data = yaml.safe_load(content)
+        if data.get('paths') == paths_dict:
+            return
+        data['paths'] = paths_dict
+        temporary = config_path.with_suffix('.tmp')
+        try:
+            temporary.write_text(yaml.safe_dump(data, sort_keys=False))
+            temporary.replace(config_path)
+            rtsp_budget.paths = None
+            if os.path.exists('/etc/systemd/system/mediamtx.service') or os.path.exists('/lib/systemd/system/mediamtx.service'):
+                await asyncio.to_thread(subprocess.run, ['systemctl', 'restart', 'mediamtx'], check=True, capture_output=True)
+            print(f'[startup] Shared RTSP ingest configured; {len(blocked)} new paths held at capacity')
+        except Exception:
+            config_path.write_text(content)
+            rtsp_budget.paths = None
+            await asyncio.to_thread(subprocess.run, ["systemctl", "restart", "mediamtx"], check=False, capture_output=True)
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
 def configure_mediamtx_paths_dynamically():
     import subprocess
     import os
     import re
     from pathlib import Path
-    
+
     # 1. Determine the path to mediamtx.yml
     candidate_paths = [
         "/opt/mediamtx/mediamtx.yml",
@@ -235,14 +238,14 @@ def configure_mediamtx_paths_dynamically():
         "./mediamtx.yml",
         "../mediamtx_linux.yml"
     ]
-    
+
     config_path = None
     for cp in candidate_paths:
         p = Path(cp)
         if p.exists():
             config_path = p
             break
-            
+
     if not config_path:
         print("[startup] No MediaMTX configuration file found to dynamically configure.")
         return
@@ -252,10 +255,10 @@ def configure_mediamtx_paths_dynamically():
     # 2. Get absolute path of recordings directory
     rec_dir = Path(settings.recording_dir).resolve().absolute()
     backend_dir = Path(__file__).resolve().parent.parent
-    
+
     target_record_path = f"{rec_dir}/%path/%Y-%m-%d/%Y%m%d_%H%M%S_live"
     target_hook_cmd = f"/bin/bash {backend_dir}/app/segment_hook.sh \"$MTX_PATH\" \"$MTX_SEGMENT_PATH\""
-    
+
     # 3. Read configuration file
     try:
         content = config_path.read_text()
@@ -265,7 +268,7 @@ def configure_mediamtx_paths_dynamically():
 
     # 4. Parse/replace settings in the configuration content
     modified = False
-    
+
     # Replace recordPath
     record_path_pattern = r"(^\s*recordPath:\s*)[^\n]+"
     match_rp = re.search(record_path_pattern, content, re.MULTILINE)
@@ -276,7 +279,7 @@ def configure_mediamtx_paths_dynamically():
             content = re.sub(record_path_pattern, new_line, content, flags=re.MULTILINE)
             modified = True
             print(f"[startup] MediaMTX recordPath updated to: {target_record_path}")
-            
+
     # Replace recordSegmentDuration
     segment_dur_pattern = r"(^\s*recordSegmentDuration:\s*)[^\n]+"
     match_sd = re.search(segment_dur_pattern, content, re.MULTILINE)
@@ -287,7 +290,7 @@ def configure_mediamtx_paths_dynamically():
             content = re.sub(segment_dur_pattern, new_line, content, flags=re.MULTILINE)
             modified = True
             print(f"[startup] MediaMTX recordSegmentDuration updated to: {settings.segment_time_seconds}s")
-            
+
     # Replace runOnRecordSegmentComplete
     hook_pattern = r"(^\s*runOnRecordSegmentComplete:\s*)[^\n]+"
     match_hook = re.search(hook_pattern, content, re.MULTILINE)
@@ -304,7 +307,7 @@ def configure_mediamtx_paths_dynamically():
         try:
             config_path.write_text(content)
             print("[startup] MediaMTX configuration updated successfully.")
-            
+
             # Check if running as a systemd service, restart it
             if os.path.exists("/etc/systemd/system/mediamtx.service") or os.path.exists("/lib/systemd/system/mediamtx.service"):
                 print("[startup] Restarting mediamtx service to apply changes...")
@@ -330,7 +333,7 @@ async def startup():
 
     # Attempt to auto-create PostgreSQL tables on start (fallback logic)
     from . import db
-    
+
     async def apply_dynamic_schema_upgrades():
         upgrades = [
             "ALTER TABLE cameras ADD COLUMN make VARCHAR(128);",
@@ -404,7 +407,7 @@ async def startup():
 
     # Start periodic watchdog loops
     asyncio.create_task(recording_recovery_loop())
-    
+
     from .schedulers import (
         camera_gap_recovery_loop,
         camera_archive_cleanup_loop,
@@ -616,7 +619,7 @@ def get_file_duration(file_path: str, ffmpeg_path: str = "ffmpeg") -> float:
         basename = os.path.basename(ffmpeg_path)
         ext = os.path.splitext(basename)[1]
         ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
-    
+
     cmd = [
         ffprobe_path,
         "-v", "quiet",
@@ -633,7 +636,7 @@ def get_file_duration(file_path: str, ffmpeg_path: str = "ffmpeg") -> float:
                 return float(duration_str)
     except Exception as e:
         print(f"[metadata] ffprobe failed for {file_path}: {e}")
-    
+
     return float(settings.segment_time_seconds)
 
 
@@ -645,7 +648,7 @@ def has_audio_stream(file_path: str, ffmpeg_path: str = "ffmpeg") -> bool:
         basename = os.path.basename(ffmpeg_path)
         ext = os.path.splitext(basename)[1]
         ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
-    
+
     cmd = [
         ffprobe_path,
         "-v", "quiet",
@@ -671,11 +674,11 @@ async def record_segment_complete(
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
     print(f"[webhook] Segment complete notification received: stream_id={payload.stream_id}, path={payload.file_path}")
-    
+
     # 1. Validate payload inputs
     if not payload.stream_id or not payload.file_path:
         raise HTTPException(status_code=400, detail="stream_id and file_path are required")
-        
+
     # 2. Verify camera / stream is registered
     from .webrtc import resolve_stream_by_identifier
     stream = await resolve_stream_by_identifier(payload.stream_id, session)
@@ -691,36 +694,36 @@ async def record_segment_complete(
         if not camera or not camera.active:
             print(f"[webhook] Rejected indexing segment for stream: stream_id={payload.stream_id} reason=inactive")
             return {"status": "ignored", "reason": "strict_validation_failed"}
-        
+
     # 3. Resolve relative path (stream_id/date/filename) from the payload path
     parts = Path(payload.file_path).parts
     relative_path = "/".join(parts[-3:])
-    
+
     # 4. Verify file exists on local disk and size > 0 (checking both absolute input and relative fallback)
     p = Path(payload.file_path)
     if not p.exists():
         p = Path(settings.recording_dir) / relative_path
-        
+
     if not p.exists():
         print(f"[webhook] File not found: {payload.file_path} (resolved: {p})")
         raise HTTPException(status_code=400, detail="File does not exist on disk")
-        
+
     try:
         size = p.stat().st_size
         if size == 0:
             print(f"[webhook] Rejecting 0-byte file: {p}")
             raise HTTPException(status_code=400, detail="File size is zero")
-            
+
         end_ts = p.stat().st_mtime
     except Exception as e:
         print(f"[webhook] Error checking file stats for {p}: {e}")
         raise HTTPException(status_code=400, detail=f"Error checking file: {e}")
-        
+
     # 5. Calculate duration and start timestamp
     duration = await asyncio.to_thread(get_file_duration, str(p), settings.ffmpeg_path)
     start_ts = end_ts - duration
-    
-    
+
+
     # 5.5 Rename file to include both start and end timestamps if it follows the live naming pattern
     try:
         dt_start = datetime.fromtimestamp(start_ts)
@@ -729,7 +732,7 @@ async def record_segment_complete(
         new_filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{dt_end.strftime('%H%M%S')}_live.mp4"
         new_relative_path = str(Path(relative_path).parent / new_filename).replace("\\", "/")
         new_absolute_path = Path(settings.recording_dir) / new_relative_path
-        
+
         # Check if the file is not already renamed
         if Path(relative_path).name != new_filename:
             p.rename(new_absolute_path)
@@ -750,7 +753,7 @@ async def record_segment_complete(
         await session.commit()
         print(f"[webhook] Indexed segment: {relative_path} (Duration: {duration}s)")
         await PlaybackTimelineService.invalidate_cache_for_timestamp(stream.stream_id, start_ts)
-        
+
         # Auto-recovery trigger for incomplete live recording segments
         seg_time = settings.segment_time_seconds
         if duration < seg_time - 5.0:
@@ -765,14 +768,14 @@ async def record_segment_complete(
     except IntegrityError:
         await session.rollback()
         print(f"[webhook] Duplicate segment ignored: {relative_path}")
-        
+
     return {"status": "ok"}
 
 async def recording_recovery_loop():
     print("[indexer] Starting periodic recording recovery scanner (safety net)...")
     # Wait for initial_sync to register all camera streams in the database
     await asyncio.sleep(10.0)
-    
+
     # Initial recovery scan on startup
     try:
         async for session in get_session():
@@ -800,20 +803,20 @@ async def download_sd_card_stream(
     from pathlib import Path
     import tempfile
     import os
-    
+
     # 1. Enforce feature enablement check
     if not settings.enable_sd_card_on_demand:
         raise HTTPException(
-            status_code=403, 
+            status_code=403,
             detail="SD Card On-Demand Retrieval is disabled in configurations."
         )
-        
+
     # 2. Resolve stream and camera details
     from .webrtc import resolve_stream_by_identifier
     stream = await resolve_stream_by_identifier(stream_id, session)
     if not stream:
         raise HTTPException(status_code=404, detail="Camera stream not found")
-        
+
     from sqlalchemy import select
     from .models import Camera, RecordingSegment
     stmt = select(Camera).where(Camera.id == stream.camera_id)
@@ -827,9 +830,9 @@ async def download_sd_card_stream(
         RecordingSegment.end_ts >= start_ts,
         RecordingSegment.start_ts <= end_ts
     ).order_by(RecordingSegment.start_ts.asc())
-    
+
     local_segments = (await session.execute(stmt_seg)).scalars().all()
-    
+
     valid_local_files = []
     total_local_duration = 0.0
     for seg in local_segments:
@@ -840,67 +843,76 @@ async def download_sd_card_stream(
             if overlap_end > overlap_start:
                 total_local_duration += (overlap_end - overlap_start)
                 valid_local_files.append(str(abs_path))
-                
+
     requested_duration = end_ts - start_ts
     use_local = len(valid_local_files) > 0 and (total_local_duration / requested_duration >= 0.95)
-    
+
     from datetime import datetime
     start_dt = datetime.fromtimestamp(start_ts)
     friendly_filename = f"{camera.name.replace(' ', '_')}_{start_dt.strftime('%Y%m%d_%H%M%S')}_playback.mp4"
 
     async def ffmpeg_stream_generator(cmd, temp_file_to_clean=None):
-        print(f"[sd_card] Launching streaming ffmpeg command: {' '.join(cmd)}")
+        print("[sd_card] Starting playback stream")
         # Write stderr to a temp file to avoid PIPE deadlock
         stderr_log_fd, stderr_log_path = tempfile.mkstemp(suffix="_ffmpeg_err.log")
         stderr_file = os.fdopen(stderr_log_fd, 'w')
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=stderr_file
-        )
-        bytes_sent = 0
         try:
-            while True:
-                chunk = await process.stdout.read(262144) # Read chunks of 256KB
-                if not chunk:
-                    break
-                bytes_sent += len(chunk)
-                yield chunk
-        except asyncio.CancelledError:
-            print("[sd_card] Streaming request cancelled by client browser.")
+            process = await spawn_media_process(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=stderr_file
+            )
+        except BaseException as exc:
+            stderr_file.close()
+            os.remove(stderr_log_path)
+            if temp_file_to_clean:
+                Path(temp_file_to_clean).unlink(missing_ok=True)
+            if isinstance(exc, RTSPCapacityError):
+                raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "10"}) from exc
+            raise
+        async def chunks():
+            bytes_sent = 0
             try:
-                process.kill()
-            except Exception:
-                pass
-        finally:
-            try:
-                stderr_file.close()
-            except Exception:
-                pass
-            # Log ffmpeg stderr for debugging
-            try:
-                with open(stderr_log_path, 'r') as f:
-                    stderr_text = f.read()[-2000:]
-                if bytes_sent == 0 and stderr_text:
-                    print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
-                else:
-                    print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
-            except Exception:
-                pass
-            try:
-                os.remove(stderr_log_path)
-            except Exception:
-                pass
-            try:
-                process.terminate()
-                await process.wait()
-            except Exception:
-                pass
-            if temp_file_to_clean and os.path.exists(temp_file_to_clean):
+                while True:
+                    chunk = await process.stdout.read(262144) # Read chunks of 256KB
+                    if not chunk:
+                        break
+                    bytes_sent += len(chunk)
+                    yield chunk
+            except asyncio.CancelledError:
+                print("[sd_card] Streaming request cancelled by client browser.")
                 try:
-                    os.remove(temp_file_to_clean)
+                    process.kill()
                 except Exception:
                     pass
+            finally:
+                try:
+                    stderr_file.close()
+                except Exception:
+                    pass
+                # Log ffmpeg stderr for debugging
+                try:
+                    with open(stderr_log_path, 'r') as f:
+                        stderr_text = f.read()[-2000:]
+                    if bytes_sent == 0 and stderr_text:
+                        print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
+                    else:
+                        print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
+                except Exception:
+                    pass
+                try:
+                    os.remove(stderr_log_path)
+                except Exception:
+                    pass
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+                if temp_file_to_clean and os.path.exists(temp_file_to_clean):
+                    try:
+                        os.remove(temp_file_to_clean)
+                    except Exception:
+                        pass
+        return chunks()
 
     # CASE A: Use local recordings if available
     if use_local:
@@ -916,7 +928,7 @@ async def download_sd_card_stream(
                 "pipe:1"
             ]
             return StreamingResponse(
-                ffmpeg_stream_generator(cmd),
+                await ffmpeg_stream_generator(cmd),
                 media_type="video/mp4",
                 headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
             )
@@ -927,7 +939,7 @@ async def download_sd_card_stream(
                     for path in valid_local_files:
                         escaped_path = path.replace("'", "'\\''")
                         f.write(f"file '{escaped_path}'\n")
-                
+
                 cmd = [
                     settings.ffmpeg_path,
                     "-f", "concat",
@@ -940,7 +952,7 @@ async def download_sd_card_stream(
                     "pipe:1"
                 ]
                 return StreamingResponse(
-                    ffmpeg_stream_generator(cmd, temp_txt_path),
+                    await ffmpeg_stream_generator(cmd, temp_txt_path),
                     media_type="video/mp4",
                     headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
                 )
@@ -956,10 +968,10 @@ async def download_sd_card_stream(
         try:
             provider = get_playback_recovery_provider(camera.make)
             rtsp_replay_url = provider.build_playback_url(stream, start_ts, end_ts)
-            print(f"[sd_card] Streaming from SD Card RTSP URL: {rtsp_replay_url}")
+            print("[sd_card] Camera playback requested")
         except Exception as e:
             raise HTTPException(
-                status_code=500, 
+                status_code=500,
                 detail=f"Failed to generate RTSP playback URL: {e}"
             )
 
@@ -974,7 +986,7 @@ async def download_sd_card_stream(
             "pipe:1"
         ]
         return StreamingResponse(
-            ffmpeg_stream_generator(cmd),
+            await ffmpeg_stream_generator(cmd),
             media_type="video/mp4",
             headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
         )
@@ -985,21 +997,21 @@ async def get_recovered_stats(
     session: Annotated[AsyncSession, Depends(get_session)] = None
 ):
     from sqlalchemy import select, func
-    
+
     # We query all segments where file_path contains '_recovered'
     stmt = select(
         RecordingSegment.stream_id,
         func.count(RecordingSegment.id).label("count"),
         func.sum(RecordingSegment.end_ts - RecordingSegment.start_ts).label("duration")
     ).where(RecordingSegment.file_path.like("%_recovered%")).group_by(RecordingSegment.stream_id)
-    
+
     res = await session.execute(stmt)
     rows = res.all()
-    
+
     by_stream = {}
     total_count = 0
     total_duration = 0.0
-    
+
     for row in rows:
         stream_id, count, duration = row
         duration = float(duration or 0)
@@ -1009,15 +1021,15 @@ async def get_recovered_stats(
         }
         total_count += count
         total_duration += duration
-        
+
     # Also query the 10 most recent recovered files
     recent_stmt = select(RecordingSegment).where(
         RecordingSegment.file_path.like("%_recovered%")
     ).order_by(RecordingSegment.created_at.desc()).limit(10)
-    
+
     recent_res = await session.execute(recent_stmt)
     recent_segs = recent_res.scalars().all()
-    
+
     recent_list = []
     for s in recent_segs:
         recent_list.append({
@@ -1030,7 +1042,7 @@ async def get_recovered_stats(
             "duration": s.end_ts - s.start_ts,
             "created_at": s.created_at.isoformat() if s.created_at else None
         })
-        
+
     return {
         "total_count": total_count,
         "total_duration": total_duration,
@@ -1047,16 +1059,16 @@ async def recording_file(path: str, range: Optional[str] = Header(None)):
         parts = Path(path).parts
         rel_path = "/".join(parts[-3:])
         p = Path(settings.recording_dir) / rel_path
-        
+
     if not p.exists():
         raise HTTPException(404, f"File not found: {path}")
-        
+
     file_path = str(p)
     file_size = os.path.getsize(file_path)
-    
+
     if not range:
         return FileResponse(file_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
-        
+
     try:
         range_val = range.strip().split("=")[-1]
         start_str, end_str = range_val.split("-")
@@ -1064,15 +1076,15 @@ async def recording_file(path: str, range: Optional[str] = Header(None)):
         end = int(end_str) if end_str else file_size - 1
     except Exception:
         return FileResponse(file_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
-        
+
     if start >= file_size or end >= file_size or start > end:
         return Response(
             status_code=416,
             headers={"Content-Range": f"bytes */{file_size}"}
         )
-        
+
     chunk_size = end - start + 1
-    
+
     def file_generator():
         with open(file_path, "rb") as f:
             f.seek(start)
@@ -1084,7 +1096,7 @@ async def recording_file(path: str, range: Optional[str] = Header(None)):
                     break
                 bytes_left -= len(data)
                 yield data
-                
+
     return StreamingResponse(
         file_generator(),
         status_code=206,
@@ -1107,7 +1119,7 @@ async def download_recording(
     import tempfile
     import os
     import subprocess
-    
+
     # 1. Parse timestamps
     try:
         try:
@@ -1119,10 +1131,10 @@ async def download_recording(
             end_ts = datetime.fromisoformat(end_time.replace("Z", "+00:00")).timestamp()
     except Exception as e:
         raise HTTPException(400, f"Invalid start_time or end_time format: {e}")
-        
+
     if start_ts >= end_ts:
         raise HTTPException(400, "start_time must be before end_time")
-        
+
     # Enforce maximum duration of 30 minutes
     max_duration = 30 * 60  # 1800 seconds
     requested_duration = end_ts - start_ts
@@ -1147,10 +1159,10 @@ async def download_recording(
     )
     res = await session.execute(stmt)
     segments = list(res.scalars().all())
-    
+
     if not segments:
         raise HTTPException(404, "No recordings found for the specified range")
-        
+
     valid_files = []
     valid_segments = []
     for seg in segments:
@@ -1162,10 +1174,10 @@ async def download_recording(
         if p.exists():
             valid_files.append(p)
             valid_segments.append(seg)
-            
+
     if not valid_files:
         raise HTTPException(404, "Recording files not found on disk")
-        
+
     # 3. Calculate start offset and duration for ffmpeg trimming
     first_seg = valid_segments[0]
     start_offset = max(0.0, start_ts - first_seg.start_ts)
@@ -1201,7 +1213,7 @@ async def download_recording(
             if result.returncode != 0:
                 print(f"[download] ffmpeg error: {result.stderr}")
                 raise HTTPException(500, f"FFmpeg trim failed: {result.stderr}")
-                
+
         # Case 2: Multiple files -> Concatenate and trim using ffmpeg
         else:
             list_file_path = os.path.join(temp_dir, f"{stream_id}_{int(start_ts)}_{int(end_ts)}_list.txt")
@@ -1209,7 +1221,7 @@ async def download_recording(
                 for file_path in valid_files:
                     safe_path = os.path.abspath(str(file_path)).replace("\\", "/")
                     f.write(f"file '{safe_path}'\n")
-                    
+
             cmd = [
                 settings.ffmpeg_path,
                 "-f", "concat",
@@ -1232,7 +1244,7 @@ async def download_recording(
             if result.returncode != 0:
                 print(f"[download] ffmpeg error: {result.stderr}")
                 raise HTTPException(500, f"FFmpeg concat and trim failed: {result.stderr}")
-                
+
         def cleanup():
             try:
                 if list_file_path and os.path.exists(list_file_path):
@@ -1241,10 +1253,10 @@ async def download_recording(
                     os.remove(output_path)
             except Exception as e:
                 print(f"[download] Cleanup error: {e}")
-                
+
         background_tasks = BackgroundTasks()
         background_tasks.add_task(cleanup)
-        
+
         return FileResponse(
             path=output_path,
             media_type="video/mp4",
@@ -1353,7 +1365,7 @@ async def configure_camera(
         stream.resolution = f"{payload.width}x{payload.height}"
 
     await session.commit()
-    
+
     # 5. Restart MediaMTX stream path if it is currently running to force it to pick up new properties immediately
     try:
         # Stop and let the watchdog restart/pull it with the new configuration
@@ -1380,29 +1392,29 @@ class TestConnectionRequest(BaseModel):
 async def test_camera_connection(req: TestConnectionRequest):
     import os
     import asyncio
-    
+
     url = ""
     if req.input_mode == "combined":
         url = req.rtsp_url.strip() if req.rtsp_url else ""
     else:
         if not req.ip_host:
             raise HTTPException(status_code=400, detail="IP / Host is required in custom input mode")
-            
+
         creds = ""
         if req.username and req.password:
             creds = f"{req.username}:{req.password}@"
         elif req.username:
             creds = f"{req.username}@"
-            
+
         port_str = f":{req.port}" if req.port else ""
         path_str = req.path.strip() if req.path else ""
         if path_str and not path_str.startswith("/"):
             path_str = f"/{path_str}"
-            
+
         query_str = req.query.strip() if req.query else ""
         if query_str and not query_str.startswith("?"):
             query_str = f"?{query_str}"
-            
+
         url = f"rtsp://{creds}{req.ip_host.strip()}{port_str}{path_str}{query_str}"
 
     if not url.startswith(("rtsp://", "rtsps://", "rtmp://")):
@@ -1416,30 +1428,30 @@ async def test_camera_connection(req: TestConnectionRequest):
         basename = os.path.basename(ffmpeg_path)
         ext = os.path.splitext(basename)[1]
         ffprobe_path = os.path.join(dirname, f"ffprobe{ext}")
-        
+
     cmd = [
         ffprobe_path,
         "-v", "error",
         "-rtsp_transport", "tcp",
-        "-stimeout", "5000000",
+        "-timeout", "5000000",
         "-select_streams", "v:0",
         "-show_entries", "stream=codec_name",
         "-of", "default=noprint_wrappers=1:nokey=1",
         url
     ]
-    
+
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await spawn_media_process(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=6.0)
-        
+        stdout, stderr = await communicate_process(proc, 6.0)
+
         if proc.returncode != 0:
             err_msg = stderr.decode().strip() or f"Connection test failed (exit code {proc.returncode})"
             return {"status": "failed", "detail": err_msg}
-            
+
     except asyncio.TimeoutError:
         try:
             proc.kill()
@@ -1460,7 +1472,7 @@ async def test_camera_connection(req: TestConnectionRequest):
         "runOnDemand": "",
         "runOnUnDemand": ""
     }
-    
+
     try:
         response = await stream_manager._post(f"/v3/config/paths/add/{temp_stream_id}", json=payload)
         if response.status_code not in (200, 201) and "already exists" not in response.text:
@@ -1511,7 +1523,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
         received_source_ids.add(source_id)
         name = str(raw.get("name") or f"Camera {source_id}")
         active = bool(raw.get("active", True))
-        
+
         server_cam_id = raw.get("serverCameraId")
         if not server_cam_id or not str(server_cam_id).strip():
             server_cam_id = f"cam_{source_id}"
@@ -1557,7 +1569,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
             stream_id = str(raw.get("streamId") or f"camera_{source_id}_{stream_type_val}")
         else:
             stream_id = f"{server_cam_id}_{stream_type_val}"
-            
+
         stream_url = str(raw.get("rtspUrl") or "").strip().replace(" ", "")
         if not stream_url.startswith(("rtsp://", "rtsps://", "rtmp://")):
             stream_url = f"rtsp://{stream_url}"
@@ -1576,7 +1588,7 @@ async def _sync_cameras_impl(session: AsyncSession, skip_mediamtx_api: bool = Fa
                 pass
 
         stream = stream_by_id.get(stream_id)
-        
+
         profile = map_stream_profile(raw.get("streamType"))
         res_str = f"{raw.get('width', 1920)}x{raw.get('height', 1080)}"
         fps_val = int(raw.get("fps", 15)) if raw.get("fps") is not None else 15
@@ -1701,7 +1713,7 @@ async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
 
     res = await session.execute(query.order_by(Camera.name.asc()))
     cameras = list(res.scalars().all())
-    
+
     # Serialize to JSON via Pydantic schema to ensure all computed fields (rtsp_url, stream_id, etc.) are included
     from .schemas import CameraOut
     from fastapi.encoders import jsonable_encoder
@@ -1713,7 +1725,7 @@ async def list_cameras(session: Annotated[AsyncSession, Depends(get_session)], s
             await redis_client.set(cache_key, serialized, ex=120)
         except Exception as e:
             print(f"[main] Failed to set cameras cache: {e}")
-            
+
     from fastapi.responses import Response
     return Response(content=serialized, media_type="application/json")
 
@@ -1824,7 +1836,7 @@ async def hls_playlist(
         if stream:
             stream_id = stream.stream_id
             target_stream_id = stream_id
-            
+
             # Register HLS viewer activity in Redis
             try:
                 from .services.redis_viewer_tracker import RedisViewerTracker
@@ -1832,7 +1844,7 @@ async def hls_playlist(
                 await RedisViewerTracker.register_hls_viewer(stream_id, client_ip)
             except Exception as tracker_err:
                 print(f"[main] Failed to register HLS viewer for {stream_id}: {tracker_err}")
-                
+
             if stream.codec and stream.codec.upper() == "H265":
                 from .transcoder import transcoder_manager
                 target_stream_id = await transcoder_manager.ensure_transcoder(
@@ -1876,7 +1888,7 @@ async def hls_segment(
     request: Request,
 ):
     target_stream_id = stream_id
-    
+
     # Register HLS viewer activity in Redis (lightweight, no DB needed)
     try:
         from .services.redis_viewer_tracker import RedisViewerTracker
@@ -1928,23 +1940,23 @@ async def sync_disk_recordings_to_db(stream_id: str, session: AsyncSession):
     stream_dir = Path(settings.recording_dir) / stream_id
     if not stream_dir.exists():
         return
-        
+
     db_res = await session.execute(
         select(RecordingSegment.file_path).where(RecordingSegment.stream_id == stream_id)
     )
     existing_paths = set(db_res.scalars().all())
-    
+
     mp4_files = glob.glob(str(stream_dir / "**" / "*.mp4"), recursive=True)
     new_segments = []
-    
+
     for f in mp4_files:
         p = Path(f)
         parts = p.parts
         rel_path = "/".join(parts[-3:])
-        
+
         if rel_path in existing_paths:
             continue
-            
+
         name = p.stem
         try:
             time_parts = name.split("_")
@@ -1957,7 +1969,7 @@ async def sync_disk_recordings_to_db(stream_id: str, session: AsyncSession):
                     end_dt_str = time_parts[0] + time_parts[2]
                     end_dt = datetime.strptime(end_dt_str, "%Y%m%d%H%M%S")
                     duration = end_dt.timestamp() - start_ts
-                
+
                 new_seg = RecordingSegment(
                     stream_id=stream_id,
                     file_path=rel_path,
@@ -1968,7 +1980,7 @@ async def sync_disk_recordings_to_db(stream_id: str, session: AsyncSession):
                 new_segments.append(new_seg)
         except Exception as e:
             print(f"[sync] Failed to parse filename {name}: {e}")
-            
+
     if new_segments:
         await session.commit()
         print(f"[sync] Dynamically indexed {len(new_segments)} new files from disk for stream {stream_id}")
@@ -2070,7 +2082,7 @@ async def ws_status(ws: WebSocket):
                             "status": status,
                             "subscribers": viewers,
                         })
-                    
+
                     payload = {
                         "ts": time.time(),
                         "streams": stream_list,
@@ -2112,7 +2124,7 @@ async def available_dates(stream_id: str, session: Annotated[AsyncSession, Depen
         .order_by(RecordingSegment.start_ts.asc())
     )
     timestamps = list(res.scalars().all())
-    
+
     if settings.nvr_edge_fallback_enabled:
         # Include past calendar dates up to nvr_edge_max_days (120 days) from NVR storage
         import datetime
@@ -2185,12 +2197,12 @@ async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) 
     ]
     async with semaphore:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await spawn_media_process(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
+            stdout, _ = await communicate_process(proc, 3.0)
             if proc.returncode == 0:
                 data = json.loads(stdout.decode())
                 duration_str = data.get("format", {}).get("duration")
@@ -2226,7 +2238,7 @@ async def get_recording_gaps(
     camera_id = (camera.server_camera_id or camera.name) if camera else stream.stream_id
     stream_dir = Path(settings.recording_dir) / camera_id
     segments_to_check = []
-    
+
     if stream_dir.exists():
         for mp4 in stream_dir.rglob("*.mp4"):
             name = mp4.name
@@ -2294,7 +2306,7 @@ async def get_recording_gaps(
 
     # Query file durations. For files >= 2MB, assume full segment duration to optimize speed.
     semaphore = asyncio.Semaphore(15)
-    
+
     async def get_segment_duration(seg):
         # If the filename already encodes both start and end, use that directly
         if seg.get("has_end") and "end_ts" in seg:
@@ -2306,7 +2318,7 @@ async def get_recording_gaps(
 
     tasks = [get_segment_duration(seg) for seg in segments_to_check]
     results = await asyncio.gather(*tasks)
-    
+
     # Map to segment boundaries (adjusting durations of consecutive files to eliminate fake GOP-alignment gaps)
     results.sort(key=lambda x: x[0])
     segments = []
@@ -2329,14 +2341,14 @@ async def get_recording_gaps(
     # Detect gaps between files (threshold set to 1.0s to capture all short segments)
     gaps = []
     current_time = start_ts
-    
+
     for s_start, s_end in active_segs:
         if s_start > current_time:
             gap_duration = s_start - current_time
             if gap_duration >= 1.0:
                 gaps.append((current_time, s_start))
         current_time = max(current_time, s_end)
-        
+
     if current_time < end_ts:
         gap_duration = end_ts - current_time
         if gap_duration >= 1.0:
@@ -2358,13 +2370,19 @@ async def get_recording_gaps(
     return raw_gaps
 
 async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
+    from .rtsp_budget import recovery_work
+    async with recovery_work(stream_id):
+        await _run_manual_recovery(stream_id, gap_chunks)
+
+
+async def _run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
     print(f"[recovery] [manual] Starting manual recovery task for {stream_id} ({len(gap_chunks)} chunks)...")
     from .db import get_session
     from .models import CameraStream, Camera, RecordingSegment
     from .providers import get_playback_recovery_provider
     from datetime import datetime
     import re
-    
+
     async for session in get_session():
         res = await session.execute(
             select(CameraStream)
@@ -2381,15 +2399,15 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
         async def download_chunk(chunk):
             start_ts = chunk["start_ts"]
             end_ts = chunk["end_ts"]
-            
+
             # Use the exact second-level start and end timestamps of the gap
             temp_start = start_ts
             temp_end = end_ts
-            
+
             make_val = stream.camera.make if stream.camera else None
             provider = get_playback_recovery_provider(make_val)
             recovery_url = provider.build_playback_url(stream, temp_start, temp_end)
-            
+
             dt_start = datetime.fromtimestamp(temp_start)
             day_str = dt_start.strftime("%Y-%m-%d")
             camera_id = (stream.camera.server_camera_id or stream.camera.name) if stream.camera else stream_id
@@ -2410,12 +2428,12 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                         "-of", "default=noprint_wrappers=1:nokey=1",
                         recovery_url
                     ]
-                    proc_probe = await asyncio.create_subprocess_exec(
+                    proc_probe = await spawn_media_process(
                         *cmd_probe,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                    stdout_probe, _ = await communicate_process(proc_probe, 5.0)
                     if proc_probe.returncode == 0:
                         codec_name = stdout_probe.decode().strip()
                         if codec_name.lower() in ("hevc", "h265"):
@@ -2472,23 +2490,23 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                     "-hide_banner",
                     "-loglevel", "warning",
                     "-rtsp_transport", "tcp",
-                    "-stimeout", "15000000",
+                    "-timeout", "15000000",
                     "-i", recovery_url,
                     "-t", str(temp_end - temp_start),
                 ] + codec_args + ["-movflags", "+faststart", str(output_path)]
 
                 try:
-                    proc = await asyncio.create_subprocess_exec(
+                    proc = await spawn_media_process(
                         *cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
+                    await communicate_process(proc, settings.segment_time_seconds * 2)
                     if proc.returncode == 0:
                         print(f"[recovery] [manual] [{stream_id}] Successfully recovered: {filename}")
                         parts = Path(output_path).parts
                         relative_path = "/".join(parts[-3:])
-                        
+
                         async for insert_session in get_session():
                             stmt_check = select(RecordingSegment).where(
                                 RecordingSegment.stream_id == stream_id,
@@ -2506,7 +2524,7 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                                 insert_session.add(new_seg)
                                 await insert_session.commit()
                                 print(f"[recovery] [manual] [{stream_id}] Indexed segment: {filename}")
-                            
+
                             # Consolidate timeline: delete overlapping short segments in this minute block
                             stmt_overlap = select(RecordingSegment).where(
                                 RecordingSegment.stream_id == stream_id,
@@ -2516,7 +2534,7 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                             )
                             res_overlap = await insert_session.execute(stmt_overlap)
                             overlapping_segs = list(res_overlap.scalars().all())
-                            
+
                             for ov_seg in overlapping_segs:
                                 ov_path = Path(settings.recording_dir) / ov_seg.file_path
                                 try:
@@ -2528,11 +2546,11 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                                 except Exception as delete_err:
                                     print(f"[recovery] [manual] [{stream_id}] Failed to delete consolidated file: {delete_err}")
                                 await insert_session.delete(ov_seg)
-                            
+
                             if overlapping_segs:
                                 await insert_session.commit()
                                 print(f"[recovery] [manual] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
-                            
+
                             # Try to merge any multiple files in this minute block
                             from .schedulers import merge_minute_segments
                             minute_start = float(int(temp_start // 60) * 60)
@@ -2617,7 +2635,7 @@ async def playback_summary(
             }
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-            
+
     # Fallback to old behavior if date is not provided
     from sqlalchemy import func
     res = await session.execute(
@@ -2731,7 +2749,7 @@ async def stream_playback(
 
     print(f"[stream] Running: {' '.join(cmd)}")
 
-    proc = await asyncio.create_subprocess_exec(
+    proc = await spawn_media_process(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL
@@ -2780,17 +2798,17 @@ async def play_playback_camera(
 async def get_edge_status(session: Annotated[AsyncSession, Depends(get_session)]):
     # Retrieve active connections and their state
     from .edge_receiver import active_connections, metrics
-    
+
     # Only fetch edge-push streams instead of loading all 932 streams
     stmt = select(CameraStream.stream_id, CameraStream.status).where(
         CameraStream.stream_source == "EDGE_PUSH"
     )
     res = await session.execute(stmt)
     rows = res.all()
-    
+
     online_streams = [r.stream_id for r in rows if r.status == StreamState.ONLINE]
     offline_streams = [r.stream_id for r in rows if r.status != StreamState.ONLINE]
-                
+
     return {
         "active_edge_connections": metrics["active_edge_connections"],
         "active_ffmpeg_relays": metrics["active_ffmpeg_relays"],
@@ -2804,23 +2822,23 @@ async def get_edge_status(session: Annotated[AsyncSession, Depends(get_session)]
 async def get_edge_connections(session: Annotated[AsyncSession, Depends(get_session)]):
     from .edge_receiver import active_connections
     from .models import EdgeConnection
-    
+
     stmt = select(EdgeConnection).order_by(EdgeConnection.connected_at.desc()).limit(100)
     res = await session.execute(stmt)
     db_conns = res.scalars().all()
-    
+
     result = []
     for conn in db_conns:
         bytes_received = conn.bytes_received
         last_frame_ts = conn.last_frame_ts
         status = conn.status
-        
+
         if conn.status == "CONNECTED" and conn.camera_id in active_connections:
             mem_conn = active_connections[conn.camera_id]
             if mem_conn.get("connection_db_id") == conn.id:
                 bytes_received = mem_conn["bytes_received"]
                 last_frame_ts = mem_conn["last_frame_ts"]
-        
+
         result.append({
             "id": str(conn.id),
             "camera_id": conn.camera_id,
@@ -2831,24 +2849,24 @@ async def get_edge_connections(session: Annotated[AsyncSession, Depends(get_sess
             "status": status,
             "client_ip": conn.client_ip
         })
-        
+
     return result
 
 
 @app.get("/api/system/validation-status")
 async def get_validation_status(session: Annotated[AsyncSession, Depends(get_session)]):
     from sqlalchemy import func
-    
+
     # Synced cameras count
     synced_stmt = select(func.count(Camera.id)).where(Camera.synced_from_api == True)
     synced_res = await session.execute(synced_stmt)
     synced_cameras = synced_res.scalar() or 0
-    
+
     # Active cameras count
     active_stmt = select(func.count(Camera.id)).where(Camera.active == True)
     active_res = await session.execute(active_stmt)
     active_cameras = active_res.scalar() or 0
-    
+
     # RTSP Pull count
     rtsp_stmt = select(func.count(CameraStream.id)).where(CameraStream.stream_source == "RTSP_PULL")
     rtsp_res = await session.execute(rtsp_stmt)
@@ -2872,7 +2890,7 @@ async def get_validation_status(session: Annotated[AsyncSession, Depends(get_ses
     # Rejection metrics from Redis/Memory
     rejected_edge_connections = await RedisManager.get_counter("rejected_edge_connections")
     rejected_uploads = await RedisManager.get_counter("rejected_uploads")
-    
+
     return {
         "strict_validation": settings.strict_camera_validation,
         "synced_cameras": synced_cameras,
@@ -2946,7 +2964,7 @@ async def get_unregistered_edge_cameras(session: Annotated[AsyncSession, Depends
         unreg_info = unregistered_attempts.get(cam_id, {})
 
         client_ip = mem.get("client_ip") or unreg_info.get("client_ip") or (latest.client_ip if latest else None)
-        
+
         last_seen = None
         if mem.get("last_frame_ts"):
             last_seen = mem.get("last_frame_ts").isoformat()
@@ -2956,7 +2974,7 @@ async def get_unregistered_edge_cameras(session: Annotated[AsyncSession, Depends
             last_seen = latest.last_frame_ts.isoformat()
 
         bytes_received = mem.get("bytes_received") or unreg_info.get("bytes_received") or (latest.bytes_received if latest else 0)
-        
+
         first_seen = None
         if unreg_info.get("first_seen"):
             first_seen = unreg_info.get("first_seen").isoformat()
@@ -3247,7 +3265,7 @@ async def update_settings(
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
     await RedisManager.set_setting_use_upstream(payload.use_upstream_cameras)
-    
+
     if not payload.use_upstream_cameras:
         # Delete all synced cameras from DB and MediaMTX
         res = await session.execute(
@@ -3273,7 +3291,7 @@ async def update_settings(
             await sync_cameras(session)
         except Exception as e:
             print(f"[main] Failed to sync upstream cameras after enabling setting: {e}")
-            
+
     return {"status": "ok", "use_upstream_cameras": payload.use_upstream_cameras}
 
 
@@ -3374,7 +3392,7 @@ async def update_camera(
     camera = stream.camera
     if camera.camera_source == "UPSTREAM" or camera.is_read_only:
         raise HTTPException(status_code=400, detail="Cannot modify read-only upstream cameras")
-    
+
     # Update camera parent fields
     camera.name = payload.name
     was_active = camera.active
@@ -3511,7 +3529,7 @@ async def playback_manifestdata(
 
     hour_start = dt.replace(minute=0, second=0, microsecond=0)
     hour_end = dt.replace(minute=59, second=59, microsecond=999999)
-    
+
     stmt = (
         select(RecordingSegment)
         .where(RecordingSegment.stream_id == stream.stream_id)
@@ -3648,4 +3666,3 @@ async def playback_download(
         end_time=str(end_dt.timestamp()),
         session=session
     )
-

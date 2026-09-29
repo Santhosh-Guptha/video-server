@@ -40,6 +40,9 @@ class WebRTCService:
         db_session
     ) -> tuple[str, str]:
         """Proxies WHEP SDP offer to passive MediaMTX and returns (SDP answer, session ID)."""
+        from ..rtsp_budget import rtsp_budget
+        if stream_id in rtsp_budget.blocked:
+            raise HTTPException(status_code=429, detail='Camera RTSP capacity is full; existing streams keep their connections', headers={'Retry-After': '10'})
         client = await cls.get_http_client()
         source_stream_id = stream_id
         media_stream_id, transcoded = await cls._select_browser_compatible_path(

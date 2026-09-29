@@ -16,7 +16,7 @@ async def camera_sync_worker_loop():
                 # 1. Fetch active camera streams from DB
                 active_cams = await CameraRegistry.get_active_cameras(db_session)
                 active_cams_ids = {c.id for c in active_cams}
-                
+
                 stmt = select(CameraStream).where(CameraStream.camera_id.in_(active_cams_ids))
                 res = await db_session.execute(stmt)
                 active_streams = res.scalars().all()
@@ -47,7 +47,7 @@ async def camera_sync_worker_loop():
 
                 # Remove deactivated/deleted paths
                 for path in mediamtx_paths:
-                    if path != "all_others" and not path.endswith("_h264") and path not in active_stream_ids:
+                    if path != "all_others" and not path.startswith('_ingest_') and not path.endswith("_h264") and path not in active_stream_ids:
                         print(f"[worker] De-registering decommissioned camera path: {path}")
                         try:
                             await stream_manager._delete(f"/v3/config/paths/delete/{path}")

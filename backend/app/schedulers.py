@@ -1,4 +1,5 @@
 import asyncio
+from .rtsp_budget import spawn_media_process, communicate_process, RTSPCapacityError
 import json
 import re
 import time
@@ -27,7 +28,7 @@ async def camera_scheduler_loop():
     """
     print("[scheduler] Starting camera status watchdog loop...")
     from .stream_manager import _mtx_request
-    
+
     while True:
         try:
             # 1. Sync camera stream paths from Database to MediaMTX configuration
@@ -86,7 +87,7 @@ async def camera_scheduler_loop():
                 # Transition states based on MediaMTX stream activity
                 for stream in active_streams:
                     stream_info = active_mediamtx_paths.get(stream.stream_id)
-                    
+
                     ready_status = stream_info and stream_info.get("ready") is True
                     # A stream is considered ONLINE if its path is active and ready (publisher is streaming)
                     if ready_status:
@@ -97,35 +98,35 @@ async def camera_scheduler_loop():
                         active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
                         clients_count = len(active_readers)
                         await RedisManager.set_viewer_count(stream.stream_id, clients_count)
-                        
+
                         # Dynamic codec detection based on active MediaMTX tracks
                         tracks = stream_info.get("tracks") or []
                         if isinstance(tracks, list):
                             has_h265 = any(isinstance(t, str) and t.upper().startswith("H265") for t in tracks)
                             has_h264 = any(isinstance(t, str) and t.upper().startswith("H264") for t in tracks)
-                            
+
                             detected_codec = None
                             if has_h265:
                                 detected_codec = "H265"
                             elif has_h264:
                                 detected_codec = "H264"
-                                
+
                             if detected_codec and stream.codec != detected_codec:
                                 print(f"[scheduler] Dynamically detected {detected_codec} codec for stream {stream.stream_id} (tracks: {tracks}, was: {stream.codec})")
                                 stream.codec = detected_codec
                                 await session.commit()
-                        
+
                         # Transition to ONLINE
                         if stream.status != StreamState.ONLINE:
                             await stream_manager.set_stream_state(session, stream, StreamState.ONLINE)
-                        
+
                         # Reset pull failure tracking
                         if stream.pull_failed_since is not None:
                             stream.pull_failed_since = None
                             await session.commit()
                     else:
                         # Stream is configured but not active/streaming
-                        
+
                         # Run watchdog recovery loops for AUTO mode
                         if stream.stream_mode == "AUTO":
                             # Push heartbeat watchdog moved to camera_watchdog.edge_push_watchdog_loop()
@@ -146,7 +147,7 @@ async def camera_scheduler_loop():
                             now = datetime.utcnow()
                             updated_at_naive = stream.updated_at.replace(tzinfo=None) if stream.updated_at else now
                             elapsed = (now - updated_at_naive).total_seconds()
-                            
+
                             if elapsed >= 60:
                                 # Determine if it's on-demand
                                 is_on_demand = True
@@ -156,7 +157,7 @@ async def camera_scheduler_loop():
                                     last_viewed_naive = stream.last_viewed.replace(tzinfo=None)
                                     if (now - last_viewed_naive).total_seconds() < 900:
                                         is_on_demand = False
-                                
+
                                 # Get readers count if stream_info exists
                                 readers_count = 0
                                 if stream_info:
@@ -164,7 +165,7 @@ async def camera_scheduler_loop():
                                     # Filter out internal HLS muxer
                                     active_readers = [r for r in readers if isinstance(r, dict) and r.get("type") != "hlsMuxer"] if isinstance(readers, list) else []
                                     readers_count = len(active_readers)
-                                
+
                                 # We only restart if someone is actively trying to watch it and it is stuck
                                 if readers_count > 0:
                                     print(f"[scheduler] Stream {stream.stream_id} is stuck connecting (elapsed: {elapsed:.1f}s, readers: {readers_count}). Triggering path restart.")
@@ -174,7 +175,7 @@ async def camera_scheduler_loop():
                 for path_name in mediamtx_paths:
                     if path_name != "all_others" and path_name not in active_stream_ids:
                         # Skip transcoder helper paths
-                        if path_name.endswith("_h264"):
+                        if path_name.startswith('_ingest_') or path_name.endswith("_h264"):
                             continue
                         print(f"[scheduler] Decommissioning inactive path: {path_name}")
                         try:
@@ -209,12 +210,12 @@ async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) 
     ]
     async with semaphore:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await spawn_media_process(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
+            stdout, _ = await communicate_process(proc, 3.0)
             if proc.returncode == 0:
                 data = json.loads(stdout.decode())
                 duration_str = data.get("format", {}).get("duration")
@@ -227,10 +228,10 @@ async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) 
 async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -> list[tuple[float, float]]:
     import re
     from pathlib import Path
-    
+
     stream_dir = Path(settings.recording_dir) / stream_id
     segments_to_check = []
-    
+
     if stream_dir.exists():
         for mp4 in stream_dir.rglob("*.mp4"):
             name = mp4.name
@@ -302,7 +303,7 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
 
     # Query file durations. For files >= 2MB, assume full segment duration to optimize speed.
     semaphore = asyncio.Semaphore(15)
-    
+
     async def get_segment_duration(seg):
         # If the filename already encodes both start and end, use that directly
         if seg.get("has_end") and "end_ts" in seg:
@@ -312,7 +313,7 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
 
     tasks = [get_segment_duration(seg) for seg in segments_to_check]
     results = await asyncio.gather(*tasks)
-    
+
     # Merge overlapping or contiguous intervals to find the true timeline coverage
     results.sort(key=lambda x: x[0])
     merged_segments = []
@@ -337,14 +338,14 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
     # Detect gaps between files (threshold set to 1.0s to capture all short segments)
     gaps = []
     current_time = start_ts
-    
+
     for s_start, s_end in active_segs:
         if s_start > current_time:
             gap_duration = s_start - current_time
             if gap_duration >= 1.0:
                 gaps.append((current_time, s_start))
         current_time = max(current_time, s_end)
-        
+
     if current_time < end_ts:
         gap_duration = end_ts - current_time
         if gap_duration >= 1.0:
@@ -354,14 +355,14 @@ async def scan_filesystem_gaps(stream_id: str, start_ts: float, end_ts: float) -
 
 async def merge_minute_segments(session, stream_id: str, minute_start: float):
     """
-    Consolidates and merges multiple video files for the same stream that fall within 
+    Consolidates and merges multiple video files for the same stream that fall within
     the same 1-minute block [minute_start, minute_start + 60.0].
     """
     import tempfile
     import os
     from .models import RecordingSegment
     from .config import settings
-    
+
     # Query segments in this minute block
     stmt = (
         select(RecordingSegment)
@@ -372,10 +373,10 @@ async def merge_minute_segments(session, stream_id: str, minute_start: float):
     )
     res = await session.execute(stmt)
     segs = list(res.scalars().all())
-    
+
     if len(segs) < 2:
         return
-        
+
     # Verify physical files
     recording_dir = Path(settings.recording_dir)
     valid_segs = []
@@ -384,13 +385,13 @@ async def merge_minute_segments(session, stream_id: str, minute_start: float):
         abs_p = p if p.is_absolute() else recording_dir / p
         if abs_p.exists() and abs_p.stat().st_size > 0:
             valid_segs.append((seg, abs_p))
-            
+
     if len(valid_segs) < 2:
         return
 
     # Sort segments by start_ts (asc), and duration (desc) in case of same start_ts
     valid_segs.sort(key=lambda x: (x[0].start_ts, -(x[0].end_ts - x[0].start_ts)))
-    
+
     # Prune redundant segments (completely contained inside other segments)
     non_redundant = []
     for seg, path in valid_segs:
@@ -411,25 +412,25 @@ async def merge_minute_segments(session, stream_id: str, minute_start: float):
                 print(f"[recovery] [merge] Failed to delete redundant file: {e}")
         else:
             non_redundant.append((seg, path))
-            
+
     await session.commit()
-    
+
     if len(non_redundant) < 2:
         return
-        
+
     # Prepare merge parameters
     first_seg, first_path = non_redundant[0]
     last_seg, last_path = non_redundant[-1]
-    
+
     dt_start = datetime.fromtimestamp(first_seg.start_ts)
     day_str = dt_start.strftime("%Y-%m-%d")
     dest_dir = recording_dir / stream_id / day_str
     dest_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Standardized recovered filename format
     filename = f"{dt_start.strftime('%Y%m%d_%H%M%S')}_{datetime.fromtimestamp(last_seg.end_ts).strftime('%H%M%S')}_recovered.mp4"
     output_path = dest_dir / filename
-    
+
     # Create temp concat list file
     fd, temp_list_path = tempfile.mkstemp(suffix=".txt", text=True)
     try:
@@ -437,7 +438,7 @@ async def merge_minute_segments(session, stream_id: str, minute_start: float):
             for seg, abs_p in non_redundant:
                 escaped_path = str(abs_p).replace("'", "'\\''")
                 f.write(f"file '{escaped_path}'\n")
-                
+
         # Run FFmpeg concat demuxer (-c copy)
         cmd = [
             settings.ffmpeg_path,
@@ -449,26 +450,26 @@ async def merge_minute_segments(session, stream_id: str, minute_start: float):
             "-movflags", "+faststart",
             str(output_path)
         ]
-        
-        proc = await asyncio.create_subprocess_exec(
+
+        proc = await spawn_media_process(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
-        
+        stdout, stderr = await communicate_process(proc, 30.0)
+
         if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
             print(f"[recovery] [merge] Successfully merged {len(non_redundant)} segments into {filename}")
-            
+
             # Remove old database records
             for seg, _ in non_redundant:
                 await session.delete(seg)
             await session.commit()
-            
+
             # Add new merged segment
             parts = Path(output_path).parts
             relative_path = "/".join(parts[-3:])
-            
+
             new_seg = RecordingSegment(
                 stream_id=stream_id,
                 file_path=relative_path,
@@ -477,7 +478,7 @@ async def merge_minute_segments(session, stream_id: str, minute_start: float):
             )
             session.add(new_seg)
             await session.commit()
-            
+
             # Delete old files from disk
             for _, abs_p in non_redundant:
                 try:
@@ -504,7 +505,7 @@ async def camera_gap_recovery_loop():
     Downloads the missing chunks from the camera's playback RTSP URL concurrently.
     """
     print("[recovery] Starting recording gap recovery loop...")
-    semaphore = asyncio.Semaphore(2)  # Reserve CPU and camera connections for live viewers.
+    from .rtsp_budget import recovery_work
     recovery_probe_semaphore = asyncio.Semaphore(2)
 
     # Short delay on startup to allow backend initialization
@@ -557,7 +558,7 @@ async def camera_gap_recovery_loop():
                             attempts = attempted_gaps.get(gap_key, 0)
                             if attempts < 3:
                                 attempted_gaps[gap_key] = attempts + 1
-                                
+
                                 # Build recovery URL using vendor framework
                                 make_val = stream.camera.make if stream.camera else None
                                 provider = get_playback_recovery_provider(make_val)
@@ -571,7 +572,7 @@ async def camera_gap_recovery_loop():
                                     "end_ts": chunk_end,
                                     "codec": stream.codec
                                 })
-                            
+
                             curr = chunk_end
 
             if not gaps_to_recover:
@@ -649,17 +650,19 @@ async def camera_gap_recovery_loop():
                             "-of", "default=noprint_wrappers=1:nokey=1",
                             recovery_url
                         ]
-                        proc_probe = await asyncio.create_subprocess_exec(
+                        proc_probe = await spawn_media_process(
                             *cmd_probe,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE
                         )
-                        stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                        stdout_probe, _ = await communicate_process(proc_probe, 5.0)
                         if proc_probe.returncode == 0:
                             codec_name = stdout_probe.decode().strip()
                             if codec_name.lower() in ("hevc", "h265"):
                                 is_hevc = True
                                 print(f"[recovery] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
+                    except RTSPCapacityError:
+                        raise
                     except Exception as probe_err:
                         print(f"[recovery] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
 
@@ -672,18 +675,18 @@ async def camera_gap_recovery_loop():
                         "-hide_banner",
                         "-loglevel", "warning",
                         "-rtsp_transport", "tcp",
-                        "-stimeout", "15000000",
+                        "-timeout", "15000000",
                         "-i", recovery_url,
                         "-t", str(temp_end - temp_start),
                     ] + codec_args + ["-movflags", "+faststart", str(output_path)]
 
                     try:
-                        proc = await asyncio.create_subprocess_exec(
+                        proc = await spawn_media_process(
                             *cmd,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE
                         )
-                        await asyncio.wait_for(proc.communicate(), timeout=settings.segment_time_seconds * 2)
+                        await communicate_process(proc, settings.segment_time_seconds * 2)
                         if proc.returncode == 0:
                             print(f"[recovery] [{stream_id}] Successfully recovered gap segment: {filename}")
                             try:
@@ -706,7 +709,7 @@ async def camera_gap_recovery_loop():
                                         insert_session.add(new_seg)
                                         await insert_session.commit()
                                         print(f"[recovery] [{stream_id}] Indexed recovered segment immediately: {filename}")
-                                    
+
                                     # Consolidate timeline: delete overlapping short segments in this minute block
                                     stmt_overlap = select(RecordingSegment).where(
                                         RecordingSegment.stream_id == stream_id,
@@ -716,7 +719,7 @@ async def camera_gap_recovery_loop():
                                     )
                                     res_overlap = await insert_session.execute(stmt_overlap)
                                     overlapping_segs = list(res_overlap.scalars().all())
-                                    
+
                                     for ov_seg in overlapping_segs:
                                         ov_path = Path(settings.recording_dir) / ov_seg.file_path
                                         try:
@@ -728,7 +731,7 @@ async def camera_gap_recovery_loop():
                                         except Exception as delete_err:
                                             print(f"[recovery] [{stream_id}] Failed to delete consolidated file: {delete_err}")
                                         await insert_session.delete(ov_seg)
-                                    
+
                                     if overlapping_segs:
                                         await insert_session.commit()
                                         print(f"[recovery] [{stream_id}] Consolidated timeline: removed {len(overlapping_segs)} overlapping database segments")
@@ -751,14 +754,22 @@ async def camera_gap_recovery_loop():
                             pass
                         if output_path.exists():
                             output_path.unlink()
+                    except RTSPCapacityError:
+                        raise
                     except Exception as e:
                         print(f"[recovery] [{stream_id}] Error running FFmpeg for recovery: {e}")
                         if output_path.exists():
                             output_path.unlink()
 
             async def download_task(task):
-                async with semaphore:
-                    await _download_task_impl(task)
+                async with recovery_work(task['stream_id']):
+                    try:
+                        await _download_task_impl(task)
+                    except RTSPCapacityError:
+                        key = (task['stream_id'], int(task['start_ts']))
+                        attempted_gaps[key] = max(0, attempted_gaps.get(key, 1) - 1)
+                        # Capacity deferral is not a failed camera playback attempt.
+                        return
 
             # Group tasks by stream_id to process them sequentially per camera (to prevent overloading the camera RTSP playback sessions)
             tasks_by_stream = {}
@@ -820,7 +831,7 @@ async def camera_gap_recovery_loop():
                     for mp4_file in sorted(stream_rec_dir.glob("*.mp4")):
                         parts = mp4_file.parts
                         relative_path = "/".join(parts[-3:])
-                        
+
                         if relative_path in indexed_paths:
                             continue
 
@@ -896,15 +907,15 @@ async def check_and_evict_low_disk_space(session):
         recording_dir = Path(settings.recording_dir)
         if not recording_dir.exists():
             return
-        
+
         usage = shutil.disk_usage(recording_dir)
         free_gb = usage.free / (1024 ** 3)
-        
+
         if free_gb >= settings.low_disk_space_threshold_gb:
             return
-            
+
         print(f"[cleanup] DISK SPACE CRITICALLY LOW: {free_gb:.2f} GB free (Threshold: {settings.low_disk_space_threshold_gb} GB). Starting emergency eviction...")
-        
+
         # Keep deleting until we hit target_free_space_gb
         while free_gb < settings.target_free_space_gb:
             # Fetch the 50 oldest segments across ALL cameras
@@ -914,11 +925,11 @@ async def check_and_evict_low_disk_space(session):
                 .limit(50)
             )
             old_segments = list(res.scalars().all())
-            
+
             if not old_segments:
                 print("[cleanup] Emergency eviction: No more segments found to delete, stopping.")
                 break
-                
+
             deleted_count = 0
             for seg in old_segments:
                 file_path = Path(seg.file_path)
@@ -930,20 +941,20 @@ async def check_and_evict_low_disk_space(session):
                     deleted_count += 1
                 except Exception:
                     pass
-                
+
                 await session.delete(seg)
-                
+
             await session.commit()
             print(f"[cleanup] Emergency eviction deleted {deleted_count} oldest segments.")
-            
+
             # Re-check space
             usage = shutil.disk_usage(recording_dir)
             free_gb = usage.free / (1024 ** 3)
             print(f"[cleanup] Free space now: {free_gb:.2f} GB (Target: {settings.target_free_space_gb} GB)")
-            
+
             # Short sleep to prevent CPU spin
             await asyncio.sleep(0.1)
-            
+
     except Exception as e:
         print(f"[cleanup] Error during emergency disk eviction: {e}")
 
@@ -989,7 +1000,7 @@ async def camera_archive_cleanup_loop():
                     archive_days = min(archive_days, retention_cap) if archive_days > 0 else retention_cap
 
                     cutoff_ts = time.time() - (archive_days * 24 * 3600)
-                    
+
                     # Query segments older than the cutoff
                     seg_res = await session.execute(
                         select(RecordingSegment)
@@ -1000,7 +1011,7 @@ async def camera_archive_cleanup_loop():
 
                     if old_segments:
                         print(f"[cleanup] Found {len(old_segments)} old segments to clean up for stream '{stream.stream_id}' (Keep duration: {archive_days} days)")
-                        
+
                         deleted_count = 0
                         for seg in old_segments:
                             # 1. Remove physical file
@@ -1049,7 +1060,7 @@ async def camera_archive_cleanup_loop():
                                                 if item.is_dir() and not is_dir_empty_recursive(item):
                                                     return False
                                             return True
-                                        
+
                                         if is_dir_empty_recursive(stream_dir):
                                             import shutil
                                             shutil.rmtree(stream_dir)
@@ -1105,10 +1116,10 @@ async def sd_card_on_demand_cleanup_loop():
     import os
     import time
     from pathlib import Path
-    
+
     # Wait for startup
     await asyncio.sleep(60.0)
-    
+
     while True:
         try:
             temp_dir = Path("./data/on_demand_temp")
@@ -1127,7 +1138,7 @@ async def sd_card_on_demand_cleanup_loop():
                             print(f"[cleanup] Error cleaning up SD card file {f}: {e}")
         except Exception as e:
             print(f"[cleanup] Error in SD Card on-demand cleanup: {e}")
-            
+
         await asyncio.sleep(300.0) # Run every 5 minutes
 
 
@@ -1141,9 +1152,9 @@ async def metrics_history_cleanup_loop():
     from sqlalchemy import delete
     from .models import StreamMetricHistory
     from .db import get_session
-    
+
     await asyncio.sleep(30.0)
-    
+
     while True:
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=7)
@@ -1155,6 +1166,5 @@ async def metrics_history_cleanup_loop():
                     print(f"[cleanup] Pruned {res.rowcount} stream metric history records older than 7 days.")
         except Exception as e:
             print(f"[cleanup] Error in stream metrics history cleanup: {e}")
-            
-        await asyncio.sleep(3600.0) # Run hourly
 
+        await asyncio.sleep(3600.0) # Run hourly

@@ -13,6 +13,7 @@ from sqlalchemy import select, delete, text, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import asyncio
+from .rtsp_budget import spawn_media_process, communicate_process, RTSPCapacityError
 import httpx
 import os
 import tempfile
@@ -198,29 +199,31 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
         print(f"[startup] Failed to read MediaMTX config file: {e}")
         return
 
-    idx = content.find("paths:")
-    if idx != -1:
-        base_content = content[:idx + 6]
-        paths_yaml = yaml.safe_dump(paths_dict, default_flow_style=False)
-        indented_paths = "\n" + "\n".join("  " + line for line in paths_yaml.splitlines())
-
+    from .rtsp_budget import rtsp_budget, shared_paths
+    async with rtsp_budget.lock:
+        # Coordinate bulk YAML reloads with dynamic path changes and probes.
+        await rtsp_budget._load()
+        paths_dict, blocked = shared_paths(paths_dict, rtsp_budget.paths, settings.rtsp_connections_per_endpoint)
+        rtsp_budget.blocked = set(blocked)
+        data = yaml.safe_load(content)
+        if data.get('paths') == paths_dict:
+            return
+        data['paths'] = paths_dict
+        temporary = config_path.with_suffix('.tmp')
         try:
-            config_path.write_text(base_content + indented_paths)
-            print(f"[startup] Successfully wrote {len(active_streams)} camera paths to {config_path}")
-
-            # Restart MediaMTX to apply changes in one go
-            if os.path.exists("/etc/systemd/system/mediamtx.service") or os.path.exists("/lib/systemd/system/mediamtx.service"):
-                print("[startup] Restarting mediamtx service to apply changes...")
-                res = subprocess.run(["systemctl", "restart", "mediamtx"], capture_output=True, text=True)
-                if res.returncode == 0:
-                    print("[startup] mediamtx service restarted successfully.")
-                else:
-                    print(f"[startup] Failed to restart mediamtx service: {res.stderr}")
-            else:
-                print("[startup] mediamtx service restart bypassed (not systemd).")
-        except Exception as e:
-            print(f"[startup] Failed to write MediaMTX config or restart service: {e}")
-
+            temporary.write_text(yaml.safe_dump(data, sort_keys=False))
+            temporary.replace(config_path)
+            rtsp_budget.paths = None
+            if os.path.exists('/etc/systemd/system/mediamtx.service') or os.path.exists('/lib/systemd/system/mediamtx.service'):
+                await asyncio.to_thread(subprocess.run, ['systemctl', 'restart', 'mediamtx'], check=True, capture_output=True)
+            print(f'[startup] Shared RTSP ingest configured; {len(blocked)} new paths held at capacity')
+        except Exception:
+            config_path.write_text(content)
+            rtsp_budget.paths = None
+            await asyncio.to_thread(subprocess.run, ["systemctl", "restart", "mediamtx"], check=False, capture_output=True)
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
 def configure_mediamtx_paths_dynamically():
     import subprocess
     import os
@@ -849,58 +852,67 @@ async def download_sd_card_stream(
     friendly_filename = f"{camera.name.replace(' ', '_')}_{start_dt.strftime('%Y%m%d_%H%M%S')}_playback.mp4"
 
     async def ffmpeg_stream_generator(cmd, temp_file_to_clean=None):
-        print(f"[sd_card] Launching streaming ffmpeg command: {' '.join(cmd)}")
+        print("[sd_card] Starting playback stream")
         # Write stderr to a temp file to avoid PIPE deadlock
         stderr_log_fd, stderr_log_path = tempfile.mkstemp(suffix="_ffmpeg_err.log")
         stderr_file = os.fdopen(stderr_log_fd, 'w')
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=stderr_file
-        )
-        bytes_sent = 0
         try:
-            while True:
-                chunk = await process.stdout.read(262144) # Read chunks of 256KB
-                if not chunk:
-                    break
-                bytes_sent += len(chunk)
-                yield chunk
-        except asyncio.CancelledError:
-            print("[sd_card] Streaming request cancelled by client browser.")
+            process = await spawn_media_process(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=stderr_file
+            )
+        except BaseException as exc:
+            stderr_file.close()
+            os.remove(stderr_log_path)
+            if temp_file_to_clean:
+                Path(temp_file_to_clean).unlink(missing_ok=True)
+            if isinstance(exc, RTSPCapacityError):
+                raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "10"}) from exc
+            raise
+        async def chunks():
+            bytes_sent = 0
             try:
-                process.kill()
-            except Exception:
-                pass
-        finally:
-            try:
-                stderr_file.close()
-            except Exception:
-                pass
-            # Log ffmpeg stderr for debugging
-            try:
-                with open(stderr_log_path, 'r') as f:
-                    stderr_text = f.read()[-2000:]
-                if bytes_sent == 0 and stderr_text:
-                    print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
-                else:
-                    print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
-            except Exception:
-                pass
-            try:
-                os.remove(stderr_log_path)
-            except Exception:
-                pass
-            try:
-                process.terminate()
-                await process.wait()
-            except Exception:
-                pass
-            if temp_file_to_clean and os.path.exists(temp_file_to_clean):
+                while True:
+                    chunk = await process.stdout.read(262144) # Read chunks of 256KB
+                    if not chunk:
+                        break
+                    bytes_sent += len(chunk)
+                    yield chunk
+            except asyncio.CancelledError:
+                print("[sd_card] Streaming request cancelled by client browser.")
                 try:
-                    os.remove(temp_file_to_clean)
+                    process.kill()
                 except Exception:
                     pass
+            finally:
+                try:
+                    stderr_file.close()
+                except Exception:
+                    pass
+                # Log ffmpeg stderr for debugging
+                try:
+                    with open(stderr_log_path, 'r') as f:
+                        stderr_text = f.read()[-2000:]
+                    if bytes_sent == 0 and stderr_text:
+                        print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
+                    else:
+                        print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
+                except Exception:
+                    pass
+                try:
+                    os.remove(stderr_log_path)
+                except Exception:
+                    pass
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+                if temp_file_to_clean and os.path.exists(temp_file_to_clean):
+                    try:
+                        os.remove(temp_file_to_clean)
+                    except Exception:
+                        pass
+        return chunks()
 
     # CASE A: Use local recordings if available
     if use_local:
@@ -916,7 +928,7 @@ async def download_sd_card_stream(
                 "pipe:1"
             ]
             return StreamingResponse(
-                ffmpeg_stream_generator(cmd),
+                await ffmpeg_stream_generator(cmd),
                 media_type="video/mp4",
                 headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
             )
@@ -940,7 +952,7 @@ async def download_sd_card_stream(
                     "pipe:1"
                 ]
                 return StreamingResponse(
-                    ffmpeg_stream_generator(cmd, temp_txt_path),
+                    await ffmpeg_stream_generator(cmd, temp_txt_path),
                     media_type="video/mp4",
                     headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
                 )
@@ -956,7 +968,7 @@ async def download_sd_card_stream(
         try:
             provider = get_playback_recovery_provider(camera.make)
             rtsp_replay_url = provider.build_playback_url(stream, start_ts, end_ts)
-            print(f"[sd_card] Streaming from SD Card RTSP URL: {rtsp_replay_url}")
+            print("[sd_card] Camera playback requested")
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -974,7 +986,7 @@ async def download_sd_card_stream(
             "pipe:1"
         ]
         return StreamingResponse(
-            ffmpeg_stream_generator(cmd),
+            await ffmpeg_stream_generator(cmd),
             media_type="video/mp4",
             headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
         )
@@ -1421,7 +1433,7 @@ async def test_camera_connection(req: TestConnectionRequest):
         ffprobe_path,
         "-v", "error",
         "-rtsp_transport", "tcp",
-        "-stimeout", "5000000",
+        "-timeout", "5000000",
         "-select_streams", "v:0",
         "-show_entries", "stream=codec_name",
         "-of", "default=noprint_wrappers=1:nokey=1",
@@ -1429,12 +1441,12 @@ async def test_camera_connection(req: TestConnectionRequest):
     ]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await spawn_media_process(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=6.0)
+        stdout, stderr = await communicate_process(proc, 6.0)
 
         if proc.returncode != 0:
             err_msg = stderr.decode().strip() or f"Connection test failed (exit code {proc.returncode})"
@@ -2185,12 +2197,12 @@ async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) 
     ]
     async with semaphore:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await spawn_media_process(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
+            stdout, _ = await communicate_process(proc, 3.0)
             if proc.returncode == 0:
                 data = json.loads(stdout.decode())
                 duration_str = data.get("format", {}).get("duration")
@@ -2358,6 +2370,12 @@ async def get_recording_gaps(
     return raw_gaps
 
 async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
+    from .rtsp_budget import recovery_work
+    async with recovery_work(stream_id):
+        await _run_manual_recovery(stream_id, gap_chunks)
+
+
+async def _run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
     print(f"[recovery] [manual] Starting manual recovery task for {stream_id} ({len(gap_chunks)} chunks)...")
     from .db import get_session
     from .models import CameraStream, Camera, RecordingSegment
@@ -2410,12 +2428,12 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                         "-of", "default=noprint_wrappers=1:nokey=1",
                         recovery_url
                     ]
-                    proc_probe = await asyncio.create_subprocess_exec(
+                    proc_probe = await spawn_media_process(
                         *cmd_probe,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                    stdout_probe, _ = await communicate_process(proc_probe, 5.0)
                     if proc_probe.returncode == 0:
                         codec_name = stdout_probe.decode().strip()
                         if codec_name.lower() in ("hevc", "h265"):
@@ -2472,18 +2490,18 @@ async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
                     "-hide_banner",
                     "-loglevel", "warning",
                     "-rtsp_transport", "tcp",
-                    "-stimeout", "15000000",
+                    "-timeout", "15000000",
                     "-i", recovery_url,
                     "-t", str(temp_end - temp_start),
                 ] + codec_args + ["-movflags", "+faststart", str(output_path)]
 
                 try:
-                    proc = await asyncio.create_subprocess_exec(
+                    proc = await spawn_media_process(
                         *cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    await asyncio.wait_for(proc.wait(), timeout=settings.segment_time_seconds * 2)
+                    await communicate_process(proc, settings.segment_time_seconds * 2)
                     if proc.returncode == 0:
                         print(f"[recovery] [manual] [{stream_id}] Successfully recovered: {filename}")
                         parts = Path(output_path).parts
@@ -2731,7 +2749,7 @@ async def stream_playback(
 
     print(f"[stream] Running: {' '.join(cmd)}")
 
-    proc = await asyncio.create_subprocess_exec(
+    proc = await spawn_media_process(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL

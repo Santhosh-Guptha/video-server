@@ -43,3 +43,5 @@ On a fresh install, a TURN password is generated and stored locally. Existing in
 Service and HTTP checks verify the application, not every camera. Upstream addresses must be reachable and credentials valid. HD quality requires a working HD source; compatible device decoding and sufficient bandwidth are also required. A new machine may need VPN/routes to reach private cameras. No installer can automatically recover inaccessible remote cameras or create genuine HD detail from SD sources.
 
 Fresh installation completed on a newly registered Ubuntu 24.04 WSL distribution on 25 September 2026. Service and HTTP checks passed. Windows Administrator port-forwarding and logon-task registration still require an elevated PowerShell run. See the streaming configuration document for camera-source limitations.
+
+Shared RTSP ingest and editable per-endpoint capacity controls are included in the installer. Existing camera sources are preserved when above the default six-slot budget; new sources wait for capacity. See `STREAMING-CONFIGURATION.md` for scope, migration and configuration.

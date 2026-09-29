@@ -41,7 +41,7 @@ from .stream_manager import stream_manager, double_escape_rtsp_url
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool:
+async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool | None:
     """
     Checks if the RTSP port is open on the host.
     Replaces heavy ffprobe process with a lightweight TCP socket probe
@@ -82,21 +82,21 @@ async def _ffprobe_rtsp(rtsp_url: str, timeout_seconds: int) -> bool:
     if not host:
         return False
 
-    # Perform lightweight TCP socket check
+    # Capacity denial is not evidence that a camera is offline.
+    from .rtsp_budget import rtsp_budget, RTSPCapacityError
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
-            timeout=float(timeout_seconds)
-        )
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-        return True
+        async with rtsp_budget.connection([rtsp_url]):
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=float(timeout_seconds))
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+    except (RTSPCapacityError, httpx.HTTPError):
+        return None
     except Exception:
         return False
-
 
 async def _patch_mediamtx(path_name: str, payload: dict) -> bool:
     """
@@ -260,6 +260,7 @@ async def camera_health_watchdog_loop():
                         if _is_valid_rtsp(rtsp_url):
                             print(f"[watchdog] {path_name}: checking primary stream...")
                             reachable = await _ffprobe_rtsp(rtsp_url, CAMERA_PING_TIMEOUT_SECONDS)
+                            if reachable is None: return
 
                         if reachable:
                             print(f"[watchdog] {path_name}: primary RTSP reachable → CONNECTING")
@@ -289,6 +290,7 @@ async def camera_health_watchdog_loop():
                         if fallback_stream and _is_valid_rtsp(fallback_rtsp):
                             print(f"[watchdog] {path_name}: primary unreachable, trying fallback profile...")
                             fallback_reachable = await _ffprobe_rtsp(fallback_rtsp, CAMERA_PING_TIMEOUT_SECONDS)
+                            if fallback_reachable is None: return
 
                         if fallback_reachable:
                             print(f"[watchdog] {path_name}: fallback RTSP reachable → CONNECTING fallback")

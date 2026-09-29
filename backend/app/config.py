@@ -56,6 +56,7 @@ class Settings(BaseSettings):
 
     webrtc_stall_timeout_seconds: int = 8
     webrtc_jitter_buffer_ms: int = 100
+    rtsp_connections_per_endpoint: int = 6
 
     max_active_transcoders: int = defaults.get("max_active_transcoders", 10)
     transcoder_vcodec: str = defaults.get("transcoder_vcodec", "libx264")

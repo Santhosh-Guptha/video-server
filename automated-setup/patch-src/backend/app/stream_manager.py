@@ -23,6 +23,9 @@ async def get_mtx_client() -> httpx.AsyncClient:
     return _mtx_client
 
 async def _mtx_request(method: str, url: str, **kwargs):
+    if method in ('POST', 'PATCH', 'DELETE') and '/v3/config/paths/' in url:
+        from .rtsp_budget import rtsp_budget
+        return await rtsp_budget.mutate(method, url, **kwargs)
     client = await get_mtx_client()
     try:
         if method == "GET":

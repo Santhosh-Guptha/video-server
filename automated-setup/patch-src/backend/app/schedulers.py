@@ -1,4 +1,5 @@
 import asyncio
+from .rtsp_budget import spawn_media_process, communicate_process, RTSPCapacityError
 import json
 import re
 import time
@@ -174,7 +175,7 @@ async def camera_scheduler_loop():
                 for path_name in mediamtx_paths:
                     if path_name != "all_others" and path_name not in active_stream_ids:
                         # Skip transcoder helper paths
-                        if path_name.endswith("_h264"):
+                        if path_name.startswith('_ingest_') or path_name.endswith("_h264"):
                             continue
                         print(f"[scheduler] Decommissioning inactive path: {path_name}")
                         try:
@@ -209,12 +210,12 @@ async def get_file_duration_async(file_path: str, semaphore: asyncio.Semaphore) 
     ]
     async with semaphore:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await spawn_media_process(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
+            stdout, _ = await communicate_process(proc, 3.0)
             if proc.returncode == 0:
                 data = json.loads(stdout.decode())
                 duration_str = data.get("format", {}).get("duration")
@@ -450,12 +451,12 @@ async def merge_minute_segments(session, stream_id: str, minute_start: float):
             str(output_path)
         ]
 
-        proc = await asyncio.create_subprocess_exec(
+        proc = await spawn_media_process(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+        stdout, stderr = await communicate_process(proc, 30.0)
 
         if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
             print(f"[recovery] [merge] Successfully merged {len(non_redundant)} segments into {filename}")
@@ -504,7 +505,7 @@ async def camera_gap_recovery_loop():
     Downloads the missing chunks from the camera's playback RTSP URL concurrently.
     """
     print("[recovery] Starting recording gap recovery loop...")
-    semaphore = asyncio.Semaphore(2)  # Reserve CPU and camera connections for live viewers.
+    from .rtsp_budget import recovery_work
     recovery_probe_semaphore = asyncio.Semaphore(2)
 
     # Short delay on startup to allow backend initialization
@@ -649,17 +650,19 @@ async def camera_gap_recovery_loop():
                             "-of", "default=noprint_wrappers=1:nokey=1",
                             recovery_url
                         ]
-                        proc_probe = await asyncio.create_subprocess_exec(
+                        proc_probe = await spawn_media_process(
                             *cmd_probe,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE
                         )
-                        stdout_probe, _ = await asyncio.wait_for(proc_probe.communicate(), timeout=5.0)
+                        stdout_probe, _ = await communicate_process(proc_probe, 5.0)
                         if proc_probe.returncode == 0:
                             codec_name = stdout_probe.decode().strip()
                             if codec_name.lower() in ("hevc", "h265"):
                                 is_hevc = True
                                 print(f"[recovery] [{stream_id}] Dynamically probed HEVC codec fallback for recovery URL: {filename}")
+                    except RTSPCapacityError:
+                        raise
                     except Exception as probe_err:
                         print(f"[recovery] [{stream_id}] Failed to dynamically probe codec fallback: {probe_err}")
 
@@ -672,18 +675,18 @@ async def camera_gap_recovery_loop():
                         "-hide_banner",
                         "-loglevel", "warning",
                         "-rtsp_transport", "tcp",
-                        "-stimeout", "15000000",
+                        "-timeout", "15000000",
                         "-i", recovery_url,
                         "-t", str(temp_end - temp_start),
                     ] + codec_args + ["-movflags", "+faststart", str(output_path)]
 
                     try:
-                        proc = await asyncio.create_subprocess_exec(
+                        proc = await spawn_media_process(
                             *cmd,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE
                         )
-                        await asyncio.wait_for(proc.communicate(), timeout=settings.segment_time_seconds * 2)
+                        await communicate_process(proc, settings.segment_time_seconds * 2)
                         if proc.returncode == 0:
                             print(f"[recovery] [{stream_id}] Successfully recovered gap segment: {filename}")
                             try:
@@ -751,14 +754,22 @@ async def camera_gap_recovery_loop():
                             pass
                         if output_path.exists():
                             output_path.unlink()
+                    except RTSPCapacityError:
+                        raise
                     except Exception as e:
                         print(f"[recovery] [{stream_id}] Error running FFmpeg for recovery: {e}")
                         if output_path.exists():
                             output_path.unlink()
 
             async def download_task(task):
-                async with semaphore:
-                    await _download_task_impl(task)
+                async with recovery_work(task['stream_id']):
+                    try:
+                        await _download_task_impl(task)
+                    except RTSPCapacityError:
+                        key = (task['stream_id'], int(task['start_ts']))
+                        attempted_gaps[key] = max(0, attempted_gaps.get(key, 1) - 1)
+                        # Capacity deferral is not a failed camera playback attempt.
+                        return
 
             # Group tasks by stream_id to process them sequentially per camera (to prevent overloading the camera RTSP playback sessions)
             tasks_by_stream = {}
