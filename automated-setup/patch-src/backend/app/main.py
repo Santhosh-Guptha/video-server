@@ -209,21 +209,30 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
         if data.get('paths') == paths_dict:
             return
         data['paths'] = paths_dict
-        temporary = config_path.with_suffix('.tmp')
         try:
-            temporary.write_text(yaml.safe_dump(data, sort_keys=False))
-            temporary.replace(config_path)
+            # MediaMTX watches the existing file inode. Replacing it can stop
+            # the service; writing in place triggers its built-in hot reload.
+            config_path.write_text(yaml.safe_dump(data, sort_keys=False))
             rtsp_budget.paths = None
-            if os.path.exists('/etc/systemd/system/mediamtx.service') or os.path.exists('/lib/systemd/system/mediamtx.service'):
-                await asyncio.to_thread(subprocess.run, ['systemctl', 'restart', 'mediamtx'], check=True, capture_output=True)
-            print(f'[startup] Shared RTSP ingest configured; {len(blocked)} new paths held at capacity')
-        except Exception:
+            for attempt in range(30):
+                await asyncio.sleep(1)
+                rtsp_budget.paths = None
+                try:
+                    await rtsp_budget._load()
+                    if all(name in rtsp_budget.paths and
+                           rtsp_budget.paths[name].get('source') == payload.get('source')
+                           for name, payload in paths_dict.items()):
+                        print(f'[startup] Shared RTSP ingest configured; {len(blocked)} new paths held at capacity')
+                        break
+                except httpx.HTTPError:
+                    pass
+            else:
+                raise RuntimeError('MediaMTX did not acknowledge shared ingest configuration')
+        except BaseException:
             config_path.write_text(content)
             rtsp_budget.paths = None
-            await asyncio.to_thread(subprocess.run, ["systemctl", "restart", "mediamtx"], check=False, capture_output=True)
             raise
-        finally:
-            temporary.unlink(missing_ok=True)
+
 def configure_mediamtx_paths_dynamically():
     import subprocess
     import os
