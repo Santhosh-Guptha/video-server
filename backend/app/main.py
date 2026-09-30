@@ -370,6 +370,7 @@ async def startup():
                 print(f"[startup] Error performing dynamic camera sync: {e}")
 
     asyncio.create_task(initial_sync())
+    asyncio.create_task(upstream_sync_loop())
 
     # Start periodic watchdog loops
     asyncio.create_task(recording_recovery_loop())
