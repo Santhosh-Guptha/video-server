@@ -79,9 +79,11 @@ if not root.exists():
     if mode in ("check", "network"): raise RuntimeError("Video server is not installed")
     as_user("git", "clone", "--branch", "develop", "--single-branch", repo, str(root))
 elif not (root / ".git").is_dir():
-    if root.is_symlink() or any(p.is_file() or p.is_symlink() for p in root.rglob('*')):
+    remnants = list(root.rglob('*'))
+    dependency_dirs = {('backend', 'venv'), ('frontend', 'node_modules')}
+    if root.is_symlink() or any(p.is_file() and not p.is_symlink() for p in remnants) or any(p.is_symlink() and p.relative_to(root).parts[:2] not in dependency_dirs for p in remnants):
         raise RuntimeError("Installation directory contains non-Git files; preserve or move them before setup")
-    # A removed installation may leave empty recording directories behind.
+    # Preserve empty directories and dependency links left by a removed install.
     root.rename(root.with_name(root.name + ".empty-" + str(time.time_ns())))
     as_user("git", "clone", "--branch", "develop", "--single-branch", repo, str(root))
 origin = output("runuser", "-u", user, "--", "git", "-C", str(root), "remote", "get-url", "origin")

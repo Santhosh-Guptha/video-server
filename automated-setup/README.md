@@ -46,4 +46,4 @@ Fresh installation completed on a newly registered Ubuntu 24.04 WSL distribution
 
 Shared RTSP ingest and editable per-endpoint capacity controls are included in the installer. Existing camera sources are preserved when above the default six-slot budget; new sources wait for capacity. See `STREAMING-CONFIGURATION.md` for scope, migration and configuration.
 
-If a removed installation leaves only empty directories, the Windows entry point preserves that empty directory tree under a timestamped name and clones again automatically. Non-Git directories containing files are left untouched.
+If a removed installation leaves only empty directories or dependency links, the Windows entry point preserves that directory tree under a timestamped name and clones again automatically. Non-Git directories containing files are left untouched.
