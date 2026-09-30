@@ -6,6 +6,7 @@ type Values = {
   max_active_transcoders: number;
   webrtc_jitter_buffer_ms: number;
   rtsp_connections_per_endpoint: number;
+  recording_storage_limit_gb: number;
   default_retention_days: number;
 }
 type Configuration = {
@@ -74,6 +75,10 @@ export function StreamingSettings() {
           <input required type="number" style={control} min={1} max={128} step={1} value={values.rtsp_connections_per_endpoint} onChange={e => setValues({ ...values, rtsp_connections_per_endpoint: e.target.valueAsNumber })} />
         </label>
         <p>Live viewers share the camera ingest. Each configured source reserves one slot by host and RTSP port, including while reconnecting. Probes and camera playback use spare slots; extra requests are deferred or rejected. Existing sources above a lowered limit keep running. Set this budget to the device's supported capacity, allowing headroom for other applications.</p>
+        <label style={{ display: 'grid', gap: 6 }}>Recording storage limit (GiB)
+          <input required type="number" style={control} min={0} max={100000} step={1} value={values.recording_storage_limit_gb} onChange={e => setValues({ ...values, recording_storage_limit_gb: e.target.valueAsNumber })} />
+        </label>
+        <p>0 disables the size limit. Checked every minute; oldest completed footage and its playback index are removed down to 90% of the limit. Active or unindexed files can temporarily exceed it. This preserves source quality but shortens recording history. WSL disk compaction is separate.</p>
         <label style={{ display: 'grid', gap: 6 }}>Maximum recording retention (days)
           <input required type="number" style={control} min={1} max={365} step={1} value={values.default_retention_days} onChange={e => setValues({ ...values, default_retention_days: e.target.valueAsNumber })} />
         </label>

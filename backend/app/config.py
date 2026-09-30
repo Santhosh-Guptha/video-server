@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     edge_push_priority: bool = defaults.get("edge_push_priority", True)
 
     enable_retention: bool = defaults.get("enable_retention", True)
+    recording_storage_limit_gb: int = 0
     default_retention_days: int = defaults.get("default_retention_days", 30)
     cloud_retention_days: int = defaults.get("cloud_retention_days", 30)
     nvr_edge_fallback_enabled: bool = defaults.get("nvr_edge_fallback_enabled", True)

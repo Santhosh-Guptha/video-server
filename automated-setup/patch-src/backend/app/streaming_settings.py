@@ -18,6 +18,7 @@ class StreamingSettings(BaseModel):
     rtsp_connections_per_endpoint: int = Field(default=6, ge=1, le=128, strict=True)
     webrtc_connection_timeout_seconds: int = Field(default=20, ge=10, le=60, strict=True)
     max_active_transcoders: int = Field(default=10, ge=1, le=10, strict=True)
+    recording_storage_limit_gb: int = Field(default=0, ge=0, le=100000, strict=True)
     default_retention_days: int = Field(default=30, ge=1, le=365, strict=True)
 
 def load_overrides():

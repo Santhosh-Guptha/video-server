@@ -7,7 +7,7 @@ from pathlib import Path
 BASE = '7937d80044f76b072478197695d8a8e51dbf6891'
 TESTED = 'f1eea0b85bc89b138e72fd936612ef02920cce72'
 REPO = 'https://github.com/Santhosh-Guptha/video-server.git'
-UPSTREAM = 'https://monolithic-portal.iviscloud.net/api/cameras/camera-videoserver'
+UPSTREAM = 'https://uat1.iviscloud.net/api/cameras/camera-videoserver'
 BUNDLE = Path(__file__).resolve().parent
 
 def run(args, **kwargs):

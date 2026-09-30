@@ -371,6 +371,8 @@ async def startup():
 
     asyncio.create_task(initial_sync())
     asyncio.create_task(upstream_sync_loop())
+    from .storage_quota import recording_quota_loop
+    asyncio.create_task(recording_quota_loop())
 
     # Start periodic watchdog loops
     asyncio.create_task(recording_recovery_loop())
