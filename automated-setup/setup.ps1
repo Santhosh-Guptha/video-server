@@ -100,7 +100,7 @@ if not script.is_file(): raise RuntimeError("Checkout is missing automated-setup
 print(script)
 '@
 $bootstrapMode = if ($NetworkOnly) { 'network' } else { $Mode }
-$bootstrapOutput = @(& wsl.exe -d $Distro -u root -- python3 -c $bootstrap $LinuxUser $bootstrapMode $Repo)
+$bootstrapOutput = @($bootstrap | & wsl.exe -d $Distro -u root -- python3 - $LinuxUser $bootstrapMode $Repo)
 if ($LASTEXITCODE -ne 0) { throw 'Ubuntu bootstrap failed.' }
 $linuxScript = [string]$bootstrapOutput[-1]
 if (-not $linuxScript.StartsWith('/')) { throw 'Ubuntu bootstrap did not return an installer path.' }
