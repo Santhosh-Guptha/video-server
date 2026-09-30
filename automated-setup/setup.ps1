@@ -23,7 +23,7 @@ if (-not $admin -and ($Mode -ne 'check' -or $NetworkOnly)) {
     $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $PSCommandPath),
                    '-Mode',$Mode,'-Distro',$Distro,'-LinuxUser',$LinuxUser,'-LanIp',$LanIp)
     if ($NetworkOnly) { $arguments += '-NetworkOnly' }
-    $elevated = Start-Process -FilePath powershell.exe -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    $elevated = Start-Process -FilePath powershell.exe -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
     exit $elevated.ExitCode
 }
 $distros = (& wsl.exe --list --quiet) -replace "`0", ''
@@ -58,7 +58,7 @@ if ($Mode -ne 'check') {
 # Bootstrap from this file alone. The repository supplies the Linux installer
 # and its patch files; the caller does not need to keep an installer folder.
 $bootstrap = @'
-import pathlib, pwd, shutil, subprocess, sys
+import pathlib, pwd, shutil, subprocess, sys, time
 user, mode, repo = sys.argv[1:]
 try:
     account = pwd.getpwnam(user)
@@ -79,7 +79,11 @@ if not root.exists():
     if mode in ("check", "network"): raise RuntimeError("Video server is not installed")
     as_user("git", "clone", "--branch", "develop", "--single-branch", repo, str(root))
 elif not (root / ".git").is_dir():
-    raise RuntimeError("Installation directory exists but is not a Git checkout")
+    if root.is_symlink() or any(p.is_file() or p.is_symlink() for p in root.rglob('*')):
+        raise RuntimeError("Installation directory contains non-Git files; preserve or move them before setup")
+    # A removed installation may leave empty recording directories behind.
+    root.rename(root.with_name(root.name + ".empty-" + str(time.time_ns())))
+    as_user("git", "clone", "--branch", "develop", "--single-branch", repo, str(root))
 origin = output("runuser", "-u", user, "--", "git", "-C", str(root), "remote", "get-url", "origin")
 if origin != repo: raise RuntimeError("Existing checkout has a different Git origin")
 if mode not in ("check", "network"):

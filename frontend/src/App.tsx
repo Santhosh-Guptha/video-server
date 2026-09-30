@@ -37,7 +37,7 @@ export default function App() {
   const [layout, setLayout] = useState(() => {
     const stored = localStorage.getItem('vms_layout')
     return stored ? parseInt(stored, 10) : 4
-  }) 
+  })
   const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream' | 'gap_recovery' | 'streaming_settings'>(() => {
     const stored = localStorage.getItem('vms_active_tab')
     return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream' || stored === 'gap_recovery' || stored === 'streaming_settings') ? stored : 'live'
@@ -467,7 +467,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="playerWrap">
+                  <div className={isFullView ? "playerWrap fullscreenVideoWall" : "playerWrap"}>
                     {selectedStreams.length > 0 ? (
                       <div className={`videoGrid layout-${layout}`}>
                         {selectedStreams.map((cam) => (
@@ -486,6 +486,7 @@ export default function App() {
                             }}
                           />
                         ))}
+                        {isFullView && <button className="exitFullViewBtn" type="button" onClick={() => setIsFullView(false)} title="Exit Full View"><Minimize2 size={18} /> Exit Full View</button>}
                       </div>
                     ) : (
                       <div className="emptyStream">
@@ -550,37 +551,7 @@ export default function App() {
         </div>
       </main>
 
-      {isFullView && selectedStreams.length > 0 && (
-        <div className="fullscreenVideoWall">
-          <div className={`videoGrid layout-${layout}`}>
-            {selectedStreams.map((cam) => (
-              <Player
-                key={cam.stream_id}
-                src={`/api/streams/${encodeURIComponent(resolveLiveStreamId(cam, policy, layout))}/live/index.m3u8`}
-                posterLabel={`${cam.name} — ${cam.stream_type}`}
-                isFocused={selected?.stream_id === cam.stream_id}
-                onFocus={() => setSelected(cam)}
-                onClose={() => {
-                  const remaining = selectedStreams.filter(x => x.stream_id !== cam.stream_id)
-                  setSelectedStreams(remaining)
-                  if (selected?.stream_id === cam.stream_id) {
-                    setSelected(remaining[0] || undefined)
-                  }
-                }}
-                minimal={true}
-              />
-            ))}
-          </div>
-          <button
-            className="exitFullViewBtn"
-            type="button"
-            onClick={() => setIsFullView(false)}
-            title="Exit Full View"
-          >
-            <Minimize2 size={18} /> Exit Full View
-          </button>
-        </div>
-      )}
+
     </div>
   )
 }

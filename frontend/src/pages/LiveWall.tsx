@@ -22,7 +22,7 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   const [streamViewers, setStreamViewers] = useState<Record<string, number>>({})
   const [wsConnected, setWsConnected] = useState(false)
   const [isFullView, setIsFullView] = useState(false)
-  const [selectedCameraForModal, setSelectedCameraForModal] = useState<Camera | null>(null)
+  const [expanded, setExpanded] = useState<{ cameraId: string; streamId: string; details: boolean } | null>(null)
   const [gridSize, setGridSize] = useState<number>(() => {
     const saved = Number(window.localStorage.getItem('liveWallGridSize'))
     return [4, 9, 12, 16, 24, 36].includes(saved) ? saved : 4
@@ -30,6 +30,18 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
   const [currentPage, setCurrentPage] = useState<number>(1)
 
   useEffect(() => { window.localStorage.setItem('liveWallGridSize', String(gridSize)) }, [gridSize])
+
+  useEffect(() => {
+    if (!expanded && !isFullView) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (expanded) setExpanded(null)
+        else setIsFullView(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [expanded, isFullView])
 
   // Policy-driven stream resolution for live wall
   const { policy } = usePolicy()
@@ -224,7 +236,8 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           const preferredId = resolveLiveStreamId(cam, policy, 4)
           const preferred = cam.streams.find(s => s.stream_id === preferredId)
           const available = cam.streams.find(s => s.status === 'ONLINE')
-          const streamId = preferred?.status === 'ONLINE' ? preferredId : (available?.stream_id || preferredId)
+          const isExpanded = expanded?.cameraId === cam.id
+          const streamId = isExpanded ? expanded.streamId : (preferred?.status === 'ONLINE' ? preferredId : (available?.stream_id || preferredId))
           const qualityFallback = streamId !== preferredId
           const anyStream = cam.streams.find(s => s.stream_id === streamId) || cam.streams[0]
           if (!anyStream) return null
@@ -233,11 +246,18 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
           return (
             <div
               key={cam.id}
-              className="liveWallCell"
-              onDoubleClick={() => setSelectedCameraForModal(cam)}
-              style={{ cursor: 'pointer', position: 'relative', width: '100%', aspectRatio: '16/9' }}
+              className={`liveWallCell${isExpanded ? ' liveWallCellExpanded' : ''}`}
+              role={isExpanded ? 'dialog' : undefined}
+              aria-modal={isExpanded ? true : undefined}
+              aria-label={isExpanded ? `${cam.name} live view` : undefined}
+              onDoubleClick={(event) => {
+                if ((event.target as HTMLElement).closest('button, a, input, select')) return
+                setExpanded(isExpanded ? null : { cameraId: cam.id, streamId, details: true })
+              }}
+              style={isExpanded ? undefined : { cursor: 'pointer', position: 'relative', width: '100%', aspectRatio: '16/9' }}
               title="Double-click to view details"
             >
+              <div className="liveWallPlayer">
               <Player
                 src={`/api/streams/${encodeURIComponent(streamId)}/live/index.m3u8`}
                 posterLabel=""
@@ -256,14 +276,10 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
                   <button
                     type="button"
                     className="liveWallFullscreenBtn"
-                    title="Fullscreen"
+                    title={isExpanded ? "Exit Fullscreen" : "Fullscreen"}
                     onClick={(e) => {
                       e.stopPropagation();
-                      const cellEl = e.currentTarget.closest('.liveWallCell');
-                      const videoEl = cellEl?.querySelector('video');
-                      if (videoEl) {
-                        videoEl.requestFullscreen?.();
-                      }
+                      setExpanded(isExpanded ? null : { cameraId: cam.id, streamId, details: false });
                     }}
                     style={{
                       background: 'none',
@@ -282,18 +298,60 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
                   <span className="livePulseDot" style={{ width: '6px', height: '6px' }} />
                 </div>
               </div>
+              </div>
+              {isExpanded && expanded.details && (
+              <div className="vmsModalInfoCol">
+                <h3 className="vmsModalTitle">{cam.name}</h3>
+                <span className="vmsModalSubtitle">Camera details & stream metadata</span>
+
+                <div className="vmsModalSpecs">
+                  {cam.server_camera_id && (
+                    <div className="vmsSpecItem">
+                      <span className="vmsSpecLabel">Camera ID</span>
+                      <span className="vmsSpecValue monospace" style={{ color: '#10b981' }}>{cam.server_camera_id}</span>
+                    </div>
+                  )}
+                  <div className="vmsSpecItem">
+                    <span className="vmsSpecLabel">Stream ID</span>
+                    <span className="vmsSpecValue monospace">{streamId}</span>
+                  </div>
+                  <div className="vmsSpecItem">
+                    <span className="vmsSpecLabel">Status</span>
+                    <span className={`vmsSpecValue badge ${(streamStatuses[streamId] || anyStream.status || 'OFFLINE') === 'ONLINE' ? 'online' : 'offline'}`}>
+                      {(streamStatuses[streamId] || anyStream.status || 'OFFLINE')}
+                    </span>
+                  </div>
+                  <div className="vmsSpecItem">
+                    <span className="vmsSpecLabel">Resolution</span>
+                    <span className="vmsSpecValue">{anyStream.resolution || 'Not reported'}</span>
+                  </div>
+                  <div className="vmsSpecItem">
+                    <span className="vmsSpecLabel">Codec</span>
+                    <span className="vmsSpecValue">{anyStream.codec || 'Not reported'}</span>
+                  </div>
+                  <div className="vmsSpecItem">
+                    <span className="vmsSpecLabel">FPS</span>
+                    <span className="vmsSpecValue">{anyStream.fps || 'Not reported'}</span>
+                  </div>
+                  <div className="vmsSpecItem">
+                    <span className="vmsSpecLabel">Bitrate</span>
+                    <span className="vmsSpecValue">{anyStream.bitrate ? `${anyStream.bitrate} kbps` : 'Variable'}</span>
+                  </div>
+                  <div className="vmsSpecItem">
+                    <span className="vmsSpecLabel">Active Viewers</span>
+                    <span className="vmsSpecValue">{viewers}</span>
+                  </div>
+
+                </div>
+              </div>
+              )}
+              {isExpanded && <button autoFocus type="button" className="vmsModalCloseBtn" title="Close expanded camera" onClick={(event) => { event.stopPropagation(); setExpanded(null) }}><X size={20} /></button>}
             </div>
           )
         })}
       </div>
     )
   }
-
-  // Resolve modal parameters
-  const modalStreamId = selectedCameraForModal ? resolveLiveStreamId(selectedCameraForModal, policy, 1) : '';
-  const modalStream = selectedCameraForModal?.streams.find(s => s.stream_id === modalStreamId) || selectedCameraForModal?.streams[0];
-  const modalViewers = selectedCameraForModal && modalStream ? (streamViewers[modalStream.stream_id] || 0) : 0;
-  const modalStatus = selectedCameraForModal && modalStream ? (streamStatuses[modalStream.stream_id] || modalStream.status || 'OFFLINE') : 'OFFLINE';
 
   return (
     <div className="liveWallContainer">
@@ -424,73 +482,6 @@ export function LiveWall({ statusTextSetter }: LiveWallProps) {
         </div>
       )}
 
-      {selectedCameraForModal && modalStream && (
-        <div className="vmsModalBackdrop" onClick={() => setSelectedCameraForModal(null)}>
-          <div className="vmsModalContent" onClick={(e) => e.stopPropagation()}>
-            <button className="vmsModalCloseBtn" onClick={() => setSelectedCameraForModal(null)} title="Close Details">
-              <X size={20} />
-            </button>
-            <div className="vmsModalBody">
-              <div className="vmsModalVideoCol">
-                <Player
-                  src={`/api/streams/${encodeURIComponent(modalStreamId)}/live/index.m3u8`}
-                  posterLabel={`${selectedCameraForModal.name}`}
-                  minimal={false}
-                />
-              </div>
-              <div className="vmsModalInfoCol">
-                <h3 className="vmsModalTitle">{selectedCameraForModal.name}</h3>
-                <span className="vmsModalSubtitle">Camera details & stream metadata</span>
-
-                <div className="vmsModalSpecs">
-                  {selectedCameraForModal.server_camera_id && (
-                    <div className="vmsSpecItem">
-                      <span className="vmsSpecLabel">Camera ID</span>
-                      <span className="vmsSpecValue monospace" style={{ color: '#10b981' }}>{selectedCameraForModal.server_camera_id}</span>
-                    </div>
-                  )}
-                  <div className="vmsSpecItem">
-                    <span className="vmsSpecLabel">Stream ID</span>
-                    <span className="vmsSpecValue monospace">{modalStreamId}</span>
-                  </div>
-                  <div className="vmsSpecItem">
-                    <span className="vmsSpecLabel">Status</span>
-                    <span className={`vmsSpecValue badge ${modalStatus === 'ONLINE' ? 'online' : 'offline'}`}>
-                      {modalStatus}
-                    </span>
-                  </div>
-                  <div className="vmsSpecItem">
-                    <span className="vmsSpecLabel">Resolution</span>
-                    <span className="vmsSpecValue">{modalStream.resolution || '1920x1080'}</span>
-                  </div>
-                  <div className="vmsSpecItem">
-                    <span className="vmsSpecLabel">Codec</span>
-                    <span className="vmsSpecValue">{modalStream.codec || 'H264'}</span>
-                  </div>
-                  <div className="vmsSpecItem">
-                    <span className="vmsSpecLabel">FPS</span>
-                    <span className="vmsSpecValue">{modalStream.fps || '15'}</span>
-                  </div>
-                  <div className="vmsSpecItem">
-                    <span className="vmsSpecLabel">Bitrate</span>
-                    <span className="vmsSpecValue">{modalStream.bitrate ? `${modalStream.bitrate} kbps` : 'Variable'}</span>
-                  </div>
-                  <div className="vmsSpecItem">
-                    <span className="vmsSpecLabel">Active Viewers</span>
-                    <span className="vmsSpecValue">{modalViewers}</span>
-                  </div>
-                  <div className="vmsSpecItem fullWidth">
-                    <span className="vmsSpecLabel">Source RTSP URL</span>
-                    <span className="vmsSpecValue monospace breakAll" title={modalStream.stream_url}>
-                      {modalStream.stream_url}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
