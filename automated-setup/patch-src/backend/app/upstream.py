@@ -15,7 +15,7 @@ async def fetch_upstream_cameras():
             response.raise_for_status()
             data = response.json()
             print(f"[upstream] Successfully fetched cameras from upstream API: {settings.upstream_camera_api_url}")
-
+            
             # Save a backup of the successfully fetched configuration
             try:
                 with open(backup_path, "w") as f:
@@ -23,7 +23,7 @@ async def fetch_upstream_cameras():
                 print(f"[upstream] Saved backup configuration to {backup_path}")
             except Exception as backup_err:
                 print(f"[upstream] Failed to save backup configuration: {backup_err}")
-
+                
             return data
     except Exception as e:
         print(f"[upstream] Failed to fetch from upstream API ({settings.upstream_camera_api_url}): {e}. Falling back to cached backup...")

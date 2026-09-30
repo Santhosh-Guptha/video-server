@@ -171,9 +171,24 @@ PLAYBACK_PROFILE=HD
 WEBRTC_CONNECTION_TIMEOUT_SECONDS=20
 ''',0o600)
         shutil.chown(root/'backend/.env',args.user,account.pw_gid)
+        # A removed checkout can leave the managed TURN service behind. Reuse
+        # its existing account so a new .env does not advertise a different key.
+        managed_turn = Path('/etc/video-server/turnserver.conf')
+        if managed_turn.exists():
+            account_line = next((line[5:].strip() for line in managed_turn.read_text().splitlines() if line.startswith('user=')), None)
+            if account_line and ':' in account_line:
+                turn_user, turn_key = account_line.split(':', 1)
+                env_file = root/'backend/.env'
+                env_text = env_file.read_text()
+                for key, value in {'TURN_SERVER_USERNAME': turn_user, 'TURN_SERVER_CREDENTIAL': turn_key}.items():
+                    if re.search(r'^'+key+r'=', env_text, re.M):
+                        env_text = re.sub(r'^'+key+r'=.*$', lambda match: key+'='+value, env_text, flags=re.M)
+                    else:
+                        env_text += '\n'+key+'='+value+'\n'
+                env_file.write_text(env_text)
         # Existing installations retain their credentials and coturn configuration.
         env_values=dict(line.split('=',1) for line in (root/'backend/.env').read_text().splitlines() if '=' in line and not line.startswith('#'))
-        if not Path('/etc/systemd/system/video-backend.service').exists():
+        if not Path('/etc/systemd/system/coturn.service.d/video-server.conf').exists():
             put_new('/etc/video-server/turnserver.conf',f'''listening-port=3478
 fingerprint
 lt-cred-mech

@@ -48,7 +48,7 @@ async def health_monitor_loop():
                 print("[health_monitor] WARNING: coturn (TURN server) is offline or unreachable on port 3478!")
             else:
                 await RedisViewerTracker.set_stream_health("coturn", "ONLINE")
-
+            
             # 2. Check each configured MediaMTX node
             node_status = {}
             for name, url in NODE_URLS.items():
@@ -70,25 +70,25 @@ async def health_monitor_loop():
                         )
                         res = await db_session.execute(stmt)
                         registry_entries = res.scalars().all()
-
+                        
                         if registry_entries:
                             print(f"[health_monitor] Node '{node_name}' is offline. Marking {len(registry_entries)} streams as RECOVERING.")
-
+                            
                             # Find healthy nodes
                             healthy_nodes = [name for name, ok in node_status.items() if ok]
-
+                            
                             for entry in registry_entries:
                                 entry.status = "RECOVERING"
                                 entry.last_seen = datetime.utcnow()
                                 await RedisViewerTracker.set_stream_health(entry.stream_id, "RECOVERING", f"Node {node_name} offline")
-
+                                
                                 # If there is a healthy node to failover to, reassign it
                                 if healthy_nodes:
                                     target_node = healthy_nodes[0]
                                     print(f"[health_monitor] Reassigning stream {entry.stream_id} from {node_name} to {target_node}")
                                     entry.mediamtx_node = target_node
                                     entry.status = "REGISTERED"
-
+                                    
                                     # Update the camera stream status in db
                                     camera_stream_stmt = select(CameraStream).where(CameraStream.stream_id == entry.stream_id)
                                     cs_res = await db_session.execute(camera_stream_stmt)
@@ -104,10 +104,10 @@ async def health_monitor_loop():
                                     camera_stream = cs_res.scalar_one_or_none()
                                     if camera_stream:
                                         await stream_manager.set_stream_state(db_session, camera_stream, StreamState.OFFLINE, f"Node {node_name} offline, no failover target available")
-
+                            
                             await db_session.commit()
-
+                            
         except Exception as e:
             print(f"[health_monitor] Error in health monitor loop: {e}")
-
+            
         await asyncio.sleep(settings.scheduler_interval_seconds)
