@@ -1,0 +1,240 @@
+import { useEffect, useRef, useState } from 'react'
+import Hls from 'hls.js'
+import { AlertCircle, Loader2, Maximize2, Volume2, VolumeX, Play, X } from 'lucide-react'
+
+
+type HLSPlayerProps = {
+  src?: string
+  posterLabel?: string
+  isFocused?: boolean
+  onClose?: () => void
+  onFocus?: () => void
+  minimal?: boolean
+}
+
+export function HLSPlayer({ src, posterLabel, isFocused, onClose, onFocus, minimal }: HLSPlayerProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const hlsRef = useRef<Hls | null>(null)
+  const retryCountRef = useRef(0)
+  const retryTimerRef = useRef<number | null>(null)
+  const isMountedRef = useRef(true)
+  const [muted, setMuted] = useState(true)
+  const [loaded, setLoaded] = useState(false)
+  const [statusText, setStatusText] = useState('Buffering HLS stream…')
+
+  const maxRetries = 8
+  const retryDelay = 2000
+
+  const startHls = (video: HTMLVideoElement, hlsSrc: string) => {
+    if (!isMountedRef.current) return
+
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari, iOS)
+      video.src = hlsSrc
+      video.play().catch(() => {})
+      return
+    }
+    
+    if (!Hls.isSupported()) return
+
+    const hls = new Hls({
+      lowLatencyMode: true,
+      backBufferLength: 30,
+      liveDurationInfinity: true,
+      liveSyncDuration: 3.0,
+      liveMaxLatencyDuration: 6.0,
+      maxBufferLength: 10,
+      maxMaxBufferLength: 20,
+      manifestLoadingTimeOut: 8000,
+      manifestLoadingMaxRetry: 1,
+      levelLoadingTimeOut: 8000,
+      levelLoadingMaxRetry: 2,
+    })
+    hlsRef.current = hls
+    hls.loadSource(hlsSrc)
+    hls.attachMedia(video)
+    
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      if (!isMountedRef.current) return
+      retryCountRef.current = 0
+      setStatusText('Buffering HLS stream…')
+      video.play().catch(() => {})
+    })
+
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (!isMountedRef.current) return
+      if (data.fatal) {
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            // Playlist 404 or network failure — retry with full manifest reload
+            if (retryCountRef.current < maxRetries) {
+              retryCountRef.current += 1
+              const attempt = retryCountRef.current
+              console.log(`[HLSPlayer] Network error. Retrying manifest (${attempt}/${maxRetries}) in ${retryDelay}ms...`)
+              setStatusText(`Waiting for stream… (retry ${attempt}/${maxRetries})`)
+              hls.destroy()
+              hlsRef.current = null
+              retryTimerRef.current = window.setTimeout(() => {
+                if (isMountedRef.current && videoRef.current) {
+                  startHls(videoRef.current, hlsSrc)
+                }
+              }, retryDelay)
+            } else {
+              console.error('[HLSPlayer] Max retries reached. Stream unavailable.')
+              setStatusText('Stream unavailable')
+              hls.destroy()
+              hlsRef.current = null
+            }
+            break
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.warn('[HLSPlayer] Fatal media error, trying to recover...', data)
+            hls.recoverMediaError()
+            break
+          default:
+            console.error('[HLSPlayer] Unrecoverable error:', data)
+            hls.destroy()
+            hlsRef.current = null
+            break
+        }
+      }
+    })
+  }
+
+  useEffect(() => {
+    isMountedRef.current = true
+    retryCountRef.current = 0
+    const video = videoRef.current
+    if (!video || !src) return
+    setLoaded(false)
+    setStatusText('Buffering HLS stream…')
+
+    const onCanPlay = () => setLoaded(true)
+    video.addEventListener('canplay', onCanPlay)
+
+    startHls(video, src)
+
+    return () => {
+      isMountedRef.current = false
+      video.removeEventListener('canplay', onCanPlay)
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+      video.src = ""
+      video.removeAttribute('src')
+      try {
+        video.load()
+      } catch (e) {}
+    }
+  }, [src])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (video) video.muted = muted
+  }, [muted])
+
+  return (
+    <div className={`playerShell ${isFocused ? 'focused' : ''} ${minimal ? 'minimalMode' : ''}`} onClick={onFocus} style={{ cursor: onFocus ? 'pointer' : 'default', width: '100%', height: '100%' }}>
+      {!minimal && (
+        <div className="playerHeader">
+          <div>
+            <div className="eyebrow">{posterLabel ?? 'Live feed'}</div>
+            <h3 className="panelTitle">Real-time camera view</h3>
+          </div>
+          <div className="playerChips" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {onClose && (
+              <button
+                className="playerCloseBtn"
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onClose()
+                }}
+                title="Deselect camera"
+              >
+                <X size={16} />
+              </button>
+            )}
+            <span className="chip chipLive"><span className="dotPulse" />Live</span>
+            <span className="chip" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', borderColor: 'rgba(245, 158, 11, 0.3)' }}>HLS (Fallback)</span>
+            <span className="chip">Low latency</span>
+          </div>
+        </div>
+      )}
+
+      <div className="playerViewport" style={{ position: 'relative', overflow: 'hidden', background: '#090d16' }}>
+        {minimal && (
+          <div className="minimalCameraLabel" style={{ zIndex: 11 }}>
+            {posterLabel ?? 'Live feed'}
+            <span style={{ marginLeft: '6px', fontSize: '9px', opacity: 0.8, color: '#fbbf24' }}>HLS</span>
+          </div>
+        )}
+        {minimal && onClose && (
+          <button
+            className="playerCloseBtn"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            title="Deselect camera"
+            style={{
+              position: 'absolute',
+              top: '10px',
+              right: '10px',
+              zIndex: 12,
+              background: 'rgba(15, 23, 42, 0.75)',
+              backdropFilter: 'blur(4px)',
+              border: '1px solid rgba(148, 163, 184, 0.15)',
+              color: '#fca5a5'
+            }}
+          >
+            <X size={14} />
+          </button>
+        )}
+        {!loaded && (
+          <div className="playerOverlay">
+            <Loader2 className="spin" size={18} />
+            <div className="overlayText">{statusText}</div>
+          </div>
+        )}
+        <video ref={videoRef} className="videoEl" controls={!minimal} autoPlay playsInline muted={muted} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        <div className="fakeStamp" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span className="recordingDot" style={{ marginRight: '0' }} /> LIVE
+        </div>
+      </div>
+
+      {!minimal && (
+        <div className="playerControls">
+          <button className="miniBtn" type="button" onClick={() => setMuted(m => !m)}>
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            {muted ? 'Unmute' : 'Mute'}
+          </button>
+          <button className="miniBtn" type="button" onClick={() => videoRef.current?.play().catch(() => {})}>
+            <Play size={16} /> Play
+          </button>
+          <button className="miniBtn" type="button" onClick={() => videoRef.current?.requestFullscreen?.()}>
+            <Maximize2 size={16} /> Fullscreen
+          </button>
+          <div className="playerHint">{src ? src.replace(window.location.origin, '') : 'No stream selected'}</div>
+        </div>
+      )}
+
+      {!minimal && (
+        <div className="playerFooter">
+          <AlertCircle size={14} />
+          <span>Using standard HLS fallback due to WebRTC unavailability or user override.</span>
+        </div>
+      )}
+    </div>
+  )
+}

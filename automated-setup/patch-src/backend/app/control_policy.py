@@ -2,6 +2,8 @@
 import asyncio
 import json
 import os
+import copy
+import time
 from pathlib import Path
 
 FILE = Path(__file__).parent / 'configs' / 'server_controls.json'
@@ -14,13 +16,42 @@ lock = asyncio.Lock()
 
 
 def save():
+    write_state(state)
+
+
+def write_state(value):
     FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = FILE.with_suffix('.tmp')
     with tmp.open('w') as output:
-        json.dump(state, output, indent=2)
+        json.dump(value, output, indent=2)
         output.flush()
         os.fsync(output.fileno())
     tmp.replace(FILE)
+
+
+def revision():
+    return state.get('revision', 0)
+
+
+def commit(value, action, target, details=None):
+    """Publish only after a successful atomic write; failed saves change nothing."""
+    next_state = copy.deepcopy(value)
+    next_state['revision'] = revision() + 1
+    next_state['activity'] = (state.get('activity', []) + [{
+        'time': time.time(), 'action': action, 'target': target,
+        'details': details or {}, 'revision': next_state['revision'],
+    }])[-500:]
+    write_state(next_state)
+    state.clear()
+    state.update(next_state)
+
+
+def record_runtime_result(ok):
+    value = copy.deepcopy(state)
+    value['runtime'] = {'status': 'applied' if ok else 'failed', 'time': time.time()}
+    write_state(value)
+    state.clear()
+    state.update(value)
 
 
 def register(camera):
@@ -29,8 +60,10 @@ def register(camera):
     names.extend(s.stream_id for s in camera.streams)
     for name in names:
         if name:
-            aliases[name] = key
-            aliases[name + '_h264'] = key
+            for alias in (name, name + '_h264'):
+                # Duplicate display names must never apply one camera's policy
+                # to a different camera. Explicit stream IDs remain usable.
+                aliases[alias] = key if alias not in aliases or aliases[alias] == key else None
     for stream in camera.streams:
         if stream.stream_url:
             sources.setdefault(stream.stream_url, set()).add(key)
@@ -42,6 +75,8 @@ def policy(identifier):
 
 
 def allowed(identifier, purpose='live'):
+    if str(identifier) in aliases and aliases[str(identifier)] is None:
+        return False
     value = policy(identifier)
     if value['ignored']:
         return False

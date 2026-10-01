@@ -42,6 +42,8 @@ app.include_router(streaming_settings_router)
 from .server_control import router as server_control_router
 from . import control_policy
 app.include_router(server_control_router)
+from .operations import router as operations_router
+app.include_router(operations_router)
 
 @app.middleware("http")
 async def enforce_operator_controls(request, call_next):

@@ -1,17 +1,17 @@
-import { ServerControl } from './pages/ServerControl'
-import { StreamingSettings } from './pages/StreamingSettings'
-import { useEffect, useMemo, useState, useRef } from 'react'
+const ServerControl = lazy(() => import('./pages/ServerControl').then(module => ({ default: module.ServerControl })))
+const StreamingSettings = lazy(() => import('./pages/StreamingSettings').then(module => ({ default: module.StreamingSettings })))
+import { useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react'
 import type { Camera, RecordingSegment } from './types'
 import { Sidebar } from './components/Sidebar'
 import { Player } from './components/Player'
-import { Dashboard } from './pages/Dashboard'
-import { CameraDetails } from './pages/CameraDetails'
-import { Playback } from './pages/Playback'
-import { EdgePushPage } from './pages/EdgePush'
+const Dashboard = lazy(() => import('./pages/Dashboard').then(module => ({ default: module.Dashboard })))
+const CameraDetails = lazy(() => import('./pages/CameraDetails').then(module => ({ default: module.CameraDetails })))
+const Playback = lazy(() => import('./pages/Playback').then(module => ({ default: module.Playback })))
+const EdgePushPage = lazy(() => import('./pages/EdgePush').then(module => ({ default: module.EdgePushPage })))
 import { LiveWall } from './pages/LiveWall'
-import { CameraManagement } from './pages/CameraManagement'
-import { WebcamStream } from './pages/WebcamStream'
-import { GapRecovery } from './pages/GapRecovery'
+const CameraManagement = lazy(() => import('./pages/CameraManagement').then(module => ({ default: module.CameraManagement })))
+const WebcamStream = lazy(() => import('./pages/WebcamStream').then(module => ({ default: module.WebcamStream })))
+const GapRecovery = lazy(() => import('./pages/GapRecovery').then(module => ({ default: module.GapRecovery })))
 import { fetchCameras, fetchPlayback, fetchRecordings, startLive, stopLive, syncCameras } from './lib/api'
 import { usePolicy, resolveLiveStreamId, resolvePlaybackStreamId } from './lib/usePolicy'
 import { Activity, RefreshCcw, ServerCrash, Square, Play, X, Maximize2, Minimize2, ChevronDown, Search } from 'lucide-react'
@@ -272,6 +272,7 @@ export default function App() {
           </div>
         </header>
 
+        <Suspense fallback={<div className="streamArea" role="status">Loading workspace…</div>}>
         <div className="workspace singleTab">
           {activeTab === 'dashboard' && (
             <Dashboard
@@ -551,6 +552,7 @@ export default function App() {
             </div>
           )}
         </div>
+        </Suspense>
       </main>
 
 

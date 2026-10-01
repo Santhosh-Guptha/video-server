@@ -1,5 +1,6 @@
 """Persistent server/camera operations and explicit, scoped recording deletion."""
 import asyncio
+import copy
 import shutil
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ router = APIRouter(prefix='/api/control', tags=['server control'])
 
 class CameraPolicy(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    revision: int | None = Field(default=None, ge=0, strict=True)
     ignored: bool = False
     live: bool = True
     recording: bool = True
@@ -30,6 +32,7 @@ class ServerPolicy(BaseModel):
     live: bool
     recording: bool
     upstream_url: str
+    revision: int | None = Field(default=None, ge=0, strict=True)
 
     @field_validator('upstream_url')
     @classmethod
@@ -43,6 +46,8 @@ class ServerPolicy(BaseModel):
 async def inventory(session):
     result = await session.execute(select(Camera).options(selectinload(Camera.streams)).order_by(Camera.name))
     cameras = list(result.scalars().all())
+    control.aliases.clear()
+    control.sources.clear()
     for camera in cameras:
         control.register(camera)
     return cameras
@@ -81,7 +86,7 @@ async def read_controls(session=Depends(get_session)):
     rows = await session.execute(select(RecordingSegment.stream_id, func.count(), func.min(RecordingSegment.start_ts), func.max(RecordingSegment.end_ts)).group_by(RecordingSegment.stream_id))
     recordings = {row[0]: {'segments': row[1], 'oldest': row[2], 'newest': row[3]} for row in rows}
     disk = await asyncio.to_thread(shutil.disk_usage, Path(settings.recording_dir).resolve())
-    return {'server': {**control.state.get('server', {}), 'upstream_url': settings.upstream_camera_api_url},
+    return {'revision': control.revision(), 'checked_at': time.time(), 'runtime': control.state.get('runtime', {'status': 'unknown'}), 'server': {**control.state.get('server', {}), 'upstream_url': settings.upstream_camera_api_url},
             'disk': {'free': disk.free, 'total': disk.total},
             'cameras': [{'id': str(c.id), 'name': c.name, 'source': c.camera_source, 'active': c.active,
                          'policy': control.policy(str(c.id)),
@@ -95,30 +100,35 @@ async def read_controls(session=Depends(get_session)):
 @router.put('/server')
 async def update_server(payload: ServerPolicy, session=Depends(get_session)):
     async with control.lock:
+        from .operations import check_revision, reconcile
+        check_revision(payload.revision)
         await inventory(session)
-        control.state['server'] = payload.model_dump()
-        control.save()
+        value = copy.deepcopy(control.state)
+        value['server'] = payload.model_dump(exclude={'revision'})
+        value['runtime'] = {'status': 'pending', 'time': time.time()}
+        control.commit(value, 'server.policy', 'server', {'live': payload.live, 'recording': payload.recording, 'source_changed': settings.upstream_camera_api_url != payload.upstream_url})
         settings.upstream_camera_api_url = payload.upstream_url
-        try:
-            await apply_runtime(session)
-        except Exception:
-            raise HTTPException(503, 'Policy saved, but runtime reconciliation failed. Retry Apply; the saved policy remains enforced for new requests.')
+        await reconcile(session)
     return await read_controls(session)
 
 
 @router.put('/cameras/{camera_id}')
 async def update_camera_policy(camera_id: str, payload: CameraPolicy, session=Depends(get_session)):
     async with control.lock:
+        from .operations import check_revision, reconcile
+        check_revision(payload.revision)
         cameras = await inventory(session)
         if camera_id not in {str(c.id) for c in cameras}:
             raise HTTPException(404, 'Camera not found')
-        previous = control.state.setdefault('cameras', {}).get(camera_id, {})
-        control.state['cameras'][camera_id] = {**previous, **payload.model_dump()}
-        control.save()
-        try:
-            await apply_runtime(session)
-        except Exception:
-            raise HTTPException(503, 'Policy saved, but runtime reconciliation failed. Retry Apply.')
+        previous = control.policy(camera_id)
+        value = copy.deepcopy(control.state)
+        value.setdefault('cameras', {}).setdefault(camera_id, {}).update(payload.model_dump(exclude={'revision'}))
+        requires_apply = any(previous[key] != getattr(payload, key) for key in ['ignored', 'live', 'recording'])
+        if requires_apply:
+            value['runtime'] = {'status': 'pending', 'time': time.time()}
+        control.commit(value, 'camera.policy', camera_id, payload.model_dump(exclude={'revision'}))
+        if requires_apply:
+            await reconcile(session)
     return await read_controls(session)
 
 
@@ -155,11 +165,12 @@ async def delete_recordings(payload: DeleteRequest, session=Depends(get_session)
         cameras, cutoff, segments = await deletion_scope(payload, session)
         if any(control.allowed(str(c.id), 'recording') for c in cameras):
             raise HTTPException(409, 'Stop recording for the selected cameras before deleting footage')
+        value = copy.deepcopy(control.state)
         for camera in cameras:
             await control.cancel_recovery(str(camera.id))
-            entry = control.state.setdefault('cameras', {}).setdefault(str(camera.id), {})
+            entry = value.setdefault('cameras', {}).setdefault(str(camera.id), {})
             entry['deleted_before'] = max(entry.get('deleted_before', 0), cutoff)
-        control.save()  # Recovery must not download deliberately deleted history.
+        control.commit(value, 'recordings.delete_requested', payload.camera_id, {'before': cutoff, 'segments': len(segments)})
         removed = count = failed = 0
         root = Path(settings.recording_dir).resolve()
         from .timeline_service import PlaybackTimelineService
@@ -174,4 +185,5 @@ async def delete_recordings(payload: DeleteRequest, session=Depends(get_session)
             await session.commit()  # Never hold SQLite's writer lock during filesystem/cache I/O.
             await PlaybackTimelineService.invalidate_cache_for_timestamp(stream_id, start)
             count += 1
+        control.commit(control.state, 'recordings.delete_completed', payload.camera_id, {'deleted': count, 'bytes_freed': removed, 'failed': failed})
         return {'deleted': count, 'bytes_freed': removed, 'failed': failed}

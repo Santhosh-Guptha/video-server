@@ -20,3 +20,19 @@ The one-file installer includes the same implementation in `automated-setup/patc
 ## Streaming stability
 
 Profile paths now use the same stream ID across registration and health workers. This prevents parent-camera aliases from being repeatedly recreated/removed. Active H.264 compatibility paths survive unrelated YAML updates. A player receiving an operator-stop response stops retrying instead of falling back to HLS.
+
+
+## Fleet operations release
+
+- Select cameras across pages, review a bulk action, then apply live/recording/ignore/retention changes. Each batch is validated before changes are saved; unknown camera IDs reject the whole batch. A maximum of 500 cameras is supported per batch.
+- Organize cameras using sites, tags, favorites and notes. Search includes sites/tags. Filters cover source, ignored cameras, favorites and recording permission. Lists show 25 cameras per page; selection persists across pages.
+- Export the filtered inventory as CSV. Formula-like cell values are escaped for spreadsheet safety.
+- Control writes carry a policy revision. Stale browser changes are rejected with a refresh instruction. Failed filesystem writes do not publish unsaved policy in memory.
+- Diagnostics report MediaMTX readiness, Redis connectivity, conversion/recovery workload, TURN configuration and storage quota. These checks do not prove every camera's video is decodable.
+- Activity history retains the latest 500 control events locally. It is not a tamper-proof, user-attributed security audit. Runtime reconciliation failures remain visible and can be retried.
+- Export and restore versioned policy backups with preview and explicit confirmation. Restore requires matching camera IDs, preserves current credentials, source URLs, notes and recording deletion cutoffs, and does not restore video or recreate cameras.
+- Initial UI JavaScript is split by screen. HLS loads only when needed; a crash recovery view offers reload without affecting backend recording. WebRTC reconnect backoff includes jitter to reduce simultaneous retries.
+
+## Commercial release gates still open
+
+This release improves the existing single-server application; it does not certify production readiness. Before selling deployments, finish identity and role permissions, HTTPS/certificate provisioning, signed upgrade/rollback procedures, retention/audit requirements for the target customer, restore drills, and sustained camera/device/network compatibility tests. Multi-tenant hosting also requires isolated tenants, storage and credentials. Never describe configured paths or successful signaling as proof of uninterrupted decoded video.

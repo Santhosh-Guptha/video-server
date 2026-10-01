@@ -355,7 +355,7 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
 
     if (!isPermanent && reconnectCountRef.current < maxReconnectAttempts) {
       reconnectCountRef.current += 1;
-      const backoffDelay = Math.min(1000 * Math.pow(2, reconnectCountRef.current), 10000);
+      const backoffDelay = Math.round(Math.min(1000 * Math.pow(2, reconnectCountRef.current), 10000) * (0.8 + Math.random() * 0.4));
       console.log(`[WebRTCPlayer:${streamId}] Reconnecting (attempt ${reconnectCountRef.current}) in ${backoffDelay}ms...`);
       setStats(prev => ({ ...prev, reconnections: reconnectCountRef.current }));
 
