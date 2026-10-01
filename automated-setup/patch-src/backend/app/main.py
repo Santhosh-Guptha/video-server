@@ -39,6 +39,18 @@ from .onvif_client import CameraConfigClient, parse_rtsp_url
 app = FastAPI(title=settings.app_name)
 from .streaming_settings import router as streaming_settings_router
 app.include_router(streaming_settings_router)
+from .server_control import router as server_control_router
+from . import control_policy
+app.include_router(server_control_router)
+
+@app.middleware("http")
+async def enforce_operator_controls(request, call_next):
+    import re
+    from starlette.responses import JSONResponse
+    match = re.match(r"/api/(?:streams|cameras|webrtc)/([^/]+)/(?:live|whep|whip|start|restart)", request.url.path)
+    if match and request.method != "DELETE" and not control_policy.allowed(match.group(1), "live"):
+        return JSONResponse({"detail": "Live viewing is stopped by operator policy"}, status_code=403)
+    return await call_next(request)
 
 from .metrics.prometheus import router as metrics_router
 
@@ -88,6 +100,8 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
     from pathlib import Path
     from .stream_manager import should_record, double_escape_rtsp_url
 
+    from .server_control import inventory
+    await inventory(session)
     # 1. Fetch all active streams
     res = await session.execute(
         select(CameraStream)
@@ -203,7 +217,13 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
     async with rtsp_budget.lock:
         # Coordinate bulk YAML reloads with dynamic path changes and probes.
         await rtsp_budget._load()
+        paths_dict = {name: value for name, payload in paths_dict.items()
+                      if (value := control_policy.path_policy(name, payload)) is not None}
+        paths_dict.pop("all_others", None)  # Only explicitly registered cameras may publish.
         paths_dict, blocked = shared_paths(paths_dict, rtsp_budget.paths, settings.rtsp_connections_per_endpoint)
+        for name, payload in rtsp_budget.paths.items():
+            if name.endswith("_h264") and name[:-5] in paths_dict and control_policy.allowed(name, "live"):
+                paths_dict[name] = {key: value for key, value in payload.items() if key != "name"}
         rtsp_budget.blocked = set(blocked)
         data = yaml.safe_load(content)
         if data.get('paths') == paths_dict:
@@ -220,8 +240,10 @@ async def configure_mediamtx_cameras_in_yaml(session: AsyncSession):
                 try:
                     await rtsp_budget._load()
                     if all(name in rtsp_budget.paths and
-                           rtsp_budget.paths[name].get('source') == payload.get('source')
-                           for name, payload in paths_dict.items()):
+                           rtsp_budget.paths[name].get('source') == payload.get('source') and
+                           rtsp_budget.paths[name].get('record', False) == payload.get('record', False)
+                           for name, payload in paths_dict.items()) and not any(
+                               not control_policy.allowed(name, 'connect') for name in rtsp_budget.paths):
                         print(f'[startup] Shared RTSP ingest configured; {len(blocked)} new paths held at capacity')
                         break
                 except httpx.HTTPError:
@@ -345,6 +367,11 @@ async def startup():
 
     Path(settings.recording_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.hls_dir).mkdir(parents=True, exist_ok=True)
+
+    from .server_control import inventory
+    async for control_session in get_session():
+        await inventory(control_session)
+    settings.upstream_camera_api_url = control_policy.state.get("server", {}).get("upstream_url", settings.upstream_camera_api_url)
 
     # Sync registered camera streams with Upstream API and MediaMTX on boot
     async def initial_sync():
@@ -642,6 +669,8 @@ async def record_segment_complete(
     payload: SegmentCompletePayload,
     session: Annotated[AsyncSession, Depends(get_session)]
 ):
+    if not control_policy.allowed(payload.stream_id, "recording"):
+        return {"status": "ignored", "reason": "recording stopped"}
     print(f"[webhook] Segment complete notification received: stream_id={payload.stream_id}, path={payload.file_path}")
 
     # 1. Validate payload inputs
@@ -688,6 +717,8 @@ async def record_segment_complete(
         print(f"[webhook] Error checking file stats for {p}: {e}")
         raise HTTPException(status_code=400, detail=f"Error checking file: {e}")
 
+    # Release the validation transaction before slow probing / subsequent insertion.
+    await session.commit()
     # 5. Calculate duration and start timestamp
     duration = await asyncio.to_thread(get_file_duration, str(p), settings.ffmpeg_path)
     start_ts = end_ts - duration
@@ -1733,7 +1764,7 @@ async def list_active_cameras(session: Annotated[AsyncSession, Depends(get_sessi
         .order_by(Camera.name.asc())
         .distinct()
     )
-    cameras = [CameraOut.model_validate(cam) for cam in res.scalars().all()]
+    cameras = [CameraOut.model_validate(cam) for cam in res.scalars().all() if cam.active and control_policy.allowed(str(cam.id), "live")]
     if media_available:
         for camera in cameras:
             for stream in camera.streams:
@@ -2340,8 +2371,12 @@ async def get_recording_gaps(
 
 async def run_manual_recovery(stream_id: str, gap_chunks: list[dict]):
     from .rtsp_budget import recovery_work
-    async with recovery_work(stream_id):
-        await _run_manual_recovery(stream_id, gap_chunks)
+    if not control_policy.allowed(stream_id, "recording"):
+        return
+    gap_chunks = [g for g in gap_chunks if g.get("start_ts", 0) >= control_policy.recording_after(stream_id)]
+    if gap_chunks:
+        async with recovery_work(stream_id):
+            await _run_manual_recovery(stream_id, gap_chunks)
 
 
 async def _run_manual_recovery(stream_id: str, gap_chunks: list[dict]):

@@ -1,3 +1,4 @@
+import { ServerControl } from './pages/ServerControl'
 import { StreamingSettings } from './pages/StreamingSettings'
 import { useEffect, useMemo, useState, useRef } from 'react'
 import type { Camera, RecordingSegment } from './types'
@@ -38,9 +39,9 @@ export default function App() {
     const stored = localStorage.getItem('vms_layout')
     return stored ? parseInt(stored, 10) : 4
   })
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream' | 'gap_recovery' | 'streaming_settings'>(() => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'live' | 'playback' | 'edgepush' | 'camera_config' | 'webcam_stream' | 'gap_recovery' | 'streaming_settings' | 'server_control'>(() => {
     const stored = localStorage.getItem('vms_active_tab')
-    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream' || stored === 'gap_recovery' || stored === 'streaming_settings') ? stored : 'live'
+    return (stored === 'dashboard' || stored === 'live' || stored === 'playback' || stored === 'edgepush' || stored === 'camera_config' || stored === 'webcam_stream' || stored === 'gap_recovery' || stored === 'streaming_settings' || stored === 'server_control') ? stored : 'live'
   })
   const [query, setQuery] = useState('')
   const [recordings, setRecordings] = useState<RecordingSegment[]>([])
@@ -529,6 +530,7 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'server_control' && <ServerControl cameras={cameras} onRefresh={loadCameras} />}
           {activeTab === 'streaming_settings' && <StreamingSettings />}
 
           {activeTab === 'camera_config' && (

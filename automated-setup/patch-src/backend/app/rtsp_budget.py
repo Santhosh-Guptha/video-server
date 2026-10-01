@@ -144,6 +144,12 @@ class RTSPBudget:
             client = await self._client()
             name = unquote(url.split('/paths/', 1)[1].split('/', 1)[1].split('?', 1)[0])
             payload = dict(kwargs.get('json') or {})
+            if method in ("POST", "PATCH"):
+                from .control_policy import path_policy
+                payload = path_policy(name, payload)
+                if payload is None:
+                    return httpx.Response(403, json={"error": "Camera stopped by operator"}, request=httpx.Request(method, url))
+                kwargs["json"] = payload
             try:
                 if method in ('POST', 'PATCH'):
                     # A no-op/source update reuses the helper, even at capacity.
@@ -208,6 +214,11 @@ class RTSPBudget:
                 self.leases += Counter()
 
     async def spawn(self, *args, **kwargs):
+        from .control_policy import sources as known_sources, allowed
+        for arg in args:
+            owners = known_sources.get(str(arg), set())
+            if owners and not any(allowed(owner, "connect") for owner in owners):
+                raise RTSPCapacityError("Camera ignored by operator")
         if any(endpoint(arg) for arg in args):
             async with self.lock:
                 await self._load()
@@ -268,7 +279,15 @@ async def recovery_work(stream_id):
     # opening a database session, and serialize writes for the same camera.
     async with _recovery_locks.setdefault(stream_id, asyncio.Lock()):
         async with _recovery_slots:
-            yield
+            from . import control_policy as control
+            if not control.allowed(stream_id, "recording"):
+                raise RTSPCapacityError("Recording stopped by operator")
+            task = asyncio.current_task()
+            control.jobs[task] = stream_id
+            try:
+                yield
+            finally:
+                control.jobs.pop(task, None)
 
 
 async def communicate_process(process, timeout):

@@ -533,6 +533,9 @@ async def camera_gap_recovery_loop():
 
                 for stream in active_streams:
                     stream_id = stream.stream_id
+                    from .control_policy import allowed, recording_after
+                    if not allowed(stream_id, "recording"):
+                        continue
                     rtsp_url = stream.stream_url.strip()
                     # Skip edge push or invalid RTSP urls
                     if not rtsp_url.startswith(("rtsp://", "rtsps://")):
@@ -540,7 +543,7 @@ async def camera_gap_recovery_loop():
 
                     # Query gaps in the last 24 hours directly from the filesystem
                     now = time.time()
-                    twenty_four_hours_ago = now - (24 * 3600)
+                    twenty_four_hours_ago = max(now - (24 * 3600), recording_after(stream_id))
                     camera_id = (stream.camera.server_camera_id or stream.camera.name) if stream.camera else stream.stream_id
                     gaps = await scan_filesystem_gaps(camera_id, twenty_four_hours_ago, now)
 
@@ -762,14 +765,21 @@ async def camera_gap_recovery_loop():
                             output_path.unlink()
 
             async def download_task(task):
-                async with recovery_work(task['stream_id']):
-                    try:
+                from .control_policy import allowed, recording_after
+                if not allowed(task['stream_id'], 'recording') or task['start_ts'] < recording_after(task['stream_id']):
+                    return
+                try:
+                    async with recovery_work(task['stream_id']):
                         await _download_task_impl(task)
-                    except RTSPCapacityError:
-                        key = (task['stream_id'], int(task['start_ts']))
-                        attempted_gaps[key] = max(0, attempted_gaps.get(key, 1) - 1)
-                        # Capacity deferral is not a failed camera playback attempt.
+                except asyncio.CancelledError:
+                    # Operator stop cancels this camera's work, not the entire scheduler.
+                    if not allowed(task['stream_id'], 'recording'):
                         return
+                    raise
+                except RTSPCapacityError:
+                    key = (task['stream_id'], int(task['start_ts']))
+                    attempted_gaps[key] = max(0, attempted_gaps.get(key, 1) - 1)
+                    return
 
             # Group tasks by stream_id to process them sequentially per camera (to prevent overloading the camera RTSP playback sessions)
             tasks_by_stream = {}
@@ -810,6 +820,9 @@ async def camera_gap_recovery_loop():
                         continue
 
                     stream_id = stream.stream_id
+                    from .control_policy import allowed, recording_after
+                    if not allowed(stream_id, "recording"):
+                        continue
                     # Scan today's recording directory
                     today_str = datetime.now().strftime("%Y-%m-%d")
                     stream_rec_dir = Path(settings.recording_dir) / stream_id / today_str
@@ -985,7 +998,8 @@ async def camera_archive_cleanup_loop():
                     except Exception:
                         raw = {}
 
-                    retention_cap = settings.default_retention_days
+                    from .control_policy import policy
+                    retention_cap = policy(stream.stream_id).get("retention_days") or settings.default_retention_days
                     archive_days = raw.get("archiveDays")
                     if archive_days is None:
                         archive_days = retention_cap

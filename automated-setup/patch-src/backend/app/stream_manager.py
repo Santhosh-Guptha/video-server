@@ -40,6 +40,9 @@ async def _mtx_request(method: str, url: str, **kwargs):
         raise e
 
 async def should_record_stream(session: AsyncSession, stream: CameraStream) -> bool:
+    from .control_policy import allowed
+    if not allowed(stream.stream_id, "recording"):
+        return False
     from .config import should_record_profile
     profile_val = stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type)
 
@@ -64,6 +67,9 @@ async def should_record_stream(session: AsyncSession, stream: CameraStream) -> b
     return False
 
 def should_record(stream: CameraStream) -> bool:
+    from .control_policy import allowed
+    if not allowed(stream.stream_id, "recording"):
+        return False
     from .config import should_record_profile
     profile_val = stream.profile_type.value if hasattr(stream.profile_type, 'value') else str(stream.profile_type)
     return should_record_profile(profile_val)
@@ -93,6 +99,9 @@ class StreamManager:
         from .webrtc import resolve_stream_by_identifier
         from .models import Camera
 
+        from .control_policy import allowed
+        if not allowed(stream.stream_id, "connect"):
+            return
         # Load camera safely
         camera = stream.camera if getattr(stream, "camera", None) else None
         if not camera:
@@ -101,15 +110,10 @@ class StreamManager:
             )
             camera = res_cam.scalar_one_or_none()
 
-        if camera:
-            path_name = camera.server_camera_id or camera.name
-        else:
-            path_name = stream.stream_id
-
-        # Resolve the best stream URL to publish/pull (applying preferred profile & fallback)
-        best_stream = await resolve_stream_by_identifier(path_name, session)
-        if not best_stream:
-            best_stream = stream
+        # Every profile has one stable MediaMTX path. The viewer resolver chooses
+        # a profile; workers must not create/delete a separate parent-camera alias.
+        path_name = stream.stream_id
+        best_stream = stream
 
         lock_name = f"stream:{path_name}"
 
@@ -178,7 +182,7 @@ class StreamManager:
             )
             camera = res_cam.scalar_one_or_none()
 
-        path_name = (camera.server_camera_id or camera.name) if camera else stream.stream_id
+        path_name = stream.stream_id
         lock_name = f"stream:{path_name}"
 
         acquired = await RedisManager.acquire_lock(lock_name, expire_seconds=30)

@@ -336,6 +336,12 @@ export function WebRTCPlayer({ streamId, posterLabel, isFocused, minimal, onFall
     } catch (err: any) {
       if (!isCurrent()) return;
       console.error(`[WebRTCPlayer:${streamId}] WHEP connection failed:`, err);
+      if (err?.status === 403) {
+        cleanupConnection();
+        setHealth('FAILED');
+        setErrorMessage('Live viewing stopped by operator. Enable it in Server Control, then reopen this camera.');
+        return; // Do not retry or bypass an operator stop through HLS.
+      }
       const isPermanent = err && (err.status === 400 || err.status === 415 || (err.message && err.message.toLowerCase().includes('codec')));
       handleDisconnection(err.message || 'Negotiation failed', isPermanent);
     }

@@ -143,3 +143,6 @@ backend/venv_win/
 backend/app/backup_cameras.json
 backend/app/configs/streaming_overrides.json
 frontend/dist-verified/
+
+backend/app/configs/server_controls.json
+backend/app/backup_cameras_*.json

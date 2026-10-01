@@ -43,6 +43,7 @@ export function Sidebar({ onRefresh, totalCameras, liveCameras, lastSyncText, ac
       </div>
 
       <nav className="navList">
+        <button type="button" className={`navItem ${activeTab === 'server_control' ? 'active' : ''}`} onClick={() => setActiveTab('server_control')}>Server Control</button>
         <button type="button" className={`navItem ${activeTab === 'streaming_settings' ? 'active' : ''}`} onClick={() => setActiveTab('streaming_settings')}>Streaming Settings</button>
         <button
           type="button"

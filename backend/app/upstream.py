@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import httpx
@@ -5,7 +6,7 @@ from fastapi import HTTPException
 from .config import settings
 
 async def fetch_upstream_cameras():
-    backup_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backup_cameras.json")
+    backup_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backup_cameras_" + hashlib.sha256(settings.upstream_camera_api_url.encode()).hexdigest()[:16] + ".json")
     try:
         async with httpx.AsyncClient(
             timeout=settings.upstream_timeout_seconds,

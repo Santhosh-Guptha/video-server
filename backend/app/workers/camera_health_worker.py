@@ -19,6 +19,9 @@ async def camera_health_worker_loop():
 
                 async def check_camera_stream(stream_id, stream_url):
                     async with sem:
+                        from ..control_policy import allowed
+                        if not allowed(stream_id, "connect"):
+                            return None
                         try:
                             # Use a 4-second timeout to handle high-latency routes safely
                             online = await _ffprobe_rtsp(stream_url, timeout_seconds=4)

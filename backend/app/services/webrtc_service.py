@@ -40,6 +40,9 @@ class WebRTCService:
         db_session
     ) -> tuple[str, str]:
         """Proxies WHEP SDP offer to passive MediaMTX and returns (SDP answer, session ID)."""
+        from ..control_policy import allowed
+        if not allowed(stream_id, "live"):
+            raise HTTPException(403, "Live viewing stopped by operator")
         from ..rtsp_budget import rtsp_budget
         if stream_id in rtsp_budget.blocked:
             raise HTTPException(status_code=429, detail='Camera RTSP capacity is full; existing streams keep their connections', headers={'Retry-After': '10'})
