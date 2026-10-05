@@ -5,7 +5,7 @@ import http.client
 import logging
 http.client._MAXHEADERS = 100000
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Literal
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Form, File, UploadFile, BackgroundTasks, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -801,15 +801,20 @@ async def download_sd_card_stream(
     stream_id: str,
     start_ts: float,
     end_ts: float,
-    session: Annotated[AsyncSession, Depends(get_session)]
+    session: Annotated[AsyncSession, Depends(get_session)],
+    source: Literal['auto', 'camera', 'server'] = 'auto',
+    disposition: Literal['attachment', 'inline'] = 'attachment',
+    adapter: Literal['configured', 'unv'] = 'configured',
 ):
+    from .camera_playback import validate_interval, camera_url
+    validate_interval(start_ts, end_ts)
     from fastapi.responses import StreamingResponse
     from pathlib import Path
     import tempfile
     import os
 
     # 1. Enforce feature enablement check
-    if not settings.enable_sd_card_on_demand:
+    if source != 'server' and not settings.enable_sd_card_on_demand:
         raise HTTPException(
             status_code=403,
             detail="SD Card On-Demand Retrieval is disabled in configurations."
@@ -827,6 +832,8 @@ async def download_sd_card_stream(
     camera = (await session.execute(stmt)).scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera details not found for stream")
+    if source != 'server' and not control_policy.allowed(str(camera.id), 'connect'):
+        raise HTTPException(403, 'Camera connections are stopped by operator policy.')
 
     # 3. Check if we already have the files locally
     stmt_seg = select(RecordingSegment).where(
@@ -835,7 +842,7 @@ async def download_sd_card_stream(
         RecordingSegment.start_ts <= end_ts
     ).order_by(RecordingSegment.start_ts.asc())
 
-    local_segments = (await session.execute(stmt_seg)).scalars().all()
+    local_segments = [] if source == 'camera' else (await session.execute(stmt_seg)).scalars().all()
 
     valid_local_files = []
     total_local_duration = 0.0
@@ -850,10 +857,14 @@ async def download_sd_card_stream(
 
     requested_duration = end_ts - start_ts
     use_local = len(valid_local_files) > 0 and (total_local_duration / requested_duration >= 0.95)
+    if source == 'server' and not use_local:
+        raise HTTPException(404, 'This interval is not available in server recordings. No camera connection was opened.')
 
     from datetime import datetime
     start_dt = datetime.fromtimestamp(start_ts)
-    friendly_filename = f"{camera.name.replace(' ', '_')}_{start_dt.strftime('%Y%m%d_%H%M%S')}_playback.mp4"
+    friendly_filename = f"camera_{start_dt.strftime('%Y%m%d_%H%M%S')}_playback.mp4"
+    playback_headers = {'Content-Disposition': f'{disposition}; filename={friendly_filename}',
+                        'Cache-Control': 'no-store', 'X-Playback-Source': 'server' if use_local else 'camera'}
 
     async def ffmpeg_stream_generator(cmd, temp_file_to_clean=None):
         print("[sd_card] Starting playback stream")
@@ -872,11 +883,27 @@ async def download_sd_card_stream(
             if isinstance(exc, RTSPCapacityError):
                 raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "10"}) from exc
             raise
+        try:
+            first_chunk = await asyncio.wait_for(process.stdout.read(65536), timeout=20)
+            if not first_chunk:
+                raise HTTPException(502, 'Camera returned no playable recording for this interval. Verify archive availability, credentials and device playback support.')
+        except BaseException as exc:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            stderr_file.close()
+            Path(stderr_log_path).unlink(missing_ok=True)
+            if temp_file_to_clean:
+                Path(temp_file_to_clean).unlink(missing_ok=True)
+            if isinstance(exc, asyncio.TimeoutError):
+                raise HTTPException(504, 'Camera archive did not respond within 20 seconds.') from exc
+            raise
         async def chunks():
-            bytes_sent = 0
+            bytes_sent = len(first_chunk)
             try:
+                yield first_chunk
                 while True:
-                    chunk = await process.stdout.read(262144) # Read chunks of 256KB
+                    chunk = await asyncio.wait_for(process.stdout.read(262144), timeout=30)
                     if not chunk:
                         break
                     bytes_sent += len(chunk)
@@ -897,7 +924,7 @@ async def download_sd_card_stream(
                     with open(stderr_log_path, 'r') as f:
                         stderr_text = f.read()[-2000:]
                     if bytes_sent == 0 and stderr_text:
-                        print(f"[sd_card] WARNING: ffmpeg produced 0 bytes. stderr: {stderr_text}")
+                        print("[sd_card] Playback ended without further data.")
                     else:
                         print(f"[sd_card] ffmpeg completed. Sent {bytes_sent} bytes.")
                 except Exception:
@@ -934,7 +961,7 @@ async def download_sd_card_stream(
             return StreamingResponse(
                 await ffmpeg_stream_generator(cmd),
                 media_type="video/mp4",
-                headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
+                headers=playback_headers
             )
         else:
             fd, temp_txt_path = tempfile.mkstemp(suffix=".txt")
@@ -958,7 +985,7 @@ async def download_sd_card_stream(
                 return StreamingResponse(
                     await ffmpeg_stream_generator(cmd, temp_txt_path),
                     media_type="video/mp4",
-                    headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
+                    headers=playback_headers
                 )
             except Exception as e:
                 if os.path.exists(temp_txt_path):
@@ -970,19 +997,25 @@ async def download_sd_card_stream(
         print(f"[sd_card] Local footage not fully available. Fetching from camera SD card.")
         from .providers import get_playback_recovery_provider
         try:
-            provider = get_playback_recovery_provider(camera.make)
-            rtsp_replay_url = provider.build_playback_url(stream, start_ts, end_ts)
+            if source == 'camera':
+                rtsp_replay_url = camera_url('UNV' if adapter == 'unv' else camera.make, stream, start_ts, end_ts)
+            else:
+                provider = get_playback_recovery_provider(camera.make)
+                rtsp_replay_url = provider.build_playback_url(stream, start_ts, end_ts)
             print("[sd_card] Camera playback requested")
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to generate RTSP playback URL: {e}"
+                detail="Failed to construct camera archive request. Check the camera configuration."
             )
 
         cmd = [
             settings.ffmpeg_path,
             "-rtsp_transport", "tcp",
             "-i", rtsp_replay_url,
+            "-t", str(requested_duration),
             "-c:v", "copy",
             "-an",
             "-f", "mp4",
@@ -992,7 +1025,7 @@ async def download_sd_card_stream(
         return StreamingResponse(
             await ffmpeg_stream_generator(cmd),
             media_type="video/mp4",
-            headers={"Content-Disposition": f"attachment; filename={friendly_filename}"}
+            headers=playback_headers
         )
 
 

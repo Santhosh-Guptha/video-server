@@ -19,6 +19,14 @@ The one-file installer includes the same implementation in `automated-setup/patc
 
 ## Streaming stability
 
+## Camera archive playback (initial adapter)
+
+Playback now has separate **Server recordings** and **Camera / NVR archive** screens. Camera mode bypasses the server recording lookup, relays a bounded device archive request without saving video, and offers play, stop and clip download. Select a past start time in the browser's local timezone and 1–15 minutes. Epoch timestamps are sent to the UNV adapter. Closing the camera screen stops its video request.
+
+This initial camera-only adapter supports UNV/Uniview URL structure with an identifiable channel. Unknown channels are rejected instead of guessing channel 1. If upstream manufacturer metadata is missing, choose UNV explicitly only for a compatible device; the choice applies to the current request. Other manufacturers, ONVIF archive discovery/calendar, audio, arbitrary timeline seeking and browser codec conversion remain pending. Manufacturer identity or a constructed URL is not proof that footage exists.
+
+The existing download endpoint accepts `source=camera|server|auto`, `disposition=inline|attachment` and `adapter=configured|unv`. Camera-only requests never fall back to local recordings; server-only requests never connect to a camera. Automatic mode preserves existing fallback selection. All requests now reject invalid intervals and clips longer than 15 minutes. First data has a 20-second deadline; subsequent reads have a 30-second idle timeout. RTSP capacity limits apply, and failures before the first data produce an HTTP error. Receiving MP4 headers is not proof of decoded video. Video is copied without re-encoding; unsupported browser codecs may require clip download.
+
 Profile paths now use the same stream ID across registration and health workers. This prevents parent-camera aliases from being repeatedly recreated/removed. Active H.264 compatibility paths survive unrelated YAML updates. A player receiving an operator-stop response stops retrying instead of falling back to HLS.
 
 
