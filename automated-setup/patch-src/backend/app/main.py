@@ -806,7 +806,7 @@ async def download_sd_card_stream(
     disposition: Literal['attachment', 'inline'] = 'attachment',
     adapter: Literal['configured', 'unv'] = 'configured',
 ):
-    from .camera_playback import validate_interval, camera_url
+    from .camera_playback import validate_interval, camera_url, archive_settings
     validate_interval(start_ts, end_ts)
     from fastapi.responses import StreamingResponse
     from pathlib import Path
@@ -832,6 +832,7 @@ async def download_sd_card_stream(
     camera = (await session.execute(stmt)).scalar_one_or_none()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera details not found for stream")
+    archive = archive_settings(camera.id)
     if source != 'server' and not control_policy.allowed(str(camera.id), 'connect'):
         raise HTTPException(403, 'Camera connections are stopped by operator policy.')
 
@@ -859,6 +860,16 @@ async def download_sd_card_stream(
     use_local = len(valid_local_files) > 0 and (total_local_duration / requested_duration >= 0.95)
     if source == 'server' and not use_local:
         raise HTTPException(404, 'This interval is not available in server recordings. No camera connection was opened.')
+    if not use_local:
+        if not archive.enabled or not camera.active:
+            raise HTTPException(403, 'Camera archive access is disabled for this camera.')
+        if requested_duration > archive.max_minutes * 60:
+            raise HTTPException(422, f'Camera archive limit is {archive.max_minutes} minutes.')
+        if archive.stream_id:
+            selected_stream = await resolve_stream_by_identifier(archive.stream_id, session)
+            if not selected_stream or selected_stream.camera_id != stream.camera_id:
+                raise HTTPException(409, 'Saved archive profile is no longer available for this camera. Update camera configuration.')
+            stream = selected_stream
 
     from datetime import datetime
     start_dt = datetime.fromtimestamp(start_ts)
@@ -884,7 +895,7 @@ async def download_sd_card_stream(
                 raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "10"}) from exc
             raise
         try:
-            first_chunk = await asyncio.wait_for(process.stdout.read(65536), timeout=20)
+            first_chunk = await asyncio.wait_for(process.stdout.read(65536), timeout=archive.first_data_timeout)
             if not first_chunk:
                 raise HTTPException(502, 'Camera returned no playable recording for this interval. Verify archive availability, credentials and device playback support.')
         except BaseException as exc:
@@ -896,14 +907,14 @@ async def download_sd_card_stream(
             if temp_file_to_clean:
                 Path(temp_file_to_clean).unlink(missing_ok=True)
             if isinstance(exc, asyncio.TimeoutError):
-                raise HTTPException(504, 'Camera archive did not respond within 20 seconds.') from exc
+                raise HTTPException(504, f'Camera archive did not respond within {archive.first_data_timeout} seconds.') from exc
             raise
         async def chunks():
             bytes_sent = len(first_chunk)
             try:
                 yield first_chunk
                 while True:
-                    chunk = await asyncio.wait_for(process.stdout.read(262144), timeout=30)
+                    chunk = await asyncio.wait_for(process.stdout.read(262144), timeout=archive.idle_timeout)
                     if not chunk:
                         break
                     bytes_sent += len(chunk)
@@ -997,8 +1008,10 @@ async def download_sd_card_stream(
         print(f"[sd_card] Local footage not fully available. Fetching from camera SD card.")
         from .providers import get_playback_recovery_provider
         try:
-            if source == 'camera':
-                rtsp_replay_url = camera_url('UNV' if adapter == 'unv' else camera.make, stream, start_ts, end_ts)
+            if source == 'camera' or archive.adapter == 'unv':
+                if adapter != 'configured' and adapter != archive.adapter:
+                    raise HTTPException(409, 'Save the archive adapter in camera configuration before playback.')
+                rtsp_replay_url = camera_url('UNV' if archive.adapter == 'unv' else camera.make, stream, start_ts, end_ts)
             else:
                 provider = get_playback_recovery_provider(camera.make)
                 rtsp_replay_url = provider.build_playback_url(stream, start_ts, end_ts)

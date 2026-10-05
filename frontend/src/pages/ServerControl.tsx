@@ -6,13 +6,15 @@ import './ServerControl.css'
 import { controlApi as api, downloadCsv } from '../lib/controlApi'
 import { FleetActions, CameraOrganizer, DiagnosticsPanel, ActivityPanel } from './FleetTools'
 import { DeploymentReadiness } from './DeploymentReadiness'
+import { CameraArchiveSettings } from './CameraArchiveSettings'
 
 type Policy = { ignored: boolean; live: boolean; recording: boolean; retention_days: number | null; site?: string; tags?: string[]; notes?: string; favorite?: boolean }
-type Row = { id: string; name: string; source: string; active: boolean; policy: Policy; effective_live: boolean; effective_recording: boolean; streams: { id: string; profile: string; resolution: string; codec: string; status: string; segments: number }[] }
+type Row = { id: string; name: string; source: string; active: boolean; policy: Policy; effective_live: boolean; effective_recording: boolean; effective_retention_days: number; streams: { id: string; profile: string; resolution: string; fps: number; bitrate?: number; always_on: boolean; transcode: boolean; codec: string; status: string; segments: number }[] }
 type Snapshot = { revision: number; checked_at: number; runtime: { status: string }; server: { live: boolean; recording: boolean; upstream_url: string }; disk: { free: number; total: number }; cameras: Row[] }
 export function ServerControl({ cameras, onRefresh }: { cameras: Camera[]; onRefresh: () => void }) {
   const [data, setData] = useState<Snapshot | null>(null)
   const [tab, setTab] = useState('operations')
+  const [configurationCamera, setConfigurationCamera] = useState('')
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [siteFilter, setSiteFilter] = useState('all')
@@ -71,14 +73,14 @@ export function ServerControl({ cameras, onRefresh }: { cameras: Camera[]; onRef
         <p>“Ignore” blocks live, recording, probes and recovery until you turn it off. Upstream sync keeps these operator choices. Recording follows the configured profile policy.</p>
         <div className="control-table-wrap"><table><thead><tr><th><input type="checkbox" aria-label="Select visible cameras" checked={visibleRows.length > 0 && visibleRows.every(c => checked.includes(c.id))} onChange={e => setChecked(e.target.checked ? [...new Set([...checked, ...visibleRows.map(c => c.id)])] : checked.filter(id => !visibleRows.some(c => c.id === id)))} /></th><th>Camera / profiles</th><th>Live</th><th>Recording</th><th>Ignore</th><th>Retention</th></tr></thead><tbody>{visibleRows.map(row => <tr key={row.id}>
           <td><input type="checkbox" aria-label={`Select ${row.name}`} checked={checked.includes(row.id)} onChange={e => setChecked(e.target.checked ? [...checked, row.id] : checked.filter(id => id !== row.id))} /></td>
-          <td><strong>{row.policy.favorite ? '★ ' : ''}{row.name}</strong><small>{row.policy.site}{row.policy.tags?.length ? ' · ' + row.policy.tags.join(', ') : ''}</small><small>{row.source} · {row.active ? 'Source enabled' : 'Source disabled'}</small>{row.streams.map(s => <small key={s.id}>{s.id} · {s.resolution} · {s.codec} · {s.status}</small>)}<CameraOrganizer camera={row} revision={data.revision} busy={busy} onUpdated={update} /></td>
+          <td><strong>{row.policy.favorite ? '★ ' : ''}{row.name}</strong><small>{row.policy.site}{row.policy.tags?.length ? ' · ' + row.policy.tags.join(', ') : ''}</small><small>{row.source} · {row.active ? 'Source enabled' : 'Source disabled'}</small>{row.streams.map(s => <small key={s.id}>{s.id} · {s.resolution} · {s.fps} fps · {s.bitrate ? `${s.bitrate} kbps` : 'bitrate unknown'} · {s.codec} · {s.status} · {s.always_on ? 'Always on' : 'On demand'} · {s.transcode ? 'Conversion requested' : 'Source codec'}</small>)}{row.source === 'LOCAL' ? <button onClick={() => { setConfigurationCamera(row.id); setTab('sources') }}>Edit source & encoder settings</button> : <small>Source and encoder metadata are managed by upstream. Local operating and archive overrides remain editable below.</small>}<small>Effective retention: {row.effective_retention_days} days</small><CameraOrganizer camera={row} revision={data.revision} busy={busy} onUpdated={update} /><CameraArchiveSettings cameraId={row.id} onSaved={() => { api().then(update).catch((e: Error) => setError(e.message)) }} /></td>
           <td><button disabled={busy || row.policy.ignored} aria-label={`${row.name} live ${row.policy.live ? 'stop' : 'start'}`} onClick={() => camera(row, { live: !row.policy.live })}>{row.policy.live ? 'Stop live' : 'Start live'}</button><small>{row.effective_live ? 'Permitted' : 'Blocked'}</small></td>
           <td><button disabled={busy || row.policy.ignored} aria-label={`${row.name} recording ${row.policy.recording ? 'stop' : 'start'}`} onClick={() => camera(row, { recording: !row.policy.recording })}>{row.policy.recording ? 'Stop recording' : 'Start recording'}</button><small>{row.effective_recording ? 'Permitted' : 'Blocked'}</small></td>
           <td><button disabled={busy} aria-pressed={row.policy.ignored} onClick={() => camera(row, { ignored: !row.policy.ignored })}>{row.policy.ignored ? 'Unignore' : 'Ignore camera'}</button></td>
           <td><Retention key={row.id + ':' + row.policy.retention_days} value={row.policy.retention_days} disabled={busy} onSave={value => camera(row, { retention_days: value })} /></td>
         </tr>)}</tbody></table>{!rows.length && <p>No cameras match your search.</p>}</div>
       </>}
-      {tab === 'sources' && <><div className="control-panel"><h2>Camera configuration URL</h2><label>Upstream API<input type="url" value={url} onChange={e => setUrl(e.target.value)} /></label><button disabled={busy || !url} onClick={() => server({ upstream_url: url })}>Save source URL</button><p>The next Sync Cameras imports this URL. Local camera editing and source selection are below.</p></div><CameraManagement cameras={cameras} onRefresh={onRefresh} /></>}
+      {tab === 'sources' && <><div className="control-panel"><h2>Camera configuration URL</h2><label>Upstream API<input type="url" value={url} onChange={e => setUrl(e.target.value)} /></label><button disabled={busy || !url} onClick={() => server({ upstream_url: url })}>Save source URL</button><p>The next Sync Cameras imports this URL. Local camera editing and source selection are below.</p></div><CameraManagement initialCameraId={configurationCamera} cameras={cameras} onRefresh={onRefresh} /></>}
       {tab === 'quality' && <StreamingSettings />}
       {tab === 'diagnostics' && <><DiagnosticsPanel onUpdated={update} /><DeploymentReadiness /></>}
       {tab === 'activity' && <ActivityPanel revision={data.revision} onUpdated={update} />}

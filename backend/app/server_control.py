@@ -92,7 +92,9 @@ async def read_controls(session=Depends(get_session)):
                          'policy': control.policy(str(c.id)),
                          'effective_live': c.active and control.allowed(str(c.id), 'live'),
                          'effective_recording': c.active and control.allowed(str(c.id), 'recording'),
+                         'effective_retention_days': control.policy(str(c.id)).get('retention_days') or settings.default_retention_days,
                          'streams': [{'id': s.stream_id, 'profile': s.profile_type.value, 'resolution': s.resolution,
+                                      'fps': s.fps, 'bitrate': s.bitrate, 'always_on': s.always_on, 'transcode': s.transcode,
                                       'codec': s.codec, 'status': s.status.value, **recordings.get(s.stream_id, {'segments': 0})} for s in c.streams]}
                         for c in cameras]}
 

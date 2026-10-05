@@ -10,8 +10,42 @@ from . import control_policy as control
 from .config import settings
 from .db import get_session
 from .server_control import inventory, read_controls, apply_runtime
+from .camera_playback import ArchiveSettings, archive_settings
 
 router = APIRouter(prefix='/api/control', tags=['fleet operations'])
+
+
+class ArchiveUpdate(ArchiveSettings):
+    revision: int = Field(ge=0, strict=True)
+
+
+@router.get('/cameras/{camera_id}/archive')
+async def read_archive(camera_id: str, session=Depends(get_session)):
+    camera = next((c for c in await inventory(session) if str(c.id) == camera_id), None)
+    if camera is None:
+        raise HTTPException(404, 'Camera not found')
+    value = archive_settings(camera_id)
+    make = 'unv' if value.adapter == 'unv' else (camera.make or '').strip().lower().replace('-', '').replace(' ', '')
+    return {'revision': control.revision(), 'settings': value.model_dump(),
+            'effective_enabled': value.enabled and settings.enable_sd_card_on_demand and camera.active and control.allowed(camera_id, 'connect'),
+            'server_enabled': settings.enable_sd_card_on_demand,
+            'adapter_available': make in ('unv', 'uniview'),
+            'streams': [{'id': s.stream_id, 'profile': s.profile_type.value, 'resolution': s.resolution} for s in camera.streams]}
+
+
+@router.put('/cameras/{camera_id}/archive')
+async def update_archive(camera_id: str, payload: ArchiveUpdate, session=Depends(get_session)):
+    async with control.lock:
+        check_revision(payload.revision)
+        camera = next((c for c in await inventory(session) if str(c.id) == camera_id), None)
+        if camera is None:
+            raise HTTPException(404, 'Camera not found')
+        if payload.stream_id and payload.stream_id not in {s.stream_id for s in camera.streams}:
+            raise HTTPException(422, 'Archive profile must belong to this camera.')
+        value = copy.deepcopy(control.state)
+        value.setdefault('cameras', {}).setdefault(camera_id, {})['archive'] = payload.model_dump(exclude={'revision'})
+        control.commit(value, 'camera.archive', camera_id)
+    return await read_archive(camera_id, session)
 
 
 def check_revision(expected):
@@ -112,7 +146,7 @@ async def activity():
 async def backup_policy(session=Depends(get_session)):
     cameras = await inventory(session)
     # Explicit allowlist: no RTSP URLs, credentials, upstream query strings or notes.
-    fields = [*control.DEFAULT, 'site', 'tags', 'favorite']
+    fields = [*control.DEFAULT, 'site', 'tags', 'favorite', 'archive']
     return {'format': 'video-server-policy', 'version': 1, 'created_at': time.time(),
             'revision': control.revision(),
             'server': {key: control.state.get('server', {}).get(key, True) for key in ['live', 'recording']},
@@ -130,6 +164,7 @@ class RestorablePolicy(BaseModel):
     site: str = Field(default='', max_length=100)
     tags: list[str] = Field(default_factory=list, max_length=12)
     favorite: bool = False
+    archive: ArchiveSettings = Field(default_factory=ArchiveSettings)
 
     @field_validator('tags')
     @classmethod
@@ -177,8 +212,13 @@ class RestoreRequest(BaseModel):
 @router.post('/backup/preview')
 async def preview_restore(payload: RestoreRequest, session=Depends(get_session)):
     check_revision(payload.revision)
-    known = {str(c.id) for c in await inventory(session)}
+    cameras = {str(c.id): c for c in await inventory(session)}
+    known = set(cameras)
     unknown = [c.id for c in payload.document.cameras if c.id not in known]
+    for item in payload.document.cameras:
+        stream_id = item.policy.archive.stream_id
+        if item.id in cameras and stream_id and stream_id not in {s.stream_id for s in getattr(cameras[item.id], 'streams', [])}:
+            raise HTTPException(422, 'A saved archive profile does not belong to its camera. No settings were changed.')
     return {'cameras': len(payload.document.cameras), 'unknown': unknown,
             'server': payload.document.server.model_dump(), 'can_restore': not unknown}
 
@@ -195,7 +235,10 @@ async def restore_backup(payload: RestoreRequest, session=Depends(get_session)):
         value.setdefault('server', {}).update(payload.document.server.model_dump())
         for camera in payload.document.cameras:
             # Preserve recovery deletion cutoffs and private notes from this server.
-            value.setdefault('cameras', {}).setdefault(camera.id, {}).update(camera.policy.model_dump())
+            restored = camera.policy.model_dump()
+            if 'archive' not in camera.policy.model_fields_set:
+                restored.pop('archive', None)  # Older backups must not reset newly configured archive settings.
+            value.setdefault('cameras', {}).setdefault(camera.id, {}).update(restored)
         value['runtime'] = {'status': 'pending', 'time': time.time()}
         control.commit(value, 'policy.restore', f'{len(payload.document.cameras)} cameras', {'backup_created_at': payload.document.created_at})
         await reconcile(session)

@@ -4,6 +4,23 @@ import re
 from urllib.parse import urlsplit
 from fastapi import HTTPException
 from .providers import get_playback_recovery_provider, UNVProvider
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ArchiveSettings(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    enabled: bool = True
+    adapter: Literal['configured', 'unv'] = 'configured'
+    stream_id: str = Field(default='', max_length=255)
+    max_minutes: int = Field(default=15, ge=1, le=15, strict=True)
+    first_data_timeout: int = Field(default=20, ge=5, le=60, strict=True)
+    idle_timeout: int = Field(default=30, ge=5, le=60, strict=True)
+
+
+def archive_settings(camera_id):
+    from .control_policy import policy
+    return ArchiveSettings.model_validate(policy(str(camera_id)).get('archive', {}))
 
 
 def validate_interval(start, end):

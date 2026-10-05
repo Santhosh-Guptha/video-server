@@ -26,7 +26,7 @@ class CameraPlaybackTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_camera_only_skips_recordings_and_releases_process(self):
         from app import main
-        camera = SimpleNamespace(id='camera', name='Private camera', make=None)
+        camera = SimpleNamespace(id='camera', name='Private camera', make='UNV', active=True)
         stream = SimpleNamespace(camera_id='camera', stream_url='rtsp://user:secret@host/c7/live')
         session = MagicMock()
         session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=camera)))
@@ -34,7 +34,7 @@ class CameraPlaybackTests(unittest.IsolatedAsyncioTestCase):
         process.stdout.read = AsyncMock(side_effect=[b'first', b''])
         process.wait = AsyncMock(return_value=0)
         with patch.object(main.settings, 'enable_sd_card_on_demand', True), patch('app.webrtc.resolve_stream_by_identifier', AsyncMock(return_value=stream)), patch.object(main.control_policy, 'allowed', return_value=True), patch.object(main, 'spawn_media_process', AsyncMock(return_value=process)) as spawn:
-            response = await main.download_sd_card_stream('camera', 100, 200, session, source='camera', disposition='inline', adapter='unv')
+            response = await main.download_sd_card_stream('camera', 100, 200, session, source='camera', disposition='inline')
             self.assertEqual(response.headers['x-playback-source'], 'camera')
             self.assertEqual(response.headers['cache-control'], 'no-store')
             self.assertEqual(session.execute.await_count, 1)  # Only camera metadata, never RecordingSegment.
@@ -48,7 +48,7 @@ class CameraPlaybackTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_camera_fails_before_success_headers(self):
         from app import main
         stream = SimpleNamespace(camera_id='camera', stream_url='rtsp://host/c1/live')
-        camera = SimpleNamespace(id='camera', name='Camera', make='UNV')
+        camera = SimpleNamespace(id='camera', name='Camera', make='UNV', active=True)
         session = MagicMock()
         session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=camera)))
         process = MagicMock(returncode=1)
