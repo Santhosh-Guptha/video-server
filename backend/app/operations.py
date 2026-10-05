@@ -232,3 +232,9 @@ async def diagnostics():
             'recovery_jobs': len(control.jobs), 'storage_limit_gib': settings.recording_storage_limit_gb,
             'runtime': control.state.get('runtime', {'status': 'unknown'}),
             'turn_configured': bool(settings.turn_server_url)}
+
+
+@router.get('/deployment-readiness')
+async def deployment_readiness(mode: Literal['onprem', 'hosted'] = 'onprem'):
+    from .deployment_readiness import report
+    return report(settings, mode)

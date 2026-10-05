@@ -36,6 +36,8 @@ from .webrtc import router as webrtc_router, streams_router as webrtc_streams_ro
 from .timeline_service import PlaybackTimelineService
 from .onvif_client import CameraConfigClient, parse_rtsp_url
 
+from .deployment_readiness import enforce_deployment_mode
+enforce_deployment_mode(settings)
 app = FastAPI(title=settings.app_name)
 from .streaming_settings import router as streaming_settings_router
 app.include_router(streaming_settings_router)

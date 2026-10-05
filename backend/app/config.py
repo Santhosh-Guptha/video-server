@@ -14,6 +14,7 @@ except Exception as e:
     defaults = {}
 
 class Settings(BaseSettings):
+    deployment_mode: str = "onprem"
     app_name: str = defaults.get("app_name", "camera-video-platform")
     backend_port: int = defaults.get("backend_port", 8006)
     telemetry_port: int = defaults.get("telemetry_port", 8010)

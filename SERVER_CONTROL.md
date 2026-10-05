@@ -35,4 +35,10 @@ Profile paths now use the same stream ID across registration and health workers.
 
 ## Commercial release gates still open
 
+Server Control → Diagnostics now includes **Deployment readiness**, with customer-installed and hosted-instance reports. Reports are read-only and exclude credentials and private endpoint addresses. A configured setting is not proof of network reachability, security or video quality. Download the JSON report to track the open release requirements.
+
+From the backend directory, run `venv/bin/python -m app.deployment_readiness --mode onprem` (or `--mode hosted`). Exit code **2** means release requirements remain unmet; it does not mean the camera service is down. The existing installation defaults to `DEPLOYMENT_MODE=onprem`. Setting `DEPLOYMENT_MODE=hosted` intentionally refuses backend startup until hosted release gates are implemented and verified. There is no environment-variable override that claims identity or tenant isolation is complete.
+
+Both deployment models are planned. The hosted design is one isolated instance per customer; this release does not provide shared-database tenant isolation. Sign-in, server-enforced user roles and protected direct media delivery are **still pending**, and the readiness report explicitly marks them as blockers. Keep this installation on a trusted network in the meantime.
+
 This release improves the existing single-server application; it does not certify production readiness. Before selling deployments, finish identity and role permissions, HTTPS/certificate provisioning, signed upgrade/rollback procedures, retention/audit requirements for the target customer, restore drills, and sustained camera/device/network compatibility tests. Multi-tenant hosting also requires isolated tenants, storage and credentials. Never describe configured paths or successful signaling as proof of uninterrupted decoded video.
