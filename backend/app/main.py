@@ -806,7 +806,7 @@ async def download_sd_card_stream(
     disposition: Literal['attachment', 'inline'] = 'attachment',
     adapter: Literal['configured', 'unv', 'hikvision'] = 'configured',
 ):
-    from .camera_playback import validate_interval, camera_url, archive_settings, playback_failure_message, record_failure
+    from .camera_playback import validate_interval, camera_url, archive_settings, archive_allowed, playback_failure_message, record_failure
     validate_interval(start_ts, end_ts)
     from fastapi.responses import StreamingResponse
     from pathlib import Path
@@ -833,7 +833,7 @@ async def download_sd_card_stream(
     if not camera:
         raise HTTPException(status_code=404, detail="Camera details not found for stream")
     archive = archive_settings(camera.id)
-    if source != 'server' and not control_policy.allowed(str(camera.id), 'connect'):
+    if source != 'server' and not archive_allowed(camera.id):
         raise HTTPException(403, 'Camera connections are stopped by operator policy.')
 
     # 3. Check if we already have the files locally

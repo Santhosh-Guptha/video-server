@@ -8,10 +8,19 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 from app import operations as ops, control_policy as control
-from app.camera_playback import ArchiveSettings, archive_settings
+from app.camera_playback import ArchiveSettings, archive_settings, archive_allowed
 
 
 class ArchiveSettingsTests(unittest.IsolatedAsyncioTestCase):
+    def test_archive_independent_of_live_and_recording_but_respects_pause_and_ignore(self):
+        with patch.object(control, 'state', {'server': {'live': False, 'recording': True}, 'cameras': {'one': {'live': False, 'recording': False, 'archive': {'enabled': True}}}}):
+            self.assertTrue(archive_allowed('one'))
+            control.state['cameras']['one']['ignored'] = True
+            self.assertFalse(archive_allowed('one'))
+            control.state['cameras']['one']['ignored'] = False
+            control.state['server']['recording'] = False
+            self.assertFalse(archive_allowed('one'))
+
     async def test_persistence_effective_state_and_stale_rejection(self):
         camera = SimpleNamespace(id='one', name='One', make=None, active=True, streams=[SimpleNamespace(stream_id='one_HD', stream_url='rtsp://host/c1/live', profile_type=SimpleNamespace(value='MAIN'), resolution='1920x1080')])
         with tempfile.TemporaryDirectory() as directory, patch.object(control, 'FILE', Path(directory)/'policy.json'), patch.object(control, 'state', {'server': {'live': True, 'recording': True}, 'cameras': {}}), patch.object(ops, 'inventory', AsyncMock(return_value=[camera])), patch.object(ops.settings, 'enable_sd_card_on_demand', True):

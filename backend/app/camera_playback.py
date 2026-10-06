@@ -51,6 +51,14 @@ def archive_settings(camera_id):
     return ArchiveSettings.model_validate(policy(str(camera_id)).get('archive', {}))
 
 
+def archive_allowed(camera_id):
+    from . import control_policy as control
+    server = control.state.get('server', {})
+    return (not control.policy(str(camera_id))['ignored']
+            and archive_settings(camera_id).enabled
+            and (server.get('live', True) or server.get('recording', True)))
+
+
 def validate_interval(start, end):
     if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
         raise HTTPException(422, 'Choose a valid start and end time.')

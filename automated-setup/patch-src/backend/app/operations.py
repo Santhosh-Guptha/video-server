@@ -10,7 +10,7 @@ from . import control_policy as control
 from .config import settings
 from .db import get_session
 from .server_control import inventory, read_controls, apply_runtime
-from .camera_playback import ArchiveSettings, archive_settings, camera_url, last_failure
+from .camera_playback import ArchiveSettings, archive_settings, archive_allowed, camera_url, last_failure
 
 router = APIRouter(prefix='/api/control', tags=['fleet operations'])
 
@@ -35,7 +35,7 @@ async def read_archive(camera_id: str, session=Depends(get_session)):
     except HTTPException as error:
         adapter_error = error.detail
     return {'revision': control.revision(), 'settings': value.model_dump(),
-            'effective_enabled': value.enabled and settings.enable_sd_card_on_demand and camera.active and control.allowed(camera_id, 'connect'),
+            'effective_enabled': settings.enable_sd_card_on_demand and camera.active and archive_allowed(camera_id),
             'server_enabled': settings.enable_sd_card_on_demand,
             'adapter_available': adapter_error is None, 'adapter_error': adapter_error, 'last_failure': last_failure(camera_id),
             'streams': [{'id': s.stream_id, 'profile': s.profile_type.value, 'resolution': s.resolution} for s in camera.streams]}
