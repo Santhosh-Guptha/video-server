@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
-from app.camera_playback import validate_interval, camera_url
+from app.camera_playback import validate_interval, camera_url, playback_failure_message, record_failure, last_failure
 
 
 class CameraPlaybackTests(unittest.IsolatedAsyncioTestCase):
@@ -23,6 +23,21 @@ class CameraPlaybackTests(unittest.IsolatedAsyncioTestCase):
         for make, url in [('Unknown', 'rtsp://host/c1'), ('UNV', 'rtsp://host/live'), ('UNV', 'http://host/c1')]:
             with self.assertRaises(HTTPException):
                 camera_url(make, SimpleNamespace(stream_url=url), 100, 200)
+
+    def test_hikvision_archive_track_and_utc(self):
+        stream = SimpleNamespace(stream_url='rtsp://user:secret@host:554/ISAPI/Streaming/Channels/201?transportmode=unicast&profile=live')
+        result = camera_url('hikvision', stream, 0, 60)
+        self.assertEqual(result, 'rtsp://user:secret@host:554/Streaming/tracks/201?starttime=19700101T000000Z&endtime=19700101T000100Z')
+        with self.assertRaises(HTTPException):
+            camera_url('unv', stream, 0, 60)
+
+    def test_archive_auth_error_is_actionable_and_redacted(self):
+        detail = playback_failure_message('rtsp://user:secret@host/Streaming/tracks/101: 401 Unauthorized')
+        self.assertIn('remote playback permission', detail)
+        self.assertNotIn('secret', detail)
+        record_failure('test-camera', 1, 2, detail)
+        self.assertEqual(last_failure('test-camera')['detail'], detail)
+        self.assertIsNone(last_failure('other-camera'))
 
     async def test_camera_only_skips_recordings_and_releases_process(self):
         from app import main

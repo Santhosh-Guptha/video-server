@@ -44,6 +44,7 @@ export function CameraArchive({ cameras }: { cameras: Camera[] }) {
     </select></label>
     {camera && <CameraArchiveSettings key={camera.id} cameraId={camera.id} onSaved={value => { stop(); setConfiguration(value) }} />}
     {configuration && <p>Saved clip limit: {maximum} minutes. Effective archive access: {configuration.effective_enabled ? 'enabled' : 'blocked by camera/server policy'}.</p>}
+    {configuration?.adapter_error && <p role="alert">{configuration.adapter_error}</p>}
     {camera && <p>{supported ? 'A manufacturer playback adapter is available. Device archive support and available dates have not been verified.' : 'Archive playback is not implemented for this manufacturer. Live RTSP access alone is insufficient.'}</p>}
     <div className="control-actions">
       <label>Start time (this device’s local time) <input type="datetime-local" value={start} onChange={e => { stop(); setStart(e.target.value) }} /></label>
@@ -53,7 +54,18 @@ export function CameraArchive({ cameras }: { cameras: Camera[] }) {
       <button disabled={!supported} onClick={() => { const next = url(true); if (next) { stop(); const link = document.createElement('a'); link.href = next; link.download = 'camera-archive.mp4'; link.click(); setMessage('Camera clip download requested. Playback stopped to avoid a second request.') } }}>Download clip</button>
     </div>
     <p role="status">{message}</p>
-    <video ref={video} src={src || undefined} controls autoPlay playsInline style={{width: '100%', maxHeight: '65vh', background: '#000'}} onPlaying={() => setMessage('Playing camera archive.')} onEnded={() => { stop(); setMessage('Requested interval finished.') }} onError={() => { if (src) setMessage('Playback failed: the interval may be absent, the camera may be busy, or its codec/adapter may be incompatible. Try a shorter interval or download the clip.') }} />
+    <video ref={video} src={src || undefined} controls autoPlay playsInline style={{width: '100%', maxHeight: '65vh', background: '#000'}} onPlaying={() => setMessage('Playing camera archive.')} onEnded={() => { stop(); setMessage('Requested interval finished.') }} onError={async () => {
+      if (!src || !camera) return
+      const failedSource = src
+      setMessage('Playback failed. Checking camera response…')
+      try {
+        const status: ArchiveSnapshot = await api(`/cameras/${encodeURIComponent(camera.id)}/archive`)
+        if (video.current?.getAttribute('src') !== failedSource) return
+        const request = new URLSearchParams(failedSource.split('?')[1])
+        const failure = status.last_failure
+        setMessage(status.adapter_error || (failure && failure.start_ts === Number(request.get('start_ts')) && failure.end_ts === Number(request.get('end_ts')) ? failure.detail : 'Playback failed: check archive availability, camera capacity and browser codec support.'))
+      } catch { setMessage('Playback failed and diagnostics could not be retrieved. Check server connectivity.') }
+    }} />
     <p>To jump to another time, stop and request a new start time. Archive availability search, audio and universal browser codec conversion are not implemented here.</p>
   </section>
 }

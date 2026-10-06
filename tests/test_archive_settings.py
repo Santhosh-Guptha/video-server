@@ -13,7 +13,7 @@ from app.camera_playback import ArchiveSettings, archive_settings
 
 class ArchiveSettingsTests(unittest.IsolatedAsyncioTestCase):
     async def test_persistence_effective_state_and_stale_rejection(self):
-        camera = SimpleNamespace(id='one', name='One', make=None, active=True, streams=[SimpleNamespace(stream_id='one_HD', profile_type=SimpleNamespace(value='MAIN'), resolution='1920x1080')])
+        camera = SimpleNamespace(id='one', name='One', make=None, active=True, streams=[SimpleNamespace(stream_id='one_HD', stream_url='rtsp://host/c1/live', profile_type=SimpleNamespace(value='MAIN'), resolution='1920x1080')])
         with tempfile.TemporaryDirectory() as directory, patch.object(control, 'FILE', Path(directory)/'policy.json'), patch.object(control, 'state', {'server': {'live': True, 'recording': True}, 'cameras': {}}), patch.object(ops, 'inventory', AsyncMock(return_value=[camera])), patch.object(ops.settings, 'enable_sd_card_on_demand', True):
             result = await ops.update_archive('one', ops.ArchiveUpdate(revision=0, adapter='unv', stream_id='one_HD', max_minutes=3), None)
             self.assertEqual(result['revision'], 1)

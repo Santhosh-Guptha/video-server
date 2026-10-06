@@ -10,7 +10,7 @@ from . import control_policy as control
 from .config import settings
 from .db import get_session
 from .server_control import inventory, read_controls, apply_runtime
-from .camera_playback import ArchiveSettings, archive_settings
+from .camera_playback import ArchiveSettings, archive_settings, camera_url, last_failure
 
 router = APIRouter(prefix='/api/control', tags=['fleet operations'])
 
@@ -25,11 +25,19 @@ async def read_archive(camera_id: str, session=Depends(get_session)):
     if camera is None:
         raise HTTPException(404, 'Camera not found')
     value = archive_settings(camera_id)
-    make = 'unv' if value.adapter == 'unv' else (camera.make or '').strip().lower().replace('-', '').replace(' ', '')
+    make = value.adapter if value.adapter != 'configured' else (camera.make or '').strip().lower().replace('-', '').replace(' ', '')
+    selected = next((s for s in camera.streams if s.stream_id == value.stream_id), None) if value.stream_id else next(iter(camera.streams), None)
+    adapter_error = None
+    try:
+        if selected is None:
+            raise HTTPException(422, 'Saved archive stream is missing. Select an available camera profile.')
+        camera_url(make, selected, 0, 1)
+    except HTTPException as error:
+        adapter_error = error.detail
     return {'revision': control.revision(), 'settings': value.model_dump(),
             'effective_enabled': value.enabled and settings.enable_sd_card_on_demand and camera.active and control.allowed(camera_id, 'connect'),
             'server_enabled': settings.enable_sd_card_on_demand,
-            'adapter_available': make in ('unv', 'uniview'),
+            'adapter_available': adapter_error is None, 'adapter_error': adapter_error, 'last_failure': last_failure(camera_id),
             'streams': [{'id': s.stream_id, 'profile': s.profile_type.value, 'resolution': s.resolution} for s in camera.streams]}
 
 

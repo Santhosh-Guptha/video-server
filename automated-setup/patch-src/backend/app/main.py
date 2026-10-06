@@ -804,9 +804,9 @@ async def download_sd_card_stream(
     session: Annotated[AsyncSession, Depends(get_session)],
     source: Literal['auto', 'camera', 'server'] = 'auto',
     disposition: Literal['attachment', 'inline'] = 'attachment',
-    adapter: Literal['configured', 'unv'] = 'configured',
+    adapter: Literal['configured', 'unv', 'hikvision'] = 'configured',
 ):
-    from .camera_playback import validate_interval, camera_url, archive_settings
+    from .camera_playback import validate_interval, camera_url, archive_settings, playback_failure_message, record_failure
     validate_interval(start_ts, end_ts)
     from fastapi.responses import StreamingResponse
     from pathlib import Path
@@ -897,7 +897,12 @@ async def download_sd_card_stream(
         try:
             first_chunk = await asyncio.wait_for(process.stdout.read(65536), timeout=archive.first_data_timeout)
             if not first_chunk:
-                raise HTTPException(502, 'Camera returned no playable recording for this interval. Verify archive availability, credentials and device playback support.')
+                stderr_file.flush()
+                with open(stderr_log_path, 'rb') as diagnostic:
+                    diagnostic.seek(max(0, os.fstat(diagnostic.fileno()).st_size - 8192))
+                    detail = playback_failure_message(diagnostic.read().decode(errors='replace'))
+                record_failure(camera.id, start_ts, end_ts, detail)
+                raise HTTPException(502, detail)
         except BaseException as exc:
             if process.returncode is None:
                 process.kill()
@@ -907,6 +912,7 @@ async def download_sd_card_stream(
             if temp_file_to_clean:
                 Path(temp_file_to_clean).unlink(missing_ok=True)
             if isinstance(exc, asyncio.TimeoutError):
+                record_failure(camera.id, start_ts, end_ts, 'Camera archive response timed out. Check device availability and archive support.')
                 raise HTTPException(504, f'Camera archive did not respond within {archive.first_data_timeout} seconds.') from exc
             raise
         async def chunks():
@@ -1008,10 +1014,10 @@ async def download_sd_card_stream(
         print(f"[sd_card] Local footage not fully available. Fetching from camera SD card.")
         from .providers import get_playback_recovery_provider
         try:
-            if source == 'camera' or archive.adapter == 'unv':
+            if source == 'camera' or archive.adapter != 'configured':
                 if adapter != 'configured' and adapter != archive.adapter:
                     raise HTTPException(409, 'Save the archive adapter in camera configuration before playback.')
-                rtsp_replay_url = camera_url('UNV' if archive.adapter == 'unv' else camera.make, stream, start_ts, end_ts)
+                rtsp_replay_url = camera_url(archive.adapter if archive.adapter != 'configured' else camera.make, stream, start_ts, end_ts)
             else:
                 provider = get_playback_recovery_provider(camera.make)
                 rtsp_replay_url = provider.build_playback_url(stream, start_ts, end_ts)
